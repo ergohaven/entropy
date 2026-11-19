@@ -203,7 +203,10 @@ fn windows_topology_script(profiles: &[super::profiles::Profile]) -> String {
     // strings or shell quoting. Keep Windows admission on the same registry.
     let products = profiles
         .iter()
-        .map(|profile| profile.product_id.to_string())
+        .map(|profile| profile.product_id)
+        .collect::<std::collections::BTreeSet<_>>()
+        .into_iter()
+        .map(|product| product.to_string())
         .collect::<Vec<_>>()
         .join(",");
     format!(

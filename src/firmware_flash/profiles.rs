@@ -37,7 +37,35 @@ pub(crate) struct Part {
     pub layout: FlashLayout,
     pub label: (&'static str, &'static str),
     pub suffix: &'static str,
+    unlock: Option<UnlockChallenge>,
 }
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+struct UnlockChallenge {
+    positions: [(u8, u8); 2],
+    keys: &'static str,
+}
+
+const D_F_ROW_2: UnlockChallenge = UnlockChallenge {
+    positions: [(2, 1), (2, 2)],
+    keys: "D + F",
+};
+const J_K_ROW_2: UnlockChallenge = UnlockChallenge {
+    keys: "J + K",
+    ..D_F_ROW_2
+};
+const D_F_ROW_1: UnlockChallenge = UnlockChallenge {
+    positions: [(1, 1), (1, 2)],
+    ..D_F_ROW_2
+};
+const J_K_ROW_1: UnlockChallenge = UnlockChallenge {
+    keys: "J + K",
+    ..D_F_ROW_1
+};
+const VELVET_D_F: UnlockChallenge = UnlockChallenge {
+    positions: [(1, 3), (1, 4)],
+    ..D_F_ROW_2
+};
 
 impl Part {
     pub(crate) fn peripheral(self) -> bool {
@@ -47,6 +75,16 @@ impl Part {
     pub(crate) fn rp2040(self) -> bool {
         self.layout == FlashLayout::Rp2040
     }
+
+    pub(crate) fn unlock_keys(self, positions: &[(u8, u8)]) -> Option<&'static str> {
+        let challenge = self.unlock?;
+        (positions.len() == 2
+            && challenge
+                .positions
+                .iter()
+                .all(|key| positions.contains(key)))
+        .then_some(challenge.keys)
+    }
 }
 
 pub(crate) const PHENOM_CENTRAL: Part = Part {
@@ -55,6 +93,7 @@ pub(crate) const PHENOM_CENTRAL: Part = Part {
     layout: FlashLayout::Rp2040,
     label: ("Left half", "Левая половинка"),
     suffix: "left",
+    unlock: Some(D_F_ROW_2),
 };
 pub(crate) const PHENOM_PERIPHERAL: Part = Part {
     role: Role::Peripheral,
@@ -62,6 +101,7 @@ pub(crate) const PHENOM_PERIPHERAL: Part = Part {
     layout: FlashLayout::Rp2040,
     label: ("Right half", "Правая половинка"),
     suffix: "right",
+    unlock: Some(D_F_ROW_2),
 };
 pub(crate) const K04_LEFT_PERIPHERAL: Part = Part {
     role: Role::Peripheral,
@@ -69,11 +109,13 @@ pub(crate) const K04_LEFT_PERIPHERAL: Part = Part {
     layout: FlashLayout::Nrf52840Softdevice,
     label: ("Left half", "Левая половинка"),
     suffix: "left",
+    unlock: Some(D_F_ROW_2),
 };
 pub(crate) const K04_RIGHT_PERIPHERAL: Part = Part {
     suffix: "right",
     target: FirmwareTarget::Peripheral(1),
     label: ("Right half", "Правая половинка"),
+    unlock: Some(J_K_ROW_2),
     ..K04_LEFT_PERIPHERAL
 };
 pub(crate) const K04_SECONDARY: Part = Part {
@@ -85,6 +127,7 @@ pub(crate) const K04_LEFT_CENTRAL: Part = Part {
     role: Role::Central,
     target: FirmwareTarget::Central,
     label: ("Primary half", "Основная половинка"),
+    unlock: None,
     ..K04_LEFT_PERIPHERAL
 };
 pub(crate) const K04_DONGLE: Part = Part {
@@ -93,6 +136,37 @@ pub(crate) const K04_DONGLE: Part = Part {
     layout: FlashLayout::Nrf52840Dongle,
     label: ("Qube USB dongle", "USB-донгл Qube"),
     suffix: "dongle",
+    unlock: None,
+};
+
+const LEFT_CENTRAL: Part = Part {
+    label: K04_LEFT_PERIPHERAL.label,
+    ..K04_LEFT_CENTRAL
+};
+const RIGHT_PERIPHERAL: Part = Part {
+    label: K04_RIGHT_PERIPHERAL.label,
+    ..K04_SECONDARY
+};
+const CLASSIC_LEFT_PERIPHERAL: Part = Part {
+    unlock: Some(D_F_ROW_1),
+    ..K04_LEFT_PERIPHERAL
+};
+const CLASSIC_RIGHT_PERIPHERAL: Part = Part {
+    unlock: Some(J_K_ROW_1),
+    ..K04_RIGHT_PERIPHERAL
+};
+const VELVET_QUBE_LEFT: Part = Part {
+    unlock: Some(VELVET_D_F),
+    ..K04_LEFT_PERIPHERAL
+};
+const VELVET_LEFT_PERIPHERAL: Part = Part {
+    suffix: "left_peripheral",
+    ..VELVET_QUBE_LEFT
+};
+const VELVET_RIGHT_CENTRAL: Part = Part {
+    suffix: "right_main",
+    label: K04_RIGHT_PERIPHERAL.label,
+    ..K04_LEFT_CENTRAL
 };
 
 #[derive(Clone, Copy)]
@@ -131,6 +205,12 @@ impl Profile {
         self.parts.iter().any(|part| part.role == Role::Dongle)
     }
 
+    pub(super) fn shares_product_id(self) -> bool {
+        PROFILES
+            .iter()
+            .any(|profile| profile.product_id == self.product_id && profile.archive != self.archive)
+    }
+
     pub(super) fn image_name(self, part: Part) -> String {
         format!("{}_{}.uf2", self.output, part.suffix)
     }
@@ -147,7 +227,60 @@ pub(crate) const PROFILES: &[Profile] = &[
     k04(0x74, "k04", "k04_series_k04", false),
     k04(0x75, "k04-mini", "k04_series_mini", false),
     k04(0x76, "k04-micro", "k04_series_micro", false),
+    classic(0x36, "op36", "op36", CLASSIC_STANDALONE_PARTS),
+    classic(0x36, "op36-qube", "op36_qube", CLASSIC_QUBE_PARTS),
+    classic(0x44, "imperial44", "imperial44", CLASSIC_STANDALONE_PARTS),
+    classic(
+        0x44,
+        "imperial44-qube",
+        "imperial44_qube",
+        CLASSIC_QUBE_PARTS,
+    ),
+    classic(0x70, "k03", "k03", &[RIGHT_PERIPHERAL, LEFT_CENTRAL]),
+    classic(0x70, "k03-qube", "k03_qube", QUBE_PARTS),
+    classic(
+        0xbe,
+        "velvet",
+        "velvet_standalone",
+        &[VELVET_LEFT_PERIPHERAL, VELVET_RIGHT_CENTRAL],
+    ),
+    classic(
+        0xbe,
+        "velvet-qube",
+        "velvet_qube",
+        &[VELVET_QUBE_LEFT, CLASSIC_RIGHT_PERIPHERAL, K04_DONGLE],
+    ),
 ];
+
+const QUBE_PARTS: &[Part] = &[K04_LEFT_PERIPHERAL, K04_RIGHT_PERIPHERAL, K04_DONGLE];
+const CLASSIC_QUBE_PARTS: &[Part] = &[
+    CLASSIC_LEFT_PERIPHERAL,
+    CLASSIC_RIGHT_PERIPHERAL,
+    K04_DONGLE,
+];
+const CLASSIC_STANDALONE_PARTS: &[Part] = &[
+    Part {
+        target: FirmwareTarget::Peripheral(0),
+        ..CLASSIC_RIGHT_PERIPHERAL
+    },
+    LEFT_CENTRAL,
+];
+
+const fn classic(
+    product_id: u16,
+    archive: &'static str,
+    output: &'static str,
+    parts: &'static [Part],
+) -> Profile {
+    Profile {
+        product_id,
+        archive,
+        output,
+        parts,
+        either_half_primary: false,
+        connection_note: None,
+    }
+}
 
 const fn phenom(product_id: u16, archive: &'static str, output: &'static str) -> Profile {
     Profile {
@@ -169,7 +302,7 @@ const fn k04(product_id: u16, archive: &'static str, output: &'static str, qube:
         archive,
         output,
         parts: if qube {
-            &[K04_LEFT_PERIPHERAL, K04_RIGHT_PERIPHERAL, K04_DONGLE]
+            QUBE_PARTS
         } else {
             &[K04_SECONDARY, K04_LEFT_CENTRAL]
         },
@@ -178,11 +311,18 @@ const fn k04(product_id: u16, archive: &'static str, output: &'static str, qube:
     }
 }
 
-pub(crate) fn profile(pid: u16) -> Option<Profile> {
+pub(crate) fn profile_for_archive(pid: u16, archive: &str) -> Option<Profile> {
     PROFILES
         .iter()
-        .find(|profile| profile.product_id == pid)
+        .find(|profile| profile.product_id == pid && profile.archive == archive)
         .copied()
+}
+
+#[cfg(test)]
+pub(crate) fn profile(pid: u16) -> Option<Profile> {
+    let mut matches = PROFILES.iter().filter(|profile| profile.product_id == pid);
+    let profile = matches.next()?;
+    matches.next().is_none().then_some(*profile)
 }
 
 #[cfg(test)]
@@ -200,6 +340,7 @@ pub(crate) mod fixtures {
             layout: FlashLayout::Rp2040,
             label: ("Keyboard", "Клавиатура"),
             suffix: "application",
+            unlock: None,
         }],
         either_half_primary: false,
         connection_note: None,
@@ -239,10 +380,10 @@ mod tests {
     }
 
     #[test]
-    fn firmware_flash_registry_has_unique_models_and_peripherals_before_one_runtime_target() {
-        let mut products = std::collections::BTreeSet::new();
+    fn firmware_flash_registry_covers_the_native_rmk_release_series() {
+        let mut keys = std::collections::BTreeSet::new();
         for profile in PROFILES {
-            assert!(products.insert(profile.product_id));
+            assert!(keys.insert((profile.product_id, profile.archive)));
             let (last, peripherals) = profile.parts.split_last().unwrap();
             assert!(!last.peripheral());
             assert!(peripherals.iter().all(|part| part.peripheral()));
@@ -253,7 +394,60 @@ mod tests {
                 .collect();
             assert_eq!(names.len(), profile.parts.len());
         }
-        assert_eq!(products, (0x52..=0x54).chain(0x71..=0x76).collect());
+        assert_eq!(
+            keys,
+            [
+                (0x36, "op36"),
+                (0x36, "op36-qube"),
+                (0x44, "imperial44"),
+                (0x44, "imperial44-qube"),
+                (0x52, "phenom"),
+                (0x53, "phenom-mini"),
+                (0x54, "phenom-micro"),
+                (0x70, "k03"),
+                (0x70, "k03-qube"),
+                (0x71, "k04-qube"),
+                (0x72, "k04-mini-qube"),
+                (0x73, "k04-micro-qube"),
+                (0x74, "k04"),
+                (0x75, "k04-mini"),
+                (0x76, "k04-micro"),
+                (0xbe, "velvet"),
+                (0xbe, "velvet-qube"),
+            ]
+            .into_iter()
+            .collect()
+        );
         assert!(profile(0x00b2).is_none());
+    }
+
+    #[test]
+    fn firmware_flash_velvet_uses_right_primary_and_qube_keeps_left_right_order() {
+        let standalone = profile_for_archive(0xbe, "velvet").unwrap();
+        let qube = profile_for_archive(0xbe, "velvet-qube").unwrap();
+        assert!(profile(0xbe).is_none());
+        assert_eq!(
+            standalone.image_name(standalone.parts[0]),
+            "velvet_standalone_left_peripheral.uf2"
+        );
+        assert_eq!(
+            standalone.image_name(standalone.parts[1]),
+            "velvet_standalone_right_main.uf2"
+        );
+        assert_eq!(standalone.parts[0].label.0, "Left half");
+        assert_eq!(
+            standalone.parts[0].unlock_keys(&[(1, 4), (1, 3)]),
+            Some("D + F")
+        );
+        assert_eq!(standalone.parts[0].unlock_keys(&[(1, 1), (1, 2)]), None);
+        assert_eq!(standalone.parts[1].label.0, "Right half");
+        assert_eq!(
+            qube.parts
+                .iter()
+                .map(|part| part.suffix)
+                .collect::<Vec<_>>(),
+            ["left", "right", "dongle"]
+        );
+        assert_eq!(qube.parts[1].unlock_keys(&[(1, 1), (1, 2)]), Some("J + K"));
     }
 }

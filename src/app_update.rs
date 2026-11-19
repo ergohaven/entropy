@@ -476,6 +476,19 @@ pub(crate) fn rynk_firmware_release_target(
     let mut target = rmk_firmware_release_target(
         vendor_id, product_id, firmware_version, board_definition, legacy_qube, true,
     )?;
+    // The classic splits use the same USB IDs and model UID with and without
+    // Qube. Native builds include an explicit archive selector in both cases.
+    if let (Some(standalone), Some(qube)) = (
+        rmk_asset_prefix(product_id, false),
+        rmk_asset_prefix(product_id, true),
+    ) {
+        if standalone != qube
+            && (board_definition.pointer("/entropy/firmwareUpdate/asset").is_none()
+                || (target.asset_prefix != standalone && target.asset_prefix != qube))
+        {
+            return None;
+        }
+    }
     target.family = FirmwareReleaseFamily::Rynk;
     Some(target)
 }
@@ -1028,8 +1041,8 @@ mod tests {
                 0xe126,
                 profile.product_id,
                 Some("0.3.0"),
-                &serde_json::json!({}),
-                false,
+                &serde_json::json!({"entropy": {"firmwareUpdate": {"asset": profile.archive}}}),
+                profile.has_dongle(),
             )
             .unwrap();
             assert_eq!(release.asset_prefix, profile.archive);
@@ -1560,6 +1573,39 @@ mod tests {
         assert_eq!(result.latest_version, "v0.1.4");
         assert_eq!(result.asset.name, "k03-v0.1.4.zip");
         assert_eq!(result.relation, VersionRelation::UpdateAvailable);
+    }
+
+    #[test]
+    fn rynk_classic_usb_models_require_explicit_standalone_or_qube_identity() {
+        for (product, standalone, qube) in [
+            (0x0036, "op36", "op36-qube"),
+            (0x0044, "imperial44", "imperial44-qube"),
+            (0x0070, "k03", "k03-qube"),
+            (0x00be, "velvet", "velvet-qube"),
+        ] {
+            for legacy_qube in [false, true] {
+                for asset in [standalone, qube, "phenom"] {
+                    let target = rynk_firmware_release_target(
+                        ERGOHAVEN_VENDOR_ID,
+                        product,
+                        Some("0.3.0"),
+                        &serde_json::json!({"entropy": {"firmwareUpdate": {"asset": asset}}}),
+                        legacy_qube,
+                    );
+                    assert_eq!(
+                        target.as_ref().map(|target| target.asset_prefix.as_str()),
+                        (asset != "phenom").then_some(asset),
+                    );
+                }
+                assert!(rynk_firmware_release_target(
+                    ERGOHAVEN_VENDOR_ID,
+                    product,
+                    Some("0.3.0"),
+                    &serde_json::json!({}),
+                    legacy_qube,
+                ).is_none());
+            }
+        }
     }
 
     #[test]

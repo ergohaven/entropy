@@ -1,7 +1,7 @@
 //! Guided UF2 updates for explicitly reviewed Rynk keyboard profiles.
 use anyhow::{bail, ensure, Context, Result};
 use crate::rynk::{
-    client::{RynkBoard, RynkClient, RynkTimeouts},
+    client::{RynkBoard, RynkClient, RynkTimeouts, RynkTransport},
     link::{PhysicalId, RynkLink},
     session::RynkSession,
     transport,
@@ -17,7 +17,9 @@ mod packages;
 #[path = "firmware_flash/platform.rs"]
 mod platform;
 pub(crate) mod profiles;
-pub(crate) use profiles::{profile, Part, Role};
+#[cfg(test)]
+pub(crate) use profiles::profile;
+pub(crate) use profiles::{Part, Role};
 
 const MAX_DOWNLOAD: usize = 4 * 1024 * 1024;
 
@@ -31,6 +33,7 @@ pub(crate) struct UsbTarget {
 
 #[derive(Clone)]
 pub(crate) struct Prepared {
+    pub profile: profiles::Profile,
     pub bytes: Vec<u8>,
     pub origin: UsbTarget,
     pub version: String,
@@ -43,6 +46,7 @@ impl Prepared {
     pub(crate) fn next(&self) -> Option<Self> {
         let ((part, bytes), remaining) = self.remaining.split_first()?;
         Some(Self {
+            profile: self.profile,
             bytes: bytes.clone(),
             origin: self.origin.clone(),
             version: self.version.clone(),
@@ -84,8 +88,8 @@ pub(crate) fn supported(device: &crate::device::Device) -> bool {
         && !device.is_bluetooth_transport()
 }
 
-fn runtime_product(pid: u16) -> bool {
-    profile(pid).is_some()
+pub(crate) fn runtime_product(pid: u16) -> bool {
+    profiles::PROFILES.iter().any(|profile| profile.product_id == pid)
 }
 
 pub(crate) fn compatible_version(version: &str) -> bool {
@@ -93,6 +97,7 @@ pub(crate) fn compatible_version(version: &str) -> bool {
         .is_ok_and(|v| v >= semver::Version::new(0, 3, 0) && v.pre.is_empty() && v.build.is_empty())
 }
 
+#[cfg(test)]
 fn validate_asset(pid: u16, version: &str, name: &str, address: &str) -> Result<()> {
     let profile = profile(pid).context("Unsupported Rynk keyboard model")?;
     validate_profile_asset(profile, version, name, address)
@@ -231,19 +236,36 @@ fn bootloader_target(devices: &[UsbTarget], port: &str, part: Part) -> Result<Op
 }
 
 pub(crate) fn prepare(
-    device: &crate::device::Device,
+    profile: profiles::Profile,
     version: &str,
     name: &str,
     url: &str,
     keyboard_uid: [u8; 8],
     runtime_part: Part,
 ) -> Result<Prepared> {
-    ensure!(
-        supported(device),
-        "Only supported Rynk keyboard profiles connected by USB can be flashed"
-    );
-    validate_asset(device.product_id, version, name, url)?;
-    let origin = find_origin(&platform::snapshot()?, device.product_id)?;
+    let origin = find_origin(&platform::snapshot()?, profile.product_id)?;
+    let mut images = load_images(profile, version, name, url)?;
+    let runtime_index = images
+        .iter()
+        .position(|(part, _)| *part == runtime_part)
+        .context("USB component is not in this firmware package")?;
+    let runtime_image = images.remove(runtime_index);
+    images.push(runtime_image);
+    let (part, bytes) = images.remove(0);
+    let version = version.strip_prefix('v').unwrap_or(version);
+    Ok(Prepared {
+        profile,
+        bytes,
+        origin,
+        version: version.to_owned(),
+        part,
+        remaining: images,
+        keyboard_uid,
+    })
+}
+
+fn load_images(profile: profiles::Profile, version: &str, name: &str, url: &str) -> Result<Vec<(Part, Vec<u8>)>> {
+    validate_profile_asset(profile, version, name, url)?;
     #[derive(serde::Deserialize)]
     struct Asset {
         name: String,
@@ -293,24 +315,7 @@ pub(crate) fn prepare(
         .take((MAX_DOWNLOAD + 1) as u64)
         .read_to_end(&mut bytes)?;
     validate_checksum(&bytes, asset.size, &digest)?;
-    let mut images = packages::unpack(&bytes, device.product_id)?;
-    let runtime_index = images
-        .iter()
-        .position(|(part, _)| *part == runtime_part)
-        .context("USB component is not in this firmware package")?;
-    let runtime_image = images.remove(runtime_index);
-    images.push(runtime_image);
-    let (part, bytes) = images.remove(0);
-    let remaining = images;
-    let version = version.strip_prefix('v').unwrap_or(version);
-    Ok(Prepared {
-        bytes,
-        origin,
-        version: version.to_owned(),
-        part,
-        remaining,
-        keyboard_uid,
-    })
+    packages::unpack_profile(&bytes, profile)
 }
 
 fn wait_for_usb<T>(
@@ -368,10 +373,10 @@ pub(crate) fn flash(
         );
         let expected = prepared.remaining.last().map_or(prepared.part, |(part, _)| *part);
         ensure!(
-            profile(current.product).and_then(|profile| profile.runtime_part(session.link().board()))
-                == Some(expected),
+            prepared.profile.runtime_part(session.link().board()) == Some(expected),
             "Reconnect the original USB component before restarting the update"
         );
+        check_session_topology(session.link(), prepared.profile, info.definition_hash)?;
         require_newer_version(Some(&info_version(&info)), &prepared.version)?;
         if final_step && !physical_reset {
             session.enter_bootloader()?;
@@ -507,6 +512,7 @@ fn maintenance_session(devices: &[UsbTarget], prepared: &Prepared) -> Result<Opt
     if board.firmware_target != Some(prepared.part.target) {
         return Ok(None);
     }
+    check_session_topology(&link, prepared.profile, board.info.definition_hash)?;
     require_newer_version(Some(&info_version(&board.info)), &prepared.version)?;
     Ok(Some(RynkSession::new(link)))
 }
@@ -555,14 +561,45 @@ fn verify_on_port(devices: &[UsbTarget], prepared: &Prepared, require_target: bo
     let Ok(transport) = transport::open(&id) else {
         return Ok(false);
     };
-    let Ok((_, board)) = RynkClient::connect(transport, RynkTimeouts::default()) else {
+    let Ok((mut client, board)) = RynkClient::connect(transport, RynkTimeouts::default()) else {
         return Ok(false);
     };
     if require_target && board.info.revision == 2 {
         return Ok(false);
     }
     verify_returned_board(&board, prepared, require_target)?;
+    check_topology(&mut client, prepared.profile, board.info.definition_hash)?;
     Ok(true)
+}
+
+fn check_session_topology(link: &RynkLink, profile: profiles::Profile, hash: u32) -> Result<()> {
+    if profile.shares_product_id() {
+        let definition = link.run(move |client| client.read_board_definition(hash))?;
+        check_definition_archive(&definition, profile.archive)?;
+    }
+    Ok(())
+}
+
+fn check_topology(
+    client: &mut RynkClient<impl RynkTransport>,
+    profile: profiles::Profile,
+    hash: u32,
+) -> Result<()> {
+    if profile.shares_product_id() {
+        check_definition_archive(&client.read_board_definition(hash)?, profile.archive)?;
+    }
+    Ok(())
+}
+
+fn check_definition_archive(definition: &[u8], expected: &str) -> Result<()> {
+    let definition = crate::hid::decode_vial_definition(definition)?;
+    ensure!(
+        definition.pointer("/entropy/firmwareUpdate/asset")
+            .and_then(serde_json::Value::as_str)
+            .is_some_and(|asset| asset.trim().eq_ignore_ascii_case(expected)),
+        "Connected USB component belongs to a different firmware topology"
+    );
+    Ok(())
 }
 
 fn verify_returned_board(board: &RynkBoard, prepared: &Prepared, require_target: bool) -> Result<()> {
@@ -640,11 +677,44 @@ mod tests {
     use profiles::*;
 
     #[test]
+    fn firmware_flash_classic_requires_the_topology_in_the_fresh_definition() {
+        use crate::rynk::client::{fnv1a, testing::{handshake, info, ok, quick, FakeBoard}};
+        use rmk_types_rynk::protocol::rynk::{Cmd, LayoutChunk};
+        for (asset, same_topology) in [(Some("velvet-qube"), true), (Some("velvet"), false), (None, false)] {
+            let json = serde_json::json!({"entropy": {"firmwareUpdate": {"asset": asset}}});
+            let mut definition = Vec::new();
+            lzma_rs::xz_compress(&mut json.to_string().as_bytes(), &mut definition).unwrap();
+            let hash = fnv1a(&definition);
+            let fake = FakeBoard::new(move |header, payload| {
+                vec![match header.cmd {
+                    Cmd::GetErgohavenInfo => {
+                        let mut info = info(2);
+                        info.definition_hash = hash;
+                        ok(header, info)
+                    }
+                    Cmd::GetBoardDefinition => {
+                        let offset = postcard::from_bytes::<u32>(payload).unwrap() as usize;
+                        ok(header, LayoutChunk {
+                            total_len: definition.len() as u32,
+                            bytes: definition[offset..].try_into().unwrap(),
+                        })
+                    }
+                    _ => handshake(header, 512).unwrap(),
+                }]
+            });
+            let (mut client, board) = RynkClient::connect(fake.transport(), quick()).unwrap();
+            let expected = profile_for_archive(0xbe, "velvet-qube").unwrap();
+            assert_eq!(check_topology(&mut client, expected, board.info.definition_hash).is_ok(), same_topology);
+        }
+    }
+
+    #[test]
     fn firmware_flash_revision_three_readback_must_match_the_physical_image() {
         use crate::rynk::client::testing::{capabilities, info};
         let mut info = info(3);
         info.firmware.major = 0;
         let prepared = Prepared {
+            profile: profile(0x52).unwrap(),
             bytes: Vec::new(),
             origin: UsbTarget { port: "port".into(), vendor: 0xe126, product: 0x52, mounts: Vec::new() },
             version: "0.3.1".into(),

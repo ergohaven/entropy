@@ -1,13 +1,13 @@
 //! Native RMK 0.3.0+ package validation, independent of keyboard model.
-//! Peripheral images have no runtime USB HID through which to verify a version.
 use super::*;
 
+#[cfg(test)]
 pub(super) fn unpack(bytes: &[u8], pid: u16) -> Result<Vec<(Part, Vec<u8>)>> {
     let profile = profile(pid).context("Unsupported Rynk keyboard model")?;
     unpack_profile(bytes, profile)
 }
 
-fn unpack_profile(bytes: &[u8], profile: profiles::Profile) -> Result<Vec<(Part, Vec<u8>)>> {
+pub(super) fn unpack_profile(bytes: &[u8], profile: profiles::Profile) -> Result<Vec<(Part, Vec<u8>)>> {
     let names: Vec<_> = profile
         .parts
         .iter()
@@ -238,26 +238,33 @@ mod tests {
         assert!(validate_uf2_for(&image(K04_LEFT_CENTRAL), K04_DONGLE).is_err());
     }
 
-    // Source-only release compatibility probe. Download the nine named stable
+    #[test]
+    fn firmware_flash_classic_package_rejects_the_other_topology_at_the_same_pid() {
+        for profile in PROFILES.iter().copied().filter(|profile| profile.shares_product_id()) {
+            let other = PROFILES.iter().copied().find(|other| {
+                other.product_id == profile.product_id && other.archive != profile.archive
+            }).unwrap();
+            let package = package_for_profile(profile, |_| {});
+            assert!(unpack_profile(&package, other).is_err());
+            assert_eq!(unpack_profile(&package, profile).unwrap().len(), profile.parts.len());
+        }
+    }
+
+    // Source-only release compatibility probe. Download the native stable
     // archives separately, then opt in with ENTROPY_RYNK_RELEASE_DIR.
     #[test]
     #[ignore = "requires published native RMK 0.3.0 archives"]
     fn firmware_flash_rynk_published_archives() {
         let root = std::env::var_os("ENTROPY_RYNK_RELEASE_DIR").expect("release fixture directory");
-        for (pid, name) in [
-            (0x52, "phenom-v0.3.0.zip"),
-            (0x53, "phenom-mini-v0.3.0.zip"),
-            (0x54, "phenom-micro-v0.3.0.zip"),
-            (0x74, "k04-v0.3.0.zip"),
-            (0x75, "k04-mini-v0.3.0.zip"),
-            (0x76, "k04-micro-v0.3.0.zip"),
-            (0x71, "k04-qube-v0.3.0.zip"),
-            (0x72, "k04-mini-qube-v0.3.0.zip"),
-            (0x73, "k04-micro-qube-v0.3.0.zip"),
-        ] {
-            let bytes = std::fs::read(PathBuf::from(&root).join(name)).unwrap();
-            let images = unpack(&bytes, pid).unwrap();
-            assert_eq!(images.len(), profile(pid).unwrap().parts.len());
+        let root = PathBuf::from(root);
+        let checksums = std::fs::read_to_string(root.join("SHA256SUMS.txt")).unwrap();
+        for &profile in PROFILES {
+            let name = format!("{}-v0.3.0.zip", profile.archive);
+            let bytes = std::fs::read(root.join(&name)).unwrap();
+            let digest = format!("{:x}  {name}", Sha256::digest(&bytes));
+            assert!(checksums.lines().any(|line| line == digest), "{name} digest mismatch");
+            let images = unpack_profile(&bytes, profile).unwrap_or_else(|error| panic!("{name}: {error:#}"));
+            assert_eq!(images.len(), profile.parts.len());
         }
     }
 }

@@ -881,7 +881,7 @@ impl EntropyApp {
 
                 #[cfg(not(target_arch = "wasm32"))]
                 if self.selected_device.and_then(|i| self.device_manager.devices().get(i))
-                    .is_some_and(|d| d.vendor_id == 0xe126 && crate::firmware_flash::profile(d.product_id).is_some())
+                    .is_some_and(|d| d.vendor_id == 0xe126 && crate::firmware_flash::runtime_product(d.product_id))
                 {
                     ui.label(match lang {
                         crate::i18n::Language::English => "In-app flashing requires Entropy 0.6.0+ and RMK 0.3.0+ with Rynk over USB. For QMK/Vial or older RMK, first migrate the complete keyboard manually; export your layout before migrating.",
@@ -891,12 +891,8 @@ impl EntropyApp {
                 #[cfg(not(target_arch = "wasm32"))]
                 if let FirmwareUpdateCheckState::Ready { target, result } = &self.firmware_update_check {
                     if info.firmware_update_target.as_ref() == Some(target)
-                        && target.family == FirmwareReleaseFamily::Rynk
-                        && crate::firmware_flash::compatible_version(&target.current_version)
-                        && crate::firmware_flash::compatible_version(&result.latest_version)
-                        && result.relation == VersionRelation::UpdateAvailable
                         && self.selected_device.and_then(|i| self.device_manager.devices().get(i))
-                            .is_some_and(crate::firmware_flash::supported) {
+                            .is_some_and(|device| super::firmware_flash_ui::update_profile(device, target, result).is_some()) {
                         let result = result.clone();
                         let label = match lang {
                             crate::i18n::Language::English => "Update firmware…",

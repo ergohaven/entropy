@@ -1,8 +1,22 @@
 # Adding an RMK keyboard to the firmware updater
 
 Rynk support enables communication with a keyboard. In-app flashing additionally
-requires a reviewed entry in `src/firmware_flash/profiles.rs`. SM62 is not enabled
-by this change; add it only after its RMK firmware and release artifacts exist.
+requires a reviewed entry in `src/firmware_flash/profiles.rs`. The registry
+covers all 17 native imagesets published in Ergohaven RMK 0.3.0.
+
+| Firmware families | Update order |
+| --- | --- |
+| Phenom, Phenom Mini, Phenom Micro | Other half, then the original USB half |
+| K:04, Mini and Micro standalone | Right half, then left primary |
+| K:03, Imperial44 and OP36 standalone | Right half, then left primary |
+| Velvet standalone | Left half, then right primary |
+| K:04, Mini, Micro, K:03, Imperial44, OP36 and Velvet with Qube | Left half, right half, then Qube |
+
+K:03, Imperial44, OP36 and Velvet share a USB product ID and Rynk UID between
+their standalone and Qube builds. Entropy requires the firmware's explicit
+`entropy.firmwareUpdate.asset` and checks it again on directly connected
+components before bootloader entry and on reconnect. SM56 and SM62 have no
+packages in this native RMK series.
 
 The updater has four boundaries:
 
@@ -17,17 +31,18 @@ The updater has four boundaries:
 
 For a new keyboard using an existing supported UF2 bootloader:
 
-1. Add its product ID and exact release package prefix to `PROFILES`. The registry also supplies About-device eligibility and the USB allowlist
-   on every supported OS. Add the corresponding download catalog entry in
-   `app_update.rs` if it does not exist: that broader catalog includes keyboards
-   without reviewed flashing support. Keep product
-   IDs unique, including dongle versus standalone variants.
+1. Add its product ID and exact release package prefix to `PROFILES`. The
+   registry also supplies About-device eligibility and the USB allowlist on every
+   supported OS. Add the corresponding download catalog entry in `app_update.rs`
+   if needed. When two profiles share a product ID, the Rynk definition must
+   identify the archive explicitly.
 2. Define its ordered `Part` values. Each specifies a role, Rynk firmware target,
    bilingual label, image filename suffix and `FlashLayout`. Put peripherals
    first and the default USB primary or dongle last. For a board where either
    half can become primary, enable `either_half_primary` so the directly
    connected half reported by revision 3 is updated last. A single-piece board
-   uses one `Standalone` firmware target.
+   uses one `Standalone` firmware target. For maintenance-capable halves, map
+   the local unlock coordinates to the factory keys displayed in the guide.
 3. Verify the chosen layout against the board's linker configuration and
    bootloader. Existing limits are specific application intervals, not defaults
    for every RP2040 or nRF52840 board. Add a layout for a different interval.

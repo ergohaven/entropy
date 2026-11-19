@@ -54,6 +54,24 @@ fn text<'a>(language: crate::i18n::Language, en: &'a str, ru: &'a str) -> &'a st
     }
 }
 
+pub(super) fn update_profile(
+    device: &Device,
+    target: &FirmwareReleaseTarget,
+    release: &FirmwareUpdateCheckResult,
+) -> Option<flash::profiles::Profile> {
+    if !flash::supported(device)
+        || target.family != FirmwareReleaseFamily::Rynk
+        || release.relation != VersionRelation::UpdateAvailable
+        || !flash::compatible_version(&target.current_version)
+        || !flash::compatible_version(&release.latest_version)
+    {
+        return None;
+    }
+    let profile = flash::profiles::profile_for_archive(device.product_id, &target.asset_prefix)?;
+    (release.asset.name == format!("{}-{}.zip", profile.archive, release.latest_version))
+        .then_some(profile)
+}
+
 impl Dialog {
     fn standalone(&self) -> bool {
         self.profile.has_peripherals() && !self.profile.has_dongle()
@@ -86,36 +104,17 @@ impl EntropyApp {
         else {
             return;
         };
-        if release.latest_version.trim_start_matches('v').is_empty()
-            || self.firmware_flash.dialog.is_some()
-            || release.relation != VersionRelation::UpdateAvailable
-        {
+        if self.firmware_flash.dialog.is_some() {
             return;
         }
-        let Some(current_version) = self
+        let Some(target) = self
             .device_about_info
             .as_ref()
             .and_then(|i| i.firmware_update_target.as_ref())
-            .map(|t| t.current_version.clone())
         else {
             return;
         };
-        if !flash::compatible_version(&current_version)
-            || !flash::compatible_version(&release.latest_version)
-            || self
-                .hid_device
-                .as_ref()
-                .and_then(DeviceSession::as_rynk)
-                .is_none()
-            || self
-                .device_about_info
-                .as_ref()
-                .and_then(|i| i.firmware_update_target.as_ref())
-                .is_none_or(|t| t.family != app_update::FirmwareReleaseFamily::Rynk)
-        {
-            return;
-        }
-        let Some(profile) = flash::profile(device.product_id) else {
+        let Some(profile) = update_profile(&device, target, &release) else {
             return;
         };
         let Some(origin_part) = self
@@ -139,7 +138,7 @@ impl EntropyApp {
             device,
             generation: self.connection_generation,
             release,
-            current_version,
+            current_version: target.current_version.clone(),
             backup: None,
             error: None,
             phase: Phase::Confirm,
@@ -201,13 +200,13 @@ impl EntropyApp {
             .keyboard_uid;
         dialog.backup = Some(self.write_firmware_update_backup()?);
         let (sender, receiver) = mpsc::channel();
-        let device = dialog.device.clone();
+        let profile = dialog.profile;
         let release = dialog.release.clone();
         let origin_part = dialog.origin_part;
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let result = flash::prepare(
-                &device,
+                profile,
                 &release.latest_version,
                 &release.asset.name,
                 &release.asset.url,
@@ -507,13 +506,11 @@ impl EntropyApp {
                 Phase::Flashing { stage, .. } => {
                     ui.spinner();
                     if let Stage::Unlocking(keys) = stage {
-                        if keys.len() == 2 && keys.contains(&(2, 1)) && keys.contains(&(2, 2)) {
-                            let (en, ru) = if dialog.profile.either_half_primary || dialog.part.suffix == "left" {
-                                ("Hold the physical D + F keys to unlock.", "Удерживайте клавиши D + F для разблокировки.")
-                            } else {
-                                ("Hold the physical J + K keys to unlock.", "Удерживайте клавиши J + K для разблокировки.")
-                            };
-                            ui.label(text(lang, en, ru));
+                        if let Some(keys) = dialog.part.unlock_keys(keys) {
+                            ui.label(match lang {
+                                crate::i18n::Language::English => format!("Hold the physical {keys} keys to unlock."),
+                                crate::i18n::Language::Russian => format!("Удерживайте клавиши {keys} для разблокировки."),
+                            });
                         } else {
                             ui.label(format!("{} {keys:?}", text(lang, "Hold the physical unlock keys at these matrix positions:", "Удерживайте клавиши разблокировки в этих позициях матрицы:")));
                         }
@@ -666,6 +663,28 @@ mod tests {
     }
 
     #[test]
+    fn firmware_flash_about_rejects_the_other_topology_at_the_same_pid() {
+        let mut device = crate::device::test_usb_device("usb:test", 1, 0xbe);
+        device.firmware = crate::firmware::FirmwareProtocol::Rynk;
+        let target = FirmwareReleaseTarget {
+            family: FirmwareReleaseFamily::Rynk,
+            current_version: "0.3.0".into(),
+            asset_prefix: "velvet".into(),
+        };
+        let mut release = FirmwareUpdateCheckResult {
+            latest_version: "v0.3.1".into(),
+            release_url: String::new(),
+            asset: UpdateAsset { name: "velvet-qube-v0.3.1.zip".into(), url: String::new() },
+            relation: VersionRelation::UpdateAvailable,
+        };
+        assert!(update_profile(&device, &target, &release).is_none());
+        release.asset.name = "velvet-v0.3.1.zip".into();
+        let profile = update_profile(&device, &target, &release).unwrap();
+        assert_eq!(profile.parts[0].label.0, "Left half");
+        assert_eq!(profile.parts[1].label.0, "Right half");
+    }
+
+    #[test]
     fn firmware_flash_about_button_opens_a_localized_confirmation_without_device_io() {
         use egui_kittest::kittest::Queryable;
         let _config = ScopedTempConfig::new();
@@ -734,6 +753,7 @@ mod tests {
                 if ready {
                     let dialog = app.firmware_flash.dialog.as_mut().unwrap();
                     dialog.phase = Phase::Ready(Prepared {
+                        profile: dialog.profile,
                         keyboard_uid: [1; 8], bytes: vec![7], version: "0.3.1".into(),
                         part: dialog.part, remaining: vec![],
                         origin: flash::UsbTarget {
@@ -845,6 +865,7 @@ mod tests {
         let mut dialog = app.firmware_flash.dialog.take().unwrap();
         dialog.part = PHENOM_CENTRAL;
         dialog.phase = Phase::Ready(Prepared {
+            profile: dialog.profile,
             keyboard_uid: [0; 8],
             bytes: vec![],
             version: "0.3.1".into(),
@@ -882,6 +903,7 @@ mod tests {
         let dialog = app.firmware_flash.dialog.as_mut().unwrap();
         dialog.phase = Phase::Preparing(rx);
         tx.send(Ok(Prepared {
+            profile: dialog.profile,
             keyboard_uid: [0; 8],
             bytes: vec![],
             version: "0.3.1".into(),
@@ -1007,6 +1029,7 @@ mod tests {
             dialog.part = peripheral;
             dialog.origin_part = central;
             dialog.next = Some(Prepared {
+                profile: dialog.profile,
                 keyboard_uid: [0; 8],
                 bytes: vec![],
                 origin: flash::UsbTarget {
@@ -1097,6 +1120,7 @@ mod tests {
                 .push((peripheral, Outcome::TransferredUnverified));
             dialog.backup = Some(PathBuf::from("saved.entlayout"));
             dialog.retry = Some(Prepared {
+                profile: dialog.profile,
                 keyboard_uid: [1; 8],
                 bytes: vec![7],
                 version: "0.3.1".into(),
@@ -1198,6 +1222,7 @@ mod tests {
             .steps
             .push((K04_LEFT_PERIPHERAL, Outcome::TransferredUnverified));
         dialog.retry = Some(Prepared {
+            profile: dialog.profile,
             keyboard_uid: [0; 8],
             bytes: vec![7],
             version: "0.3.1".into(),
