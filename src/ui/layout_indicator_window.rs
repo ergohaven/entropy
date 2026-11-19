@@ -1,4 +1,5 @@
 use super::*;
+use crate::keycode::KeyOutputLayout;
 
 fn clamp_sticky_layout_opacity(opacity: f32) -> f32 {
     if opacity.is_finite() {
@@ -139,6 +140,7 @@ struct StickyLayoutViewportControls {
     opacity: f32,
     visibility_mode: StickyLayoutVisibilityMode,
     always_on_top: bool,
+    follow_host_layout: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq)]
@@ -180,6 +182,21 @@ fn drain_sticky_layout_viewport_events(
 enum StickyLayoutWindowButton {
     Pin,
     Close,
+    HostLayout(KeyOutputLayout),
+}
+
+/// Legends the indicator draws: the "Key legends" setting, or, while it
+/// follows the host layout, the alphabet the host currently types with.
+fn sticky_layout_key_legend_layout(
+    setting: KeyLegendLayout,
+    follow_host_layout: bool,
+    host_layout: Option<KeyOutputLayout>,
+) -> KeyLegendLayout {
+    match (follow_host_layout, host_layout) {
+        (true, Some(KeyOutputLayout::English)) => KeyLegendLayout::English,
+        (true, Some(KeyOutputLayout::Russian)) => KeyLegendLayout::RussianPrimary,
+        _ => setting,
+    }
 }
 
 fn draw_sticky_layout_transparency_dropdown(
@@ -381,6 +398,19 @@ fn sticky_layout_window_icon_button(
                 color,
             );
         }
+        StickyLayoutWindowButton::HostLayout(layout) => {
+            let letter = match layout {
+                KeyOutputLayout::English => "A",
+                KeyOutputLayout::Russian => "Я",
+            };
+            ui.painter().text(
+                rect.center(),
+                egui::Align2::CENTER_CENTER,
+                letter,
+                FontId::proportional(13.0),
+                color,
+            );
+        }
     }
 
     response
@@ -486,6 +516,13 @@ impl EntropyApp {
                     }
                     if self.app_settings.sticky_layout_always_on_top != controls.always_on_top {
                         self.app_settings.sticky_layout_always_on_top = controls.always_on_top;
+                        should_save_settings = true;
+                    }
+                    if self.app_settings.sticky_layout_follow_host_layout
+                        != controls.follow_host_layout
+                    {
+                        self.app_settings.sticky_layout_follow_host_layout =
+                            controls.follow_host_layout;
                         should_save_settings = true;
                     }
                 }
@@ -629,7 +666,14 @@ impl EntropyApp {
         };
         let macro_names = self.keycode_picker.macro_names.clone();
         let tap_dance_names = self.keycode_picker.tap_dance_names.clone();
-        let key_legend_layout = self.app_settings.key_legend_layout;
+        self.host_keyboard_layout
+            .ensure_started(ctx, sticky_layout_viewport_id());
+        let host_layout = self.host_keyboard_layout.current();
+        let key_legend_layout = sticky_layout_key_legend_layout(
+            self.app_settings.key_legend_layout,
+            self.app_settings.sticky_layout_follow_host_layout,
+            host_layout,
+        );
         let show_shifted_number_symbols = self.app_settings.show_shifted_number_symbols;
         let layout_options_value = self.layout_options_value;
         let encoder_visibility = self.encoder_visibility.clone();
@@ -641,6 +685,7 @@ impl EntropyApp {
             opacity: clamp_sticky_layout_opacity(self.app_settings.sticky_layout_opacity),
             visibility_mode: self.app_settings.sticky_layout_visibility_mode,
             always_on_top: self.app_settings.sticky_layout_always_on_top,
+            follow_host_layout: self.app_settings.sticky_layout_follow_host_layout,
         };
         let sticky_window_size = sticky_layout_saved_window_size(&self.app_settings);
         let sticky_layout_last_size = self.sticky_layout_last_size;
@@ -663,6 +708,7 @@ impl EntropyApp {
                 let mut sticky_opacity = controls.opacity;
                 let mut sticky_visibility_mode = controls.visibility_mode;
                 let mut sticky_always_on_top = controls.always_on_top;
+                let mut sticky_follow_host_layout = controls.follow_host_layout;
                 let mut observed_sticky_size: Option<Vec2> = None;
                 let mut resize_opacity_hold_frames = resize_opacity_hold_frames;
                 let mut should_close = false;
@@ -739,7 +785,7 @@ impl EntropyApp {
                             full_rect.top() + STICKY_LAYOUT_WINDOW_TITLE_H,
                         ),
                     );
-                    let buttons_w = 60.0;
+                    let buttons_w = if host_layout.is_some() { 90.0 } else { 60.0 };
                     let title_drag_rect = egui::Rect::from_min_max(
                         title_rect.min,
                         egui::pos2(title_rect.right() - buttons_w, title_rect.bottom()),
@@ -837,6 +883,23 @@ impl EntropyApp {
                                             bring_macos_sticky_layout_window_to_front_by_title(
                                                 &window_title,
                                             );
+                                        }
+                                    }
+                                    if let Some(host_layout) = host_layout {
+                                        ui.add_space(4.0);
+                                        if sticky_layout_window_icon_button(
+                                            ui,
+                                            dark,
+                                            StickyLayoutWindowButton::HostLayout(host_layout),
+                                            sticky_follow_host_layout,
+                                            crate::i18n::tr_catalog(
+                                                lang,
+                                                "ui.sticky_layout_window_follow_host_layout_tooltip",
+                                            ),
+                                        )
+                                        .clicked()
+                                        {
+                                            sticky_follow_host_layout = !sticky_follow_host_layout;
                                         }
                                     }
                                 },
@@ -1002,6 +1065,7 @@ impl EntropyApp {
                     opacity: clamp_sticky_layout_opacity(sticky_opacity),
                     visibility_mode: sticky_visibility_mode,
                     always_on_top: sticky_always_on_top,
+                    follow_host_layout: sticky_follow_host_layout,
                 };
                 let mut root_repaint_required = false;
                 if updated_controls != controls {
@@ -1120,6 +1184,22 @@ mod tests {
             assert!(viewport.viewport_ui_cb.is_some());
             assert_eq!(viewport.builder.window_level, Some(expected_level));
             assert_eq!(viewport.builder.resizable, Some(expected_resizable));
+        }
+    }
+
+    #[test]
+    fn indicator_legends_follow_the_host_layout_only_when_enabled() {
+        use KeyLegendLayout::{English, Russian, RussianPrimary};
+        let en = Some(KeyOutputLayout::English);
+        let ru = Some(KeyOutputLayout::Russian);
+        for setting in [English, Russian, RussianPrimary] {
+            assert_eq!(sticky_layout_key_legend_layout(setting, false, ru), setting);
+            assert_eq!(sticky_layout_key_legend_layout(setting, true, None), setting);
+            assert_eq!(sticky_layout_key_legend_layout(setting, true, en), English);
+            assert_eq!(
+                sticky_layout_key_legend_layout(setting, true, ru),
+                RussianPrimary
+            );
         }
     }
 

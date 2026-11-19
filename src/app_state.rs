@@ -126,6 +126,8 @@ pub(crate) struct AppSettings {
     #[serde(default)]
     pub(crate) sticky_layout_window_size: Option<[f32; 2]>,
     #[serde(default)]
+    pub(crate) sticky_layout_follow_host_layout: bool,
+    #[serde(default)]
     pub(crate) window_size: Option<[f32; 2]>,
     #[serde(default)]
     pub(crate) dark_mode: bool,
@@ -294,6 +296,7 @@ impl Default for AppSettings {
             sticky_layout_visibility_mode: StickyLayoutVisibilityMode::default(),
             sticky_layout_dark_mode: false,
             sticky_layout_window_size: None,
+            sticky_layout_follow_host_layout: false,
             window_size: None,
             dark_mode: false,
             language: crate::i18n::default_language(),
@@ -5962,6 +5965,7 @@ pub struct EntropyApp {
     pub(crate) sticky_layout_last_size: Option<Vec2>,
     pub(crate) sticky_layout_resize_opacity_hold_frames: u8,
     pub(crate) sticky_layout_viewport_events: StickyLayoutViewportEventQueue,
+    pub(crate) host_keyboard_layout: crate::host_keyboard_layout::HostKeyboardLayoutWatcher,
     pub(crate) pending_layout_indicator_open_after_unlock: bool,
     pub(crate) matrix_tester_last_poll: std::time::Instant,
     pub(crate) matrix_tester_last_lock_check: std::time::Instant,

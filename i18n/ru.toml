@@ -200,6 +200,7 @@ sticky_layout_closed_due_to_lock = "Устройство заблокирова�
 sticky_layout_window_title = "Индикатор раскладки"
 sticky_layout_window_pin_tooltip = "Закрепить поверх других окон"
 sticky_layout_window_close_tooltip = "Закрыть окно-индикатор"
+sticky_layout_window_follow_host_layout_tooltip = "Следовать раскладке системы: латинские подписи в английской, кириллица в русской"
 sticky_layout_transparency_short = "Видимость"
 sticky_layout_pressed_only = "Только нажатия"
 sticky_layout_layer = "Слой"

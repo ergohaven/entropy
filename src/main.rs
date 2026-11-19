@@ -17,6 +17,7 @@ mod firmware_builtin_icons;
 mod golden_frames;
 #[cfg(not(target_arch = "wasm32"))]
 mod hid;
+mod host_keyboard_layout;
 mod i18n;
 mod integration_icons;
 mod keyboard;
