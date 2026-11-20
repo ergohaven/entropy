@@ -50,7 +50,7 @@ and firmware settings from one coherent interface.
 
 | Platform | Status | Package |
 | --- | --- | --- |
-| Linux x86_64 | Primary target | AppImage |
+| Linux x86_64 | Primary target | AppImage, deb, rpm, Arch package |
 | Windows x86_64 | Release target | Portable EXE |
 | macOS arm64 (Apple Silicon) | Release target | DMG |
 | macOS x86_64 (Intel) | Release target | DMG |
@@ -66,6 +66,7 @@ Release builds are published on the
 [GitHub Releases](https://github.com/ergohaven/entropy/releases) page:
 
 - `entropy-v0.5.0-x86_64.AppImage`
+- `entropy-v0.5.0-amd64.deb`, `entropy-v0.5.0-x86_64.rpm`, `entropy-v0.5.0-x86_64.pkg.tar.zst`
 - `entropy-v0.5.0-windows-x86_64.exe`
 - `entropy-v0.5.0-macos-arm64.dmg`
 - `entropy-v0.5.0-macos-x86_64.dmg`
