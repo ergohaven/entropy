@@ -1166,6 +1166,228 @@ fn fixture_for(sm62: bool) -> (EntropyApp, crate::hid::TestHidRecorder, String) 
     (app, recorder, application)
 }
 
+fn display_backup_fixture() -> (EntropyApp, crate::hid::TestHidRecorder) {
+    let (mut app, recorder, _) = fixture();
+    // Match the Default profile so the display-only HID fixture needs no key writes.
+    app.layout.as_mut().unwrap().layers[0][0] = 6.into();
+    (app, recorder)
+}
+
+#[test]
+fn macropad_display_settings_round_trip_through_entlayout() {
+    let _storage = crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app, recorder) = display_backup_fixture();
+    app.supported_qmk_settings = [DISPLAY_BRIGHTNESS_QSID, CLOCK_STYLE_QSID]
+        .into_iter()
+        .chain(DISPLAY_COLOR_QSIDS)
+        .collect();
+    app.display_settings.supported = true;
+    app.display_settings.brightness_supported = true;
+    app.display_settings.clock_settings_supported = true;
+    app.display_settings.confirmed_brightness = 46;
+    app.display_settings.brightness = 59; // A draft is not device state.
+    app.display_settings.confirmed_clock_style = 5;
+    app.display_settings.confirmed_color = [11, 22, 33];
+
+    let bundle = app.entlayout_snapshot().unwrap();
+    let archived: EntLayoutFile =
+        serde_json::from_slice(&serde_json::to_vec(&bundle).unwrap()).unwrap();
+    let saved: Vec<_> = archived
+        .data
+        .portable_settings
+        .iter()
+        .map(|setting| (setting.qsid, setting.value))
+        .collect();
+    assert_eq!(
+        saved,
+        vec![(318, 46), (320, 11), (321, 22), (322, 33), (339, 5)]
+    );
+
+    app.display_settings.confirmed_brightness = 100;
+    app.display_settings.confirmed_clock_style = 0;
+    app.display_settings.confirmed_color = [0; 3];
+    let mut firmware = std::collections::BTreeMap::new();
+    recorder.respond_as_legacy(move |packet| {
+        let qsid = u16::from_le_bytes([packet[2], packet[3]]);
+        let mut response = [0; 32];
+        match packet[..2] {
+            [0xfe, 0x0b] => {
+                firmware.insert(qsid, packet[4]);
+            }
+            [0xfe, 0x0a] => {
+                response[1] = firmware.get(&qsid).copied().unwrap_or_default();
+            }
+            _ => return None,
+        }
+        Some(Ok(response))
+    });
+
+    let mapping = app.entlayout_import_mapping(&archived).unwrap();
+    let (failures, report) = app
+        .apply_entlayout_firmware_state(&archived, &mapping)
+        .unwrap();
+    assert!(failures.is_empty(), "{:?}", failures.lines);
+    assert_eq!(report.imported, 5);
+    assert_eq!(app.display_settings.confirmed_brightness, 46);
+    assert_eq!(app.display_settings.brightness, 46);
+    assert_eq!(app.display_settings.confirmed_clock_style, 5);
+    assert_eq!(app.display_settings.confirmed_color, [11, 22, 33]);
+    let requests = recorder.requests();
+    for (qsid, value) in saved {
+        let [lo, hi] = qsid.to_le_bytes();
+        assert!(requests
+            .iter()
+            .any(|request| request[..5] == [0xfe, 0x0b, lo, hi, value as u8]));
+        assert!(requests
+            .iter()
+            .any(|request| request[..4] == [0xfe, 0x0a, lo, hi]));
+    }
+}
+
+#[test]
+fn macropad_display_import_restores_clock_color_after_accent_side_effect() {
+    let _storage = crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app, recorder) = display_backup_fixture();
+    let accent = DISPLAY_COLOR_QSIDS[0];
+    let clock = CLOCK_TEXT_COLOR_QSIDS[0];
+    app.supported_qmk_settings = vec![accent, clock];
+    app.display_settings.supported = true;
+    app.display_settings.clock_settings_supported = true;
+    app.display_settings.confirmed_color[0] = 50;
+    app.display_settings.confirmed_clock_text_color[0] = 20;
+    let mut bundle = app.entlayout_snapshot().unwrap();
+    bundle.data.portable_settings.reverse();
+    app.display_settings.confirmed_color[0] = 20;
+
+    let mut accent_value = 20;
+    let mut clock_value = 20;
+    recorder.respond_as_legacy(move |packet| {
+        let qsid = u16::from_le_bytes([packet[2], packet[3]]);
+        let mut response = [0; 32];
+        match (packet[0], packet[1], qsid) {
+            (0xfe, 0x0b, qsid) if qsid == accent => {
+                accent_value = packet[4];
+                clock_value = accent_value;
+            }
+            (0xfe, 0x0b, qsid) if qsid == clock => clock_value = packet[4],
+            (0xfe, 0x0a, qsid) if qsid == accent => response[1] = accent_value,
+            (0xfe, 0x0a, qsid) if qsid == clock => response[1] = clock_value,
+            _ => return None,
+        }
+        Some(Ok(response))
+    });
+
+    let mapping = app.entlayout_import_mapping(&bundle).unwrap();
+    let (failures, report) = app
+        .apply_entlayout_firmware_state(&bundle, &mapping)
+        .unwrap();
+    assert!(failures.is_empty(), "{:?}", failures.lines);
+    assert_eq!(report.imported, 2);
+    let saved = app.entlayout_snapshot().unwrap().data.portable_settings;
+    assert_eq!(
+        saved
+            .iter()
+            .map(|setting| setting.value)
+            .collect::<Vec<_>>(),
+        [50, 20]
+    );
+    let writes: Vec<_> = recorder
+        .requests()
+        .iter()
+        .filter(|packet| packet[..2] == [0xfe, 0x0b])
+        .map(|packet| (u16::from_le_bytes([packet[2], packet[3]]), packet[4]))
+        .collect();
+    assert_eq!(writes, [(accent, 50), (clock, 20)]);
+}
+
+#[test]
+fn macropad_display_failed_readback_requires_refresh_before_backup() {
+    let _storage = crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app, recorder) = display_backup_fixture();
+    let qsid = DISPLAY_BRIGHTNESS_QSID;
+    let [lo, hi] = qsid.to_le_bytes();
+    app.supported_qmk_settings = vec![qsid];
+    app.display_settings.supported = true;
+    app.display_settings.brightness_supported = true;
+    app.display_settings.confirmed_brightness = 42;
+    let bundle = app.entlayout_snapshot().unwrap();
+    app.display_settings.confirmed_brightness = 70;
+    recorder.respond_as_legacy(move |packet| match packet[..4] {
+        [0xfe, 0x0b, l, h] if (l, h) == (lo, hi) => Some(Ok([0; 32])),
+        [0xfe, 0x0a, l, h] if (l, h) == (lo, hi) => Some(Ok([1; 32])),
+        _ => None,
+    });
+
+    let mapping = app.entlayout_import_mapping(&bundle).unwrap();
+    let (failures, report) = app
+        .apply_entlayout_firmware_state(&bundle, &mapping)
+        .unwrap();
+    assert!(!failures.is_empty());
+    assert_eq!(report.failed, 1);
+    assert_eq!(app.display_settings.confirmed_brightness, 70);
+    assert!(app.entlayout_snapshot().is_none());
+
+    recorder.respond_as_legacy(move |packet| {
+        let mut response = [0; 32];
+        response[1] = 42;
+        (packet[..4] == [0xfe, 0x0a, lo, hi]).then_some(Ok(response))
+    });
+    app.confirm_entlayout_macropad_display().unwrap();
+    assert_eq!(
+        app.entlayout_snapshot().unwrap().data.portable_settings[0].value,
+        42
+    );
+}
+
+#[test]
+fn macropad_display_reconnect_refuses_cached_backup() {
+    let _storage = crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app, _) = display_backup_fixture();
+    let mut device = app.device_manager.devices()[0].clone();
+    device.bus_type = "Bluetooth".into();
+    app.device_manager.replace_devices(vec![device]);
+    app.supported_qmk_settings = vec![DISPLAY_BRIGHTNESS_QSID];
+    app.display_settings.supported = true;
+    app.display_settings.brightness_supported = true;
+    app.display_settings.confirmed_brightness = 42;
+    assert_eq!(
+        app.entlayout_snapshot().unwrap().data.portable_settings[0].value,
+        42
+    );
+
+    assert!(app.begin_bluetooth_reconnect("test disconnect"));
+    assert!(app.layout.is_some());
+    assert!(app.entlayout_snapshot().is_none());
+    assert!(app.prepared_entlayout_snapshot().is_err());
+}
+
+#[test]
+fn macropad_display_import_skips_unsupported_and_invalid_settings() {
+    let _storage = crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app, _, _) = fixture();
+    app.supported_qmk_settings = vec![DISPLAY_BRIGHTNESS_QSID, CLOCK_STYLE_QSID];
+    app.display_settings.supported = true;
+    app.display_settings.brightness_supported = true;
+    app.display_settings.clock_settings_supported = true;
+    let mut bundle = app.entlayout_snapshot().unwrap();
+    bundle.data.portable_settings[0].value = 101;
+    app.supported_qmk_settings = vec![DISPLAY_BRIGHTNESS_QSID];
+    let plan = plan_entlayout_portable_settings_import(
+        &bundle.data.portable_settings,
+        &app.entlayout_portable_settings_snapshot(),
+        &[],
+    );
+    assert!(plan.compatible.is_empty());
+    assert_eq!(plan.report.incompatible, 1);
+    assert_eq!(plan.report.unsupported, 1);
+
+    let (mut sm62, _, _) = fixture_for(true);
+    sm62.supported_qmk_settings = vec![DISPLAY_TIMEOUT_QSID];
+    sm62.display_settings.supported = true;
+    sm62.display_settings.display_timeout_supported = true;
+    assert!(sm62.entlayout_portable_settings_snapshot().is_empty());
+}
+
 #[test]
 fn sm62_complete_import_rejects_encoder_stacks_before_writes() {
     let _storage=crate::app::app_storage::ScopedTempConfig::new();

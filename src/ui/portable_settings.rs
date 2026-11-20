@@ -1,5 +1,9 @@
 use super::*;
 use serde::{Deserialize, Serialize};
+#[path = "portable_settings/display_contract.rs"]
+mod display_contract;
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) use display_contract::macropad_clock_color_accent_qsid;
 #[path = "portable_settings/led_contract.rs"]
 mod led_contract;
 #[path = "portable_settings/module_contract.rs"]
@@ -36,6 +40,10 @@ pub(super) struct EntPortableSetting {
 }
 
 impl EntPortableSetting {
+    pub(super) fn is_macropad_display_setting(&self) -> bool {
+        self.id.starts_with("macropad_display_")
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn import_section(&self) -> DeferredLoadSection {
         if self.is_layer_led_color() || self.is_indication_setting() { DeferredLoadSection::LayerLeds }
@@ -125,9 +133,13 @@ pub(super) fn ent_portable_setting_is_known(setting: &EntPortableSetting) -> boo
         || matches!(setting.qsid, 120 | 143)
         || setting.is_layer_led_color()
         || setting.is_indication_setting()
+        || setting.is_macropad_display_setting()
 }
 
 pub(super) fn ent_portable_setting_is_valid(setting: &EntPortableSetting) -> bool {
+    if setting.is_macropad_display_setting() {
+        return display_contract::macropad_display_setting_valid(setting);
+    }
     if setting.is_indication_setting() {
         return led_contract::indication_setting_valid(setting);
     }
@@ -200,8 +212,9 @@ pub(super) fn write_entlayout_portable_setting(
     hid: &crate::device_session::DeviceSession,
     setting: &EntPortableSetting,
 ) -> anyhow::Result<()> {
-    let policy = if (setting.is_layer_led_color() || setting.is_indication_setting())
-        && !hid.is_bluetooth_transport()
+    let policy = if setting.is_macropad_display_setting()
+        || ((setting.is_layer_led_color() || setting.is_indication_setting())
+            && !hid.is_bluetooth_transport())
     {
         settings_write_queue::QmkSettingWritePolicy::VerifiedReadback
     } else {
@@ -289,6 +302,9 @@ impl EntropyApp {
         settings.extend(modules);
         settings.extend(self.entlayout_layer_colors_snapshot(&settings, false));
         settings.extend(self.entlayout_indication_settings_snapshot(&settings, false));
+        let display = self.entlayout_macropad_display_snapshot();
+        settings.retain(|setting| !display.iter().any(|entry| entry.qsid == setting.qsid));
+        settings.extend(display);
         settings.sort_by_key(|setting| setting.qsid);
         settings
     }
@@ -419,6 +435,10 @@ impl EntropyApp {
 
     pub(super) fn apply_entlayout_portable_setting_local(&mut self, setting: &EntPortableSetting) {
         let value = setting.value;
+        if setting.is_macropad_display_setting() {
+            self.display_settings.reconcile_display_readback(setting.qsid, value);
+            return;
+        }
         if setting.is_layer_led_color() || setting.is_indication_setting() {
             self.reconcile_indication_setting(setting.qsid, value);
             return;

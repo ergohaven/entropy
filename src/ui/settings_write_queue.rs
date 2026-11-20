@@ -163,130 +163,7 @@ impl SettingsWriteTarget {
             Self::LayerLed { .. } => {
                 layer_led_settings.set_value(qsid, readback);
             }
-            Self::Display { .. } => {
-                if (246..=247).contains(&qsid) && display_settings.sm62_stars_supported {
-                    let side = (qsid - 246) as usize;
-                    display_settings.sm62_stars_values[side] = readback.min(1) as u8;
-                    display_settings.confirmed_sm62_stars_values[side] = readback.min(1) as u8;
-                    return;
-                }
-                if (248..=249).contains(&qsid) && display_settings.sm62_screens_off_supported {
-                    let side = (qsid - 248) as usize;
-                    display_settings.sm62_screens_off_values[side] = readback.min(1) as u8;
-                    display_settings.confirmed_sm62_screens_off_values[side] = readback.min(1) as u8;
-                    return;
-                }
-                if (244..=245).contains(&qsid) && display_settings.sm62_language_supported {
-                    let side = (qsid - 244) as usize;
-                    display_settings.sm62_language_values[side] = readback.min(1) as u8;
-                    display_settings.confirmed_sm62_language_values[side] = readback.min(1) as u8;
-                    return;
-                }
-                if (242..=243).contains(&qsid) && display_settings.sm62_hold_supported {
-                    let side = (qsid - 242) as usize;
-                    display_settings.sm62_hold_ms[side] = readback.min(10_000);
-                    display_settings.confirmed_sm62_hold_ms[side] = readback.min(10_000);
-                    return;
-                }
-                if (240..=241).contains(&qsid) && display_settings.sm62_date_supported {
-                    let side = (qsid - 240) as usize;
-                    display_settings.sm62_date_values[side] = readback.min(1) as u8;
-                    display_settings.confirmed_sm62_date_values[side] = readback.min(1) as u8;
-                    return;
-                }
-                if (230..=239).contains(&qsid) && display_settings.sm62_supported {
-                    let index = (qsid - 230) as usize;
-                    display_settings.sm62_values[index] = readback.min(255) as u8;
-                    display_settings.confirmed_sm62_values[index] = readback.min(255) as u8;
-                    return;
-                }
-                let value = readback.min(u8::MAX as u16) as u8;
-                if let Some(index) = DATE_QSIDS.iter().position(|q| *q == qsid) {
-                    display_settings.date[index] = value;
-                    display_settings.confirmed_date[index] = value;
-                } else if let Some(index) = DISPLAY_COLOR_QSIDS
-                    .iter()
-                    .position(|candidate| *candidate == qsid)
-                {
-                    display_settings.color[index] = value;
-                    display_settings.confirmed_color[index] = value;
-                } else if let Some(index) = DISPLAY_BACKGROUND_COLOR_QSIDS
-                    .iter()
-                    .position(|candidate| *candidate == qsid)
-                {
-                    display_settings.background_color[index] = value;
-                    display_settings.confirmed_background_color[index] = value;
-                } else if qsid == DISPLAY_BRIGHTNESS_QSID {
-                    display_settings.brightness = value.min(100);
-                    display_settings.confirmed_brightness = value.min(100);
-                } else if qsid == DISPLAY_BUTTON_STYLE_QSID {
-                    display_settings.button_style = value.min(32);
-                    display_settings.confirmed_button_style = value.min(32);
-                } else if let Some(index) = CLOCK_TEXT_COLOR_QSIDS
-                    .iter()
-                    .position(|candidate| *candidate == qsid)
-                {
-                    display_settings.clock_text_color[index] = value;
-                    display_settings.confirmed_clock_text_color[index] = value;
-                } else if let Some(index) = CLOCK_BACKGROUND_COLOR_QSIDS
-                    .iter()
-                    .position(|candidate| *candidate == qsid)
-                {
-                    display_settings.clock_background_color[index] = value;
-                    display_settings.confirmed_clock_background_color[index] = value;
-                } else if let Some(index) = CLOCK_INFO_COLOR_QSIDS
-                    .iter()
-                    .position(|candidate| *candidate == qsid)
-                {
-                    display_settings.clock_info_color[index] = value;
-                    display_settings.confirmed_clock_info_color[index] = value;
-                } else if let Some(index) = CLOCK_MODIFIERS_COLOR_QSIDS
-                    .iter()
-                    .position(|candidate| *candidate == qsid)
-                {
-                    display_settings.clock_modifiers_color[index] = value;
-                    display_settings.confirmed_clock_modifiers_color[index] = value;
-                } else if qsid == CLOCK_VISIBLE_QSID {
-                    display_settings.clock_visible = value != 0;
-                    display_settings.confirmed_clock_visible = value != 0;
-                } else if qsid == CLOCK_OPACITY_QSID {
-                    display_settings.clock_opacity = value.min(100);
-                    display_settings.confirmed_clock_opacity = value.min(100);
-                } else if qsid == CLOCK_INFO_VISIBLE_QSID {
-                    display_settings.clock_info_visible = value != 0;
-                    display_settings.confirmed_clock_info_visible = value != 0;
-                } else if qsid == CLOCK_INFO_OPACITY_QSID {
-                    display_settings.clock_info_opacity = value.min(100);
-                    display_settings.confirmed_clock_info_opacity = value.min(100);
-                } else if qsid == CLOCK_MODIFIERS_VISIBLE_QSID {
-                    display_settings.clock_modifiers_visible = value != 0;
-                    display_settings.confirmed_clock_modifiers_visible = value != 0;
-                } else if qsid == CLOCK_MODIFIERS_OPACITY_QSID {
-                    display_settings.clock_modifiers_opacity = value.min(100);
-                    display_settings.confirmed_clock_modifiers_opacity = value.min(100);
-                } else if qsid == CLOCK_STYLE_QSID {
-                    display_settings.clock_style = value.min(9);
-                    display_settings.confirmed_clock_style = value.min(9);
-                } else if qsid == CLOCK_SIZE_QSID {
-                    display_settings.clock_size = value.min(3);
-                    display_settings.confirmed_clock_size = value.min(3);
-                } else if qsid == CLOCK_ALIGNMENT_QSID {
-                    display_settings.clock_alignment = value.min(2);
-                    display_settings.confirmed_clock_alignment = value.min(2);
-                } else if qsid == CLOCK_DELAY_QSID {
-                    display_settings.clock_delay = value.min(7);
-                    display_settings.confirmed_clock_delay = value.min(7);
-                } else if qsid == CLOCK_COLON_BLINK_QSID {
-                    display_settings.clock_colon_blink = value != 0;
-                    display_settings.confirmed_clock_colon_blink = value != 0;
-                } else if qsid == CLOCK_BACKGROUND_DIM_QSID {
-                    display_settings.clock_background_dim = value.min(100);
-                    display_settings.confirmed_clock_background_dim = value.min(100);
-                } else if qsid == DISPLAY_TIMEOUT_QSID {
-                    display_settings.display_timeout = value.min(7);
-                    display_settings.confirmed_display_timeout = value.min(7);
-                }
-            }
+            Self::Display { .. } => display_settings.reconcile_display_readback(qsid, readback),
         }
     }
 }
@@ -930,6 +807,10 @@ impl EntropyApp {
                     return;
                 }
                 self.hid_device = None;
+                if task.request.target.is_display() && !self.display_settings.sm62_supported {
+                    self.display_settings.unconfirmed_qsids.insert(task.request.qsid);
+                    self.display_settings.invalidate_macropad_accent_dependents(task.request.qsid);
+                }
                 if matches!(task.request.target, SettingsWriteTarget::LayerLed { .. }) {
                     self.invalidate_indication_setting(task.request.qsid);
                 }
@@ -988,6 +869,12 @@ impl EntropyApp {
             return;
         }
         self.hid_device = hid_device;
+        if request.target.is_display() && !self.display_settings.sm62_supported {
+            self.display_settings.invalidate_macropad_accent_dependents(request.qsid);
+            if result.is_err() {
+                self.display_settings.unconfirmed_qsids.insert(request.qsid);
+            }
+        }
         let context = request.target.log_context();
         let newer_debounced_value = request
             .target
