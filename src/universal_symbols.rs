@@ -43,7 +43,7 @@ pub(crate) struct UniversalRussianLetter {
 pub(crate) const CONTROLS: &[UniversalSymbolControl] = &[
     UniversalSymbolControl {
         user_id: USER_TOGGLE,
-        action_label: "Toggle",
+        action_label: "EN ↔ RU",
         name: "Universal Symbols: toggle English/Russian layout",
     },
     UniversalSymbolControl {
@@ -63,7 +63,7 @@ pub(crate) const CONTROLS: &[UniversalSymbolControl] = &[
     },
     UniversalSymbolControl {
         user_id: USER_TOGGLE_MACOS,
-        action_label: "macOS",
+        action_label: "PC ↔ Mac",
         name: "Universal Symbols: toggle PC/macOS Russian-layout mappings",
     },
 ];
@@ -317,12 +317,16 @@ mod tests {
             Some("Universal\n.")
         );
         assert_eq!(
+            label(binding(USER_TOGGLE).rmk_action().unwrap()).as_deref(),
+            Some("Universal\nEN ↔ RU")
+        );
+        assert_eq!(
             label(binding(USER_SYNC).rmk_action().unwrap()).as_deref(),
             Some("Universal\nSync")
         );
         assert_eq!(
             label(binding(USER_TOGGLE_MACOS).rmk_action().unwrap()).as_deref(),
-            Some("Universal\nmacOS")
+            Some("Universal\nPC ↔ Mac")
         );
         assert_eq!(
             label(binding(USER_RUSSIAN_LETTER_START).rmk_action().unwrap()).as_deref(),
