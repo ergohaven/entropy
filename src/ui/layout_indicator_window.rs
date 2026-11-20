@@ -416,6 +416,17 @@ fn sticky_layout_window_icon_button(
     response
 }
 
+/// Width the title-bar buttons take from the right edge: the 6 px inset, the
+/// 26 px buttons, and between them a 4 px gap plus the layout's item spacing.
+/// The window-drag area stops here, so it never covers a button.
+fn sticky_layout_title_buttons_width(button_count: usize, item_spacing: f32) -> f32 {
+    const INSET: f32 = 6.0;
+    const BUTTON: f32 = 26.0;
+    const GAP: f32 = 4.0;
+    let count = button_count as f32;
+    INSET + count * BUTTON + (count - 1.0).max(0.0) * (GAP + item_spacing)
+}
+
 fn sticky_layout_default_window_size() -> Vec2 {
     egui::vec2(STICKY_LAYOUT_WINDOW_W, STICKY_LAYOUT_WINDOW_H)
 }
@@ -785,7 +796,9 @@ impl EntropyApp {
                             full_rect.top() + STICKY_LAYOUT_WINDOW_TITLE_H,
                         ),
                     );
-                    let buttons_w = if host_layout.is_some() { 90.0 } else { 60.0 };
+                    let button_count = if host_layout.is_some() { 3 } else { 2 };
+                    let buttons_w =
+                        sticky_layout_title_buttons_width(button_count, ui.spacing().item_spacing.x);
                     let title_drag_rect = egui::Rect::from_min_max(
                         title_rect.min,
                         egui::pos2(title_rect.right() - buttons_w, title_rect.bottom()),
@@ -1201,6 +1214,13 @@ mod tests {
                 RussianPrimary
             );
         }
+    }
+
+    #[test]
+    fn title_drag_area_stops_before_every_button() {
+        // Default egui item spacing; the third button is the host-layout toggle.
+        assert_eq!(sticky_layout_title_buttons_width(2, 8.0), 70.0);
+        assert_eq!(sticky_layout_title_buttons_width(3, 8.0), 108.0);
     }
 
     #[test]
