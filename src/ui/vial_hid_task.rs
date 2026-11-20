@@ -212,7 +212,10 @@ impl EntropyApp {
                     && d.permits_hid_target(&request.device)), layer_name_write_error(self.app_settings.language, "device changed"));
             let hid = self.hid_device.as_ref().ok_or_else(|| anyhow::anyhow!(layer_name_write_error(self.app_settings.language, "device is disconnected")))?;
             let actual = hid.get_qmk_setting_string(200 + request.layer as u16)
-                .map_err(|error| anyhow::anyhow!(layer_name_write_error(self.app_settings.language, &error.to_string())))?;
+                .map_err(|error| {
+                    anyhow::anyhow!(layer_name_write_error(self.app_settings.language, &error.to_string()))
+                        .context(format!("Unconfirmed Default layer name {}", request.layer))
+                })?;
             if request.layer < 16 { self.confirmed_firmware_layer_names |= 1u16 << request.layer; }
             if let Some(name) = self.layer_names.get_mut(request.layer) { *name = actual.clone(); }
             if let Some(name) = self.layout.as_mut().and_then(|l| l.layer_names.get_mut(request.layer)) {
@@ -228,6 +231,14 @@ impl EntropyApp {
         }
         self.keycode_picker.layer_names = self.layer_names.clone();
         Ok(())
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn active_layer_name_write(&self) -> Option<&LayerNameWrite> {
+        match &self.vial_hid_task.as_ref()?.operation {
+            VialHidOperation::LayerNameWrite(request) => Some(request),
+            _ => None,
+        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -393,6 +404,7 @@ pub(super) enum VialHidOperation {
         deadline: std::time::Instant,
         /// The console request it answers.
         request: u64,
+        protected_names: u16,
     },
 }
 
@@ -413,7 +425,7 @@ impl VialHidOperation {
 
 #[cfg(not(target_arch = "wasm32"))]
 enum VialHidOutcome {
-    ResidentExportPrepared(String),
+    ResidentExportPrepared(super::entlayout::PreparedEntlayoutExport),
     UniversalGeometryWritten,
     Sm62Fps([u8;32]),
     LayerNameWritten(String),
@@ -627,9 +639,9 @@ fn run_vial_hid_operation_with_progress(
         }
         #[cfg(unix)]
         VialHidOperation::ConsoleExport {
-            device, deadline, ..
+            device, deadline, protected_names, ..
         } => Ok(VialHidOutcome::ConsoleExported(
-            super::headless_export::export_lent_keyboard(hid.require_vial()?, device, deadline, cancel),
+            super::headless_export::export_lent_keyboard(hid.require_vial()?, device, deadline, cancel, protected_names),
         )),
     }
 }
@@ -1113,7 +1125,7 @@ impl EntropyApp {
 
         self.hid_device = result.hid_device;
         match result.outcome {
-            Ok(VialHidOutcome::ResidentExportPrepared(json)) => self.finish_gui_entlayout_preparation(json),
+            Ok(VialHidOutcome::ResidentExportPrepared(prepared)) => self.finish_gui_entlayout_preparation(prepared),
             // The UI already shows the latest choice. An older completion must
             // never replace a newer pending edit.
             Ok(VialHidOutcome::UniversalGeometryWritten) => {}

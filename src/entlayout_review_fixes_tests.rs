@@ -1,4 +1,129 @@
 #[test]
+fn sm62_export_recovers_confirmed_default_names_without_changing_live_settings() {
+    for gui in [false, true] {
+        let storage = crate::app::app_storage::ScopedTempConfig::new();
+        let (mut app, recorder) = sm62_default_name_export_fixture();
+        let before = serde_json::to_value(&app.application_layout_settings().unwrap().layouts).unwrap();
+        let destination = storage.path().join("names.entlayout");
+        if gui {
+            review_menu(&mut app, &egui::Context::default(), "Export layout", &destination);
+            assert_eq!(app.import_report_title, "Layout exported");
+            assert!(app.import_report_body.contains("sm62-default-names-"));
+        } else {
+            let export = app.entlayout_export_json_checked(&mut || Ok(()), 0).unwrap()
+                .expect("confirmed name mismatch should export");
+            assert!(export.name_backup.unwrap().is_file());
+            std::fs::write(&destination, export.json).unwrap();
+        }
+        let exported: serde_json::Value = serde_json::from_slice(
+            &std::fs::read(&destination).unwrap_or_else(|error| panic!("{error}: {}", app.status_msg)),
+        ).unwrap();
+        assert_eq!(exported["data"]["layer_names"][0], "");
+        assert_eq!(exported["application_layouts"]["default"]["layer_names"][0], "");
+        let backups = app_settings_path().parent().unwrap().join("backups");
+        let paths: Vec<_> = backups.read_dir().unwrap().map(|entry| entry.unwrap().path()).collect();
+        assert_eq!(paths.len(), 1);
+        let recovery: DeviceApplicationLayouts = serde_json::from_slice(&std::fs::read(&paths[0]).unwrap()).unwrap();
+        assert_eq!(recovery.layouts["default"].layer_names[0], "Older local label");
+        assert_eq!(serde_json::to_value(&app.application_layout_settings().unwrap().layouts).unwrap(), before);
+        assert!(recorder.requests().iter().all(|request|
+            request[..2] == [0xeb, 8] || request[..3] == [0xef, 9, 3]));
+    }
+}
+
+#[test]
+fn sm62_export_refuses_pending_or_unconfirmed_names_and_unwritable_recovery() {
+    for case in ["editing", "queued", "unconfirmed", "unconfirmed matching cache", "backup unavailable"] {
+        for gui in [false, true] {
+            let storage = crate::app::app_storage::ScopedTempConfig::new();
+            let (mut app, _) = sm62_default_name_export_fixture();
+            let backup_directory = app_settings_path().parent().unwrap().join("backups");
+            let expected = match case {
+                "editing" => {
+                    app.editing_layer = Some(0);
+                    app.editing_layer_layout_id = Some("default".into());
+                    app.editing_layer_device_key = app.application_layout_device_key();
+                    "Default layer names [0] have pending edits"
+                }
+                "queued" => {
+                    app.pending_layer_name_writes.push_back(crate::app::vial_hid_task::LayerNameWrite {
+                        device: app.device_manager.devices()[0].clone(),
+                        device_key: app.application_layout_device_key().unwrap(),
+                        layout_id: "default".into(),
+                        generation: app.connection_generation,
+                        layer: 0,
+                        name: "Pending label".into(),
+                    });
+                    "Default layer names [0] have pending edits"
+                }
+                "unconfirmed" | "unconfirmed matching cache" => {
+                    app.confirmed_firmware_layer_names = 0;
+                    if case == "unconfirmed matching cache" {
+                        app.layer_names[0] = "Older local label".into();
+                    }
+                    "Could not confirm Default layer names [0]"
+                }
+                _ => {
+                    std::fs::create_dir_all(backup_directory.parent().unwrap()).unwrap();
+                    std::fs::write(&backup_directory, b"not a directory").unwrap();
+                    "Could not back up local Default layer names"
+                }
+            };
+            let destination = storage.path().join("names.entlayout");
+            std::fs::write(&destination, b"previous export").unwrap();
+            if gui {
+                review_menu(&mut app, &egui::Context::default(), "Export layout", &destination);
+                assert!(app.import_report_open, "{case}: {}", app.status_msg);
+                assert_eq!(app.import_report_title, "Layout export failed");
+                assert!(app.import_report_body.contains(expected), "{case}: {}", app.import_report_body);
+            } else {
+                let error = app.entlayout_export_json().unwrap().unwrap_err();
+                assert!(format!("{error:#}").contains(expected), "{case}: {error:#}");
+            }
+            assert_eq!(std::fs::read(&destination).unwrap(), b"previous export", "{case}");
+            assert!(!backup_directory.is_dir(), "{case}");
+        }
+    }
+}
+
+fn sm62_default_name_export_fixture() -> (EntropyApp, crate::hid::TestHidRecorder) {
+    let (mut app, recorder, _) = fixture_for(true);
+    app.app_settings.language = crate::i18n::Language::English;
+    app.deferred_device_load = DeferredDeviceLoadState::complete(app.layer_count);
+    app.supported_qmk_settings = vec![200];
+    app.confirmed_firmware_layer_names = 1;
+    app.layout.as_mut().unwrap().layer_names = app.layer_names.clone();
+    app.layout.as_mut().unwrap().layer_names[0].clear();
+    let layers = EntropyApp::base_application_layers(app.layout.as_ref().unwrap()).to_vec();
+    let key = app.application_layout_device_key().unwrap();
+    let default = app.app_settings.application_layouts.get_mut(&key).unwrap()
+        .layouts.get_mut("default").unwrap();
+    default.layers = layers;
+    default.layer_names = app.layer_names.clone();
+    default.layer_names[0] = "Older local label".into();
+    recorder.respond_as_legacy(|request| {
+        let mut reply = *request;
+        match request[..3] {
+            [0xeb, 8, 0xa5] => {
+                reply[2] = 0x5a;
+                reply[8..15].copy_from_slice(&[2, 100, 0xd0, 0x11, 16, 62, 22]);
+                reply[16..20].copy_from_slice(&4194304u32.to_le_bytes());
+                reply[20..24].copy_from_slice(&15u32.to_le_bytes());
+                reply[24] = 2;
+            }
+            [0xef, 9, 3] => {
+                reply[2] = 0x83;
+                reply[3] = 1;
+                reply[8..].fill(0);
+            }
+            _ => return None,
+        }
+        Some(Ok(reply))
+    });
+    (app, recorder)
+}
+
+#[test]
 fn complete_import_names_accepted_set_ack_error_blocks_next_menu_export() {
     for sm62 in [false, true] {
         review_names_failure(sm62, 0);

@@ -713,6 +713,11 @@ impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn report_import_failure(&mut self, title_key: &'static str, message: String) {
         log::warn!("{message}");
+        self.show_layout_report(title_key, message);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn show_layout_report(&mut self, title_key: &'static str, message: String) {
         self.import_report_title =
             crate::i18n::tr_catalog(self.app_settings.language, title_key).into();
         self.import_report_body = message.clone();

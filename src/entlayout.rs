@@ -39,11 +39,124 @@ fn preserve_local_default_metadata(
 }
 
 #[cfg(not(target_arch = "wasm32"))]
+pub(super) fn archive_sm62_default_names(
+    previous: &crate::application_layouts::DeviceApplicationLayouts,
+) -> Result<PathBuf> {
+    let config = app_settings_path();
+    let parent = config.parent().context("Settings directory unavailable")?;
+    let directory = parent.join("backups");
+    std::fs::create_dir_all(&directory)?;
+    let mut file = tempfile::Builder::new()
+        .prefix("sm62-default-names-")
+        .suffix(".json")
+        .tempfile_in(&directory)?;
+    serde_json::to_writer_pretty(file.as_file_mut(), previous)?;
+    file.as_file().sync_all()?;
+    let (_, path) = file.keep()?;
+    #[cfg(unix)]
+    {
+        std::fs::File::open(directory)?.sync_all()?;
+        std::fs::File::open(parent)?.sync_all()?;
+    }
+    Ok(path)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn preserve_resident_author_data(
+    prepared: &mut crate::application_layouts::DeviceApplicationLayouts,
+    known: Option<&crate::application_layouts::DeviceApplicationLayouts>,
+    recoverable_names: Option<u16>,
+) -> Result<bool> {
+    let Some(known) = known else { return Ok(false); };
+    let mut needs_backup = false;
+    for (id, authored) in &known.layouts {
+        let Some(physical) = prepared.layouts.get(id) else {
+            prepared.layouts.insert(id.clone(), authored.clone());
+            continue;
+        };
+        let inherited_default = id == "default"
+            && authored.layers.len() == physical.layers.len()
+            && authored.layers.iter().zip(&physical.layers).all(|(a, p)|
+                a.len() == p.len() && a.iter().zip(p).all(|(a, p)|
+                    *a == crate::application_layouts::APPLICATION_LAYOUT_UNSET_KEYCODE || a == p));
+        let same_layers = authored.layers == physical.layers || inherited_default;
+        let same_stacks = authored.encoder_stacks == physical.encoder_stacks;
+        let same_display = authored.name == physical.name;
+        let mut same_names = authored.layer_names == physical.layer_names;
+        if let Some(mask) = recoverable_names.filter(|_| {
+            id == "default" && same_layers && same_stacks && same_display && !same_names
+        }) {
+            if authored.layer_names.len() == physical.layer_names.len() {
+                let blocked: Vec<_> = authored.layer_names.iter().zip(&physical.layer_names)
+                    .enumerate()
+                    .filter_map(|(layer, (a, p))| {
+                        (a != p && (layer >= 16 || mask & (1u16 << layer) == 0)).then_some(layer)
+                    }).collect();
+                anyhow::ensure!(blocked.is_empty(),
+                    "Export would replace author data in Default layer names {blocked:?}; firmware names are unconfirmed or edits are pending");
+                needs_backup = true;
+                same_names = true;
+            }
+        }
+        anyhow::ensure!(same_layers && same_names && same_stacks && same_display,
+            "Export would replace author data in profile {id}; backup refused (layers={same_layers}, names={same_names}, stacks={same_stacks}, display={same_display})");
+    }
+    Ok(needs_backup)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) struct PreparedEntlayoutExport {
+    bundle: EntLayoutFile,
+    previous_names: Option<crate::application_layouts::DeviceApplicationLayouts>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl PreparedEntlayoutExport {
+    fn archive_default_names(&self) -> Result<Option<PathBuf>> {
+        self.previous_names.as_ref().map(|previous| {
+            archive_sm62_default_names(previous).context(
+                "Could not back up local Default layer names; export refused",
+            )
+        }).transpose()
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) struct EntlayoutJsonExport {
+    pub(super) json: String,
+    pub(super) name_backup: Option<PathBuf>,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+#[derive(Clone, Copy)]
+struct ResidentDefaultNames {
+    supported: u16,
+    confirmed: u16,
+    protected: u16,
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+impl ResidentDefaultNames {
+    fn recoverable_layers(self) -> Result<u16> {
+        let pending: Vec<_> = (0..16)
+            .filter(|&layer| self.supported & self.protected & (1u16 << layer) != 0)
+            .collect();
+        anyhow::ensure!(pending.is_empty(), "Default layer names {pending:?} have pending edits.");
+        let unconfirmed: Vec<_> = (0..16)
+            .filter(|&layer| self.supported & !self.confirmed & (1u16 << layer) != 0)
+            .collect();
+        anyhow::ensure!(unconfirmed.is_empty(), "Could not confirm Default layer names {unconfirmed:?} on the keyboard.");
+        Ok(self.supported & self.confirmed & !self.protected)
+    }
+}
+
+#[cfg(not(target_arch = "wasm32"))]
 #[derive(Clone)]
 pub(crate) struct ResidentPreparationSource {
     bundle: EntLayoutFile,
     defaults: crate::application_layouts::DeviceApplicationLayouts,
     known: Option<crate::application_layouts::DeviceApplicationLayouts>,
+    default_names: Option<ResidentDefaultNames>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -61,7 +174,7 @@ pub(crate) struct GuiEntlayoutPreparation {
     owner: Option<(u64, Option<u64>)>,
     deadline: std::time::Instant,
     source: Option<ResidentPreparationSource>,
-    document: Option<EntLayoutFile>,
+    document: Option<PreparedEntlayoutExport>,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -70,7 +183,7 @@ pub(crate) fn prepare_gui_resident_document(
     source: ResidentPreparationSource,
     deadline: std::time::Instant,
     cancel: &std::sync::atomic::AtomicBool,
-) -> Result<String> {
+) -> Result<PreparedEntlayoutExport> {
     let mut check = || {
         anyhow::ensure!(!cancel.load(std::sync::atomic::Ordering::Acquire), "Resident preparation cancelled");
         anyhow::ensure!(std::time::Instant::now() < deadline, "Resident preparation deadline exceeded");
@@ -82,7 +195,11 @@ pub(crate) fn prepare_gui_resident_document(
         .context("Incomplete resident application catalog capability; export refused")?;
     check()?;
     let mut bundle = source.bundle;
+    let mut previous_names = None;
     if supported {
+        let recoverable_names = source.default_names
+            .map(ResidentDefaultNames::recoverable_layers)
+            .transpose()?;
         let records = hid.read_resident_export_catalog_checked(&mut check)
             .context("Incomplete resident application catalog; export refused")?;
         let mut settings = source.defaults;
@@ -109,31 +226,8 @@ pub(crate) fn prepare_gui_resident_document(
             settings.device_raw_profiles.insert(profile.id.clone(), record.raw);
             settings.layouts.insert(profile.id.clone(), profile);
         }
-        // Reading device-authoritative data does not authorize dropping local
-        // authoring data from a backup. Until the envelope can carry both sides
-        // of a conflict, refuse explicitly and leave the destination untouched.
-        if let Some(known) = known {
-            for (id, authored) in &known.layouts {
-                let Some(physical) = settings.layouts.get(id) else {
-                    // Nonresident author data is portable even though it is not
-                    // permission to STORE it. Preserve it alongside readback.
-                    settings.layouts.insert(id.clone(), authored.clone());
-                    continue;
-                };
-                let inherited_default = id == "default"
-                    && authored.layers.len() == physical.layers.len()
-                    && authored.layers.iter().zip(&physical.layers).all(|(a, p)|
-                        a.len() == p.len() && a.iter().zip(p).all(|(a, p)|
-                            *a == crate::application_layouts::APPLICATION_LAYOUT_UNSET_KEYCODE || a == p));
-                let same_layers = authored.layers == physical.layers || inherited_default;
-                anyhow::ensure!(same_layers
-                    && authored.layer_names == physical.layer_names
-                    && authored.encoder_stacks == physical.encoder_stacks
-                    && authored.name == physical.name,
-                    "Export would replace author data in profile {id}; backup refused (layers={}, names={}, stacks={}, display={})",
-                    same_layers, authored.layer_names == physical.layer_names,
-                    authored.encoder_stacks == physical.encoder_stacks, authored.name == physical.name);
-            }
+        if preserve_resident_author_data(&mut settings, known, recoverable_names)? {
+            previous_names = source.known;
         }
 
         bundle.application_categories = settings.category_names.into_iter().collect();
@@ -150,7 +244,7 @@ pub(crate) fn prepare_gui_resident_document(
         }
     }
     check()?;
-    Ok(serde_json::to_string(&bundle)?)
+    Ok(PreparedEntlayoutExport { bundle, previous_names })
 }
 
 const ENTLAYOUT_FORMAT: &str = "entropy.layout";
@@ -1506,6 +1600,39 @@ impl EntropyApp {
     }
 
     #[cfg(not(target_arch = "wasm32"))]
+    fn resident_default_names(&self, protected_names: u16) -> ResidentDefaultNames {
+        let native_count = self.layout.as_ref().map_or(0, |layout| layout.layer_names.len());
+        let available = ((1u32 << native_count.min(16)) - 1) as u16;
+        let supported = (0..16)
+            .filter(|&layer| self.supported_qmk_settings.contains(&(200 + layer)))
+            .fold(0u16, |mask, layer| mask | (1u16 << layer));
+        ResidentDefaultNames {
+            supported,
+            confirmed: self.confirmed_firmware_layer_names & available,
+            protected: self.protected_default_layer_names() | protected_names,
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn copy_default_names_for_export(&self, layout: &KeyboardLayout, names: &mut [String]) {
+        for (layer, target) in names.iter_mut().enumerate() {
+            let confirmed = layer < 16 && self.confirmed_firmware_layer_names & (1u16 << layer) != 0;
+            let source = if confirmed { &layout.layer_names } else { &self.layer_names };
+            if let Some(name) = source.get(layer) {
+                target.clone_from(name);
+            }
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn report_entlayout_export_failure(&mut self, error: String) {
+        let status = format!("Layout export incomplete: {error}");
+        log::warn!("{status}");
+        self.show_layout_report("entlayout.export_failed_title", error);
+        self.status_msg = status;
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
     fn capture_gui_resident_preparation(&mut self, purpose: GuiEntlayoutPurpose) -> Result<GuiEntlayoutPreparation> {
         self.prepare_entlayout_pictograms()?;
         let target = self.selected_device.and_then(|i| self.device_manager.devices().get(i)).cloned()
@@ -1514,7 +1641,7 @@ impl EntropyApp {
         let mut defaults = crate::application_layouts::DeviceApplicationLayouts::default();
         let default = defaults.layouts.get_mut("default").unwrap();
         default.layers = Self::base_application_layers(layout).to_vec();
-        for (target, source) in default.layer_names.iter_mut().zip(&self.layer_names) { *target = source.clone(); }
+        self.copy_default_names_for_export(layout, &mut default.layer_names);
         let known = self.application_layout_settings().cloned();
         if let Some(known) = &known { defaults.category_names = known.category_names.clone(); }
         preserve_local_default_metadata(&mut defaults, known.as_ref(), &self.supported_qmk_settings,
@@ -1522,13 +1649,15 @@ impl EntropyApp {
         // Frozen request-local source only; no bridge inventory is asserted here.
         let bundle = self.entlayout_snapshot_with_profiles(Some(&defaults))
             .context("Unconfirmed layout data; export refused")?;
+        let default_names = (purpose == GuiEntlayoutPurpose::Export)
+            .then(|| self.resident_default_names(0));
         Ok(GuiEntlayoutPreparation {
             purpose,
             owner: self.qmk_hid_hosts.get(&target.path).map(|b|
                 (b.application_layout_owner_incarnation(), b.application_layout_publication_generation())),
             target, generation: self.connection_generation,
             deadline: std::time::Instant::now() + std::time::Duration::from_secs(20),
-            source: Some(ResidentPreparationSource { bundle, defaults, known }), document: None,
+            source: Some(ResidentPreparationSource { bundle, defaults, known, default_names }), document: None,
         })
     }
 
@@ -1597,26 +1726,24 @@ impl EntropyApp {
             self.report_import_failure("status_messages.layout_import_failed_title",
                 format!("Layout import backup incomplete: {error}"));
         } else {
-            self.status_msg = format!("Layout export incomplete: {error}");
+            self.report_entlayout_export_failure(error);
         }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
-    pub(super) fn finish_gui_entlayout_preparation(&mut self, json: String) {
-        let result = (|| -> Result<EntLayoutFile> {
+    pub(super) fn finish_gui_entlayout_preparation(&mut self, prepared: PreparedEntlayoutExport) {
+        let result = (|| -> Result<()> {
             let request = self.gui_entlayout_preparation.as_ref().context("Layout request cancelled")?;
             anyhow::ensure!(self.gui_entlayout_owner_matches(request), "Keyboard owner changed during resident export");
             anyhow::ensure!(std::time::Instant::now() < request.deadline, "Resident preparation expired");
-            let bundle: EntLayoutFile = serde_json::from_str(&json)?;
-            self.validate_entlayout_file(&bundle)?;
-            Ok(bundle)
+            self.validate_entlayout_file(&prepared.bundle)
         })();
         match result {
-            Ok(bundle) => {
-                let file_name = format!("{}.entlayout", device_id_slug(&bundle.keyboard.name));
+            Ok(()) => {
+                let file_name = format!("{}.entlayout", device_id_slug(&prepared.bundle.keyboard.name));
                 let request = self.gui_entlayout_preparation.as_mut().unwrap();
                 let export = request.purpose == GuiEntlayoutPurpose::Export;
-                request.document = Some(bundle);
+                request.document = Some(prepared);
                 if export {
                     self.spawn_file_dialog(crate::app::file_dialog::FileDialogAction::ExportEntlayout,
                         rfd::FileDialog::new().add_filter("Entropy layout", &["entlayout"]).set_file_name(&file_name), true);
@@ -1629,7 +1756,7 @@ impl EntropyApp {
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn export_entlayout_dialog(&mut self) {
         if let Err(error) = self.require_complete_entlayout_lighting() {
-            self.status_msg = error.to_string();
+            self.report_entlayout_export_failure(format!("{error:#}"));
             return;
         }
         // The safe snapshot gate also protects unattended backups. Explicit
@@ -1644,7 +1771,7 @@ impl EntropyApp {
             .confirm_entlayout_macros()
             .and_then(|()| self.confirm_uncertain_layer_names())
         {
-            self.status_msg = error.to_string();
+            self.report_entlayout_export_failure(format!("{error:#}"));
             return;
         }
         if self.selected_device.and_then(|i| self.device_manager.devices().get(i))
@@ -1656,7 +1783,7 @@ impl EntropyApp {
         }
         let bundle = match self.prepared_entlayout_snapshot() {
             Ok(bundle) => bundle,
-            Err(error) => { self.status_msg = format!("Layout export incomplete: {error:#}"); return; }
+            Err(error) => { self.report_entlayout_export_failure(format!("{error:#}")); return; }
         };
         let Some(bundle) = bundle else {
             self.status_msg = crate::i18n::tr_catalog(
@@ -1666,7 +1793,7 @@ impl EntropyApp {
             .into();
             return;
         };
-        let file_name = format!("{}.entlayout", device_id_slug(&bundle.keyboard.name));
+        let file_name = format!("{}.entlayout", device_id_slug(&bundle.bundle.keyboard.name));
         // The picker runs on a worker thread; the actual write happens in
         // write_entlayout_export once a path comes back. Snapshotting again then
         // keeps the export current even if the dialog was open for a while.
@@ -1683,22 +1810,17 @@ impl EntropyApp {
     pub(super) fn write_entlayout_export(&mut self, path: &Path) {
         if let Err(error) = self.require_complete_entlayout_lighting() {
             self.gui_entlayout_preparation = None;
-            self.status_msg = error.to_string();
+            self.report_entlayout_export_failure(format!("{error:#}"));
             return;
         }
         if let Some(mut request) = self.gui_entlayout_preparation.take() {
-            let result = (|| -> Result<()> {
+            let result = (|| -> Result<Option<PathBuf>> {
                 anyhow::ensure!(request.purpose == GuiEntlayoutPurpose::Export, "Import backup cannot be used as an export document");
                 anyhow::ensure!(self.gui_entlayout_owner_matches(&request), "Keyboard owner changed before export write");
-                let bundle = request.document.take().context("Resident preparation incomplete")?;
-                // Validation happened before the portal. Do not replace the
-                // captured source with the current application/editor selection.
-                write_entlayout_file(path, &bundle, self.app_settings.language)
+                let prepared = request.document.take().context("Resident preparation incomplete")?;
+                self.write_prepared_entlayout_export(path, &prepared)
             })();
-            self.status_msg = match result {
-                Ok(()) => format!("Exported layout: {}", path.display()),
-                Err(error) => format!("Layout export incomplete: {error:#}"),
-            };
+            self.report_entlayout_export_result(path, result);
             return;
         }
 
@@ -1706,12 +1828,12 @@ impl EntropyApp {
             .confirm_entlayout_macros()
             .and_then(|()| self.confirm_uncertain_layer_names())
         {
-            self.status_msg = error.to_string();
+            self.report_entlayout_export_failure(format!("{error:#}"));
             return;
         }
         let bundle = match self.prepared_entlayout_snapshot() {
             Ok(bundle) => bundle,
-            Err(error) => { self.status_msg = format!("Layout export incomplete: {error:#}"); return; }
+            Err(error) => { self.report_entlayout_export_failure(format!("{error:#}")); return; }
         };
         let Some(bundle) = bundle else {
             self.status_msg = crate::i18n::tr_catalog(
@@ -1721,24 +1843,46 @@ impl EntropyApp {
             .into();
             return;
         };
-        match self
-            .validate_entlayout_file(&bundle)
-            .and_then(|()| write_entlayout_file(path, &bundle, self.app_settings.language))
-        {
-            Ok(()) => {
-                self.status_msg = crate::i18n::tr_catalog_format(
-                    self.app_settings.language,
-                    "entlayout.exported_layout",
-                    &[("path", &path.display().to_string())],
-                )
+        let result = self.validate_entlayout_file(&bundle.bundle)
+            .and_then(|()| self.write_prepared_entlayout_export(path, &bundle));
+        self.report_entlayout_export_result(path, result);
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn write_prepared_entlayout_export(
+        &self,
+        path: &Path,
+        prepared: &PreparedEntlayoutExport,
+    ) -> Result<Option<PathBuf>> {
+        let name_backup = prepared.archive_default_names()?;
+        if let Some(backup) = &name_backup {
+            log::info!("Saved previous local Default layer names to {}", backup.display());
+        }
+        write_entlayout_file(path, &prepared.bundle, self.app_settings.language)?;
+        Ok(name_backup)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn report_entlayout_export_result(&mut self, path: &Path, result: Result<Option<PathBuf>>) {
+        let name_backup = match result {
+            Ok(name_backup) => name_backup,
+            Err(error) => {
+                self.report_entlayout_export_failure(format!("{error:#}"));
+                return;
             }
-            Err(e) => {
-                self.status_msg = crate::i18n::tr_catalog_format(
-                    self.app_settings.language,
-                    "entlayout.export_failed",
-                    &[("error", &e.to_string())],
-                )
-            }
+        };
+        self.status_msg = crate::i18n::tr_catalog_format(
+            self.app_settings.language,
+            "entlayout.exported_layout",
+            &[("path", &path.display().to_string())],
+        );
+        if let Some(backup) = name_backup {
+            let recovery = crate::i18n::tr_catalog_format(
+                self.app_settings.language,
+                "entlayout.export_name_backup",
+                &[("path", &backup.display().to_string())],
+            );
+            self.show_layout_report("entlayout.exported_title", format!("{}\n\n{recovery}", self.status_msg));
         }
     }
 
@@ -1940,15 +2084,18 @@ impl EntropyApp {
     /// The `.entlayout` document for the connected keyboard, as the file
     /// dialog export would write it; `None` before a keyboard is connected.
     #[cfg(not(target_arch = "wasm32"))]
+    #[cfg(test)]
     pub(super) fn entlayout_export_json(&mut self) -> Option<Result<String>> {
-        self.entlayout_export_json_checked(&mut || Ok(()))
+        self.entlayout_export_json_checked(&mut || Ok(()), 0)
+            .map(|result| result.map(|export| export.json))
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn entlayout_export_json_checked(
         &mut self,
         check: &mut dyn FnMut() -> Result<()>,
-    ) -> Option<Result<String>> {
+        protected_names: u16,
+    ) -> Option<Result<EntlayoutJsonExport>> {
         self.layout.as_ref()?;
         if let Err(error) = check().and_then(|()| self
             .confirm_entlayout_macros())
@@ -1957,40 +2104,45 @@ impl EntropyApp {
         {
             return Some(Err(error));
         }
-        let bundle = match self.prepared_entlayout_snapshot_checked(check) {
+        let prepared = match self.prepared_entlayout_snapshot_checked(check, protected_names) {
             Ok(bundle) => bundle?,
             Err(error) => return Some(Err(error)),
         };
-        if let Err(error) = self.validate_entlayout_file(&bundle) {
-            return Some(Err(error));
-        }
-        Some(
-            serde_json::to_string_pretty(&bundle).context(crate::i18n::tr_catalog(
+        Some((|| {
+            self.validate_entlayout_file(&prepared.bundle)?;
+            let json = serde_json::to_string_pretty(&prepared.bundle).context(crate::i18n::tr_catalog(
                 self.app_settings.language,
                 "entlayout.failed_to_serialize",
-            )).and_then(|json| { check()?; Ok(json) }),
-        )
+            ))?;
+            check()?;
+            let name_backup = prepared.archive_default_names()?;
+            check()?;
+            Ok(EntlayoutJsonExport { json, name_backup })
+        })())
     }
 
     /// Explicit GUI and JSON exports share physical, read-only preparation.
     /// Keep adoption local to this document: export is not permission to persist
     /// a model-wide library or start a host publisher on a cold connection.
     #[cfg(not(target_arch = "wasm32"))]
-    fn prepared_entlayout_snapshot(&mut self) -> Result<Option<EntLayoutFile>> {
-        self.prepared_entlayout_snapshot_checked(&mut || Ok(()))
+    fn prepared_entlayout_snapshot(&mut self) -> Result<Option<PreparedEntlayoutExport>> {
+        self.prepared_entlayout_snapshot_checked(&mut || Ok(()), 0)
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     fn prepared_entlayout_snapshot_checked(
         &mut self,
         check: &mut dyn FnMut() -> Result<()>,
-    ) -> Result<Option<EntLayoutFile>> {
+        protected_names: u16,
+    ) -> Result<Option<PreparedEntlayoutExport>> {
         check()?;
         self.prepare_entlayout_pictograms()?;
         check()?;
         let sm62 = self.selected_device.and_then(|i| self.device_manager.devices().get(i))
             .is_some_and(|d| d.application_layout_protocol_version() == Some(8));
-        if !sm62 { return Ok(self.entlayout_snapshot()); }
+        if !sm62 {
+            return Ok(self.entlayout_snapshot().map(|bundle| PreparedEntlayoutExport { bundle, previous_names: None }));
+        }
         anyhow::ensure!(self.layout.as_ref().is_some_and(|layout| layout.live_features.qmk_settings_confirmed),
             "QMK settings capability is unconfirmed; reconnect before complete export or import backup");
         let generation = self.connection_generation;
@@ -2007,8 +2159,9 @@ impl EntropyApp {
         if !supported {
             // A correlated legacy handshake proves that there is no schema2
             // inventory to read. Unknown/error never reaches this fallback.
-            return Ok(self.entlayout_snapshot_with_profiles(None));
+            return Ok(self.entlayout_snapshot_with_profiles(None).map(|bundle| PreparedEntlayoutExport { bundle, previous_names: None }));
         }
+        let recoverable_names = self.resident_default_names(protected_names).recoverable_layers()?;
         let records = hid.read_resident_export_catalog_checked(check)
             .context("Incomplete resident application catalog; export refused")?;
         anyhow::ensure!(self.connection_generation == generation
@@ -2019,7 +2172,7 @@ impl EntropyApp {
         let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
         let default = settings.layouts.get_mut("default").unwrap();
         default.layers = Self::base_application_layers(layout).to_vec();
-        for (target, source) in default.layer_names.iter_mut().zip(&self.layer_names) { *target = source.clone(); }
+        self.copy_default_names_for_export(layout, &mut default.layer_names);
         let known = self.application_layout_settings();
         if let Some(known) = known { settings.category_names = known.category_names.clone(); }
         preserve_local_default_metadata(&mut settings, known, &self.supported_qmk_settings,
@@ -2046,33 +2199,11 @@ impl EntropyApp {
             settings.device_raw_profiles.insert(profile.id.clone(), record.raw);
             settings.layouts.insert(profile.id.clone(), profile);
         }
-        // Reading device-authoritative data does not authorize dropping local
-        // authoring data from a backup. Until the envelope can carry both sides
-        // of a conflict, refuse explicitly and leave the destination untouched.
-        if let Some(known) = known {
-            for (id, authored) in &known.layouts {
-                let Some(physical) = settings.layouts.get(id) else {
-                    // Nonresident author data is portable even though it is not
-                    // permission to STORE it. Preserve it alongside readback.
-                    settings.layouts.insert(id.clone(), authored.clone());
-                    continue;
-                };
-                let inherited_default = id == "default"
-                    && authored.layers.len() == physical.layers.len()
-                    && authored.layers.iter().zip(&physical.layers).all(|(a, p)|
-                        a.len() == p.len() && a.iter().zip(p).all(|(a, p)|
-                            *a == crate::application_layouts::APPLICATION_LAYOUT_UNSET_KEYCODE || a == p));
-                let same_layers = authored.layers == physical.layers || inherited_default;
-                anyhow::ensure!(same_layers
-                    && authored.layer_names == physical.layer_names
-                    && authored.encoder_stacks == physical.encoder_stacks
-                    && authored.name == physical.name,
-                    "Export would replace author data in profile {id}; backup refused (layers={}, names={}, stacks={}, display={})",
-                    same_layers, authored.layer_names == physical.layer_names,
-                    authored.encoder_stacks == physical.encoder_stacks, authored.name == physical.name);
-            }
-        }
-        Ok(self.entlayout_snapshot_with_profiles(Some(&settings)))
+        let needs_backup = preserve_resident_author_data(&mut settings, known, Some(recoverable_names))?;
+        Ok(self.entlayout_snapshot_with_profiles(Some(&settings)).map(|bundle| PreparedEntlayoutExport {
+            bundle,
+            previous_names: known.filter(|_| needs_backup).cloned(),
+        }))
     }
 
     fn entlayout_snapshot(&self) -> Option<EntLayoutFile> {
@@ -2437,16 +2568,16 @@ impl EntropyApp {
             // read-only producer, never pretend runtime inventory completed.
             self.confirm_uncertain_layer_names()?;
             let mut request = self.capture_gui_resident_preparation(purpose)?;
-            let json = prepare_gui_resident_document(
+            let prepared = prepare_gui_resident_document(
                 self.hid_device.as_ref().context("No active keyboard connection")?,
                 request.source.take().context("Missing resident backup source")?,
                 request.deadline, &std::sync::atomic::AtomicBool::new(false))?;
-            request.document = Some(serde_json::from_str(&json)?);
+            request.document = Some(prepared);
             request
         };
         anyhow::ensure!(self.gui_entlayout_owner_matches(&request), "Keyboard owner changed before import backup");
         anyhow::ensure!(std::time::Instant::now() < request.deadline, "Import backup preparation expired");
-        let bundle = request.document.take().context("Import backup preparation incomplete")?;
+        let bundle = request.document.take().context("Import backup preparation incomplete")?.bundle;
         self.validate_entlayout_file(&bundle)?;
         let config_root = storage_config_dir().context("No backup storage directory")?;
         let namespace = self.import_backup_namespace.as_ref()

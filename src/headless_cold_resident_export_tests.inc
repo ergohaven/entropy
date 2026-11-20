@@ -162,7 +162,12 @@ fn sm62_resident_export_refuses_loss_of_authored_profiles_and_default_drafts() {
         // Until both physical and author versions can be represented losslessly,
         // explicit refusal is preferable to a falsely complete success.
         let error = app.entlayout_export_json().unwrap().expect_err(case);
-        assert!(format!("{error:#}").contains("author"), "{case}: {error:#}");
+        let reason = if case == "supported-default-name-conflict" {
+            "Could not confirm Default layer names [0]"
+        } else {
+            "author"
+        };
+        assert!(format!("{error:#}").contains(reason), "{case}: {error:#}");
         app.write_entlayout_export(&path);
         assert_eq!(std::fs::read(&path).unwrap(), b"previous complete backup", "{case}");
         assert_eq!(serde_json::to_value(&app.app_settings.application_layouts).unwrap(), before);
