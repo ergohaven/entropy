@@ -46,8 +46,28 @@ fn output(command: &mut Command) -> Result<Vec<u8>> {
     }
 }
 
+/// Observe post-write USB re-enumeration without waiting for mounts on macOS.
+pub(super) fn snapshot_usb() -> Result<Vec<UsbTarget>> {
+    #[cfg(target_os = "macos")]
+    {
+        snapshot_macos(None)
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        snapshot()
+    }
+}
+
 #[cfg(target_os = "macos")]
 pub(super) fn snapshot() -> Result<Vec<UsbTarget>> {
+    snapshot_macos(Some(macos_mount_point))
+}
+
+#[cfg(target_os = "macos")]
+type MountLookup = fn(&str) -> Result<Option<PathBuf>>;
+
+#[cfg(target_os = "macos")]
+fn snapshot_macos(lookup_mount: Option<MountLookup>) -> Result<Vec<UsbTarget>> {
     // Use USB device subtrees from IOService to retain their disk descendants.
     let bytes = output(Command::new("/usr/sbin/ioreg").args([
         "-a",
@@ -62,15 +82,19 @@ pub(super) fn snapshot() -> Result<Vec<UsbTarget>> {
     ]))?;
     let value = plist::Value::from_reader(std::io::Cursor::new(bytes))?;
     let mut targets = Vec::new();
-    collect_macos(&value, &mut targets)?;
+    collect_macos(&value, lookup_mount, &mut targets)?;
     Ok(targets)
 }
 
 #[cfg(target_os = "macos")]
-fn collect_macos(value: &plist::Value, targets: &mut Vec<UsbTarget>) -> Result<()> {
+fn collect_macos(
+    value: &plist::Value,
+    lookup_mount: Option<MountLookup>,
+    targets: &mut Vec<UsbTarget>,
+) -> Result<()> {
     if let Some(array) = value.as_array() {
         for child in array {
-            collect_macos(child, targets)?;
+            collect_macos(child, lookup_mount, targets)?;
         }
     } else if let Some(dict) = value.as_dictionary() {
         let int = |key| dict.get(key).and_then(plist::Value::as_unsigned_integer);
@@ -86,27 +110,23 @@ fn collect_macos(value: &plist::Value, targets: &mut Vec<UsbTarget>) -> Result<(
                 product: product.try_into()?,
                 mounts: Vec::new(),
             };
-            if let Some(children) = dict.get("IORegistryEntryChildren") {
+            if let (Some(lookup_mount), Some(children)) =
+                (lookup_mount, dict.get("IORegistryEntryChildren"))
+            {
                 let mut disks = std::collections::BTreeSet::new();
                 collect_bsd_names(children, &mut disks);
                 for disk in disks {
-                    let bytes =
-                        output(Command::new("/usr/sbin/diskutil").args(["info", "-plist", &disk]))?;
-                    let info = plist::Value::from_reader(std::io::Cursor::new(bytes))?;
-                    if let Some(mount) = info
-                        .as_dictionary()
-                        .and_then(|d| d.get("MountPoint"))
-                        .and_then(plist::Value::as_string)
-                        .filter(|s| !s.is_empty())
-                    {
-                        let path = PathBuf::from(mount);
+                    if let Some(path) = lookup_mount(&disk)? {
                         if !target.mounts.contains(&path) {
                             target.mounts.push(path);
                         }
                     }
                 }
             }
-            if (vendor == 0xe126 && super::runtime_product(product.try_into()?))
+            // After a write, unmounting does not prove the bootloader left. Keep
+            // unknown occupants too, so callers can reject ambiguous topology.
+            if lookup_mount.is_none()
+                || (vendor == 0xe126 && super::runtime_product(product.try_into()?))
                 || (vendor == 0x2e8a && product == 3)
                 || !target.mounts.is_empty()
             {
@@ -114,10 +134,22 @@ fn collect_macos(value: &plist::Value, targets: &mut Vec<UsbTarget>) -> Result<(
             }
         }
         if let Some(children) = dict.get("IORegistryEntryChildren") {
-            collect_macos(children, targets)?;
+            collect_macos(children, lookup_mount, targets)?;
         }
     }
     Ok(())
+}
+
+#[cfg(target_os = "macos")]
+fn macos_mount_point(disk: &str) -> Result<Option<PathBuf>> {
+    let bytes = output(Command::new("/usr/sbin/diskutil").args(["info", "-plist", disk]))?;
+    let info = plist::Value::from_reader(std::io::Cursor::new(bytes))?;
+    Ok(info
+        .as_dictionary()
+        .and_then(|d| d.get("MountPoint"))
+        .and_then(plist::Value::as_string)
+        .filter(|s| !s.is_empty())
+        .map(PathBuf::from))
 }
 
 #[cfg(target_os = "macos")]
@@ -311,10 +343,65 @@ mod tests {
             );
             let value: plist::Value = plist::from_bytes(xml.as_bytes()).unwrap();
             let mut result = Vec::new();
-            collect_macos(&value, &mut result).unwrap();
+            collect_macos(&value, Some(macos_mount_point), &mut result).unwrap();
             assert_eq!(result.len(), 1, "VID {vendor:04x} PID {product:04x}");
             assert_eq!(result[0].port, "macos:000004d2");
             assert_eq!(result[0].product, product);
         }
+    }
+
+    #[cfg(target_os = "macos")]
+    #[test]
+    fn firmware_flash_macos_usb_only_keeps_unmounted_boot_and_unknown_devices() {
+        let xml = r#"<?xml version="1.0"?><plist version="1.0"><array>
+            <dict>
+                <key>idVendor</key><integer>4660</integer>
+                <key>idProduct</key><integer>22136</integer>
+                <key>locationID</key><integer>1234</integer>
+                <key>IORegistryEntryChildren</key><array><dict>
+                    <key>bInterfaceNumber</key><integer>0</integer>
+                    <key>idVendor</key><integer>4660</integer>
+                    <key>idProduct</key><integer>22136</integer>
+                    <key>locationID</key><integer>1234</integer>
+                    <key>IORegistryEntryChildren</key><array><dict>
+                        <key>BSD Name</key><string>disk123s1</string>
+                    </dict></array>
+                </dict></array>
+            </dict>
+            <dict>
+                <key>idVendor</key><integer>17185</integer>
+                <key>idProduct</key><integer>1</integer>
+                <key>locationID</key><integer>1235</integer>
+            </dict>
+        </array></plist>"#;
+        let value = plist::from_bytes(xml.as_bytes()).unwrap();
+        let mut targets = Vec::new();
+        // Admission must still consult the disk, and reject the arbitrary VID/PID
+        // without a mount. Topology-only parsing below has no mount resolver.
+        collect_macos(
+            &value,
+            Some(|disk| {
+                assert_eq!(disk, "disk123s1");
+                Ok(None)
+            }),
+            &mut targets,
+        )
+        .unwrap();
+        assert!(targets.is_empty());
+        let error = collect_macos(
+            &value,
+            Some(|_| anyhow::bail!("disk disappeared during mount lookup")),
+            &mut targets,
+        )
+        .unwrap_err();
+        assert_eq!(error.to_string(), "disk disappeared during mount lookup");
+
+        collect_macos(&value, None, &mut targets).unwrap();
+        assert_eq!(targets.len(), 2);
+        assert_eq!(targets[0].port, "macos:000004d2");
+        assert_eq!((targets[0].vendor, targets[0].product), (0x1234, 0x5678));
+        assert_eq!(targets[1].port, "macos:000004d3");
+        assert_eq!((targets[1].vendor, targets[1].product), (0x4321, 1));
+        assert!(targets.iter().all(|target| target.mounts.is_empty()));
     }
 }

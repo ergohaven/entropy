@@ -25,6 +25,7 @@ struct Dialog {
     origin_part: Part,
     next: Option<Prepared>,
     retry: Option<Prepared>,
+    post_write_check: bool,
     steps: Vec<(Part, Outcome)>,
 }
 
@@ -144,6 +145,7 @@ impl EntropyApp {
             phase: Phase::Confirm,
             next: None,
             retry: None,
+            post_write_check: false,
             steps: Vec::new(),
         });
     }
@@ -302,6 +304,7 @@ impl EntropyApp {
         };
         dialog.next = prepared.next();
         dialog.retry = Some(prepared.clone());
+        dialog.post_write_check = false;
         // Revoke the selected background publisher before the worker reboots
         // its device. Other connected keyboards keep their existing publishers.
         if hid.is_some() {
@@ -319,11 +322,46 @@ impl EntropyApp {
         });
         dialog.phase = Phase::Flashing {
             receiver,
-            stage: if dialog.moved_target() {
-                Stage::WaitingComponent
-            } else {
-                Stage::EnteringBootloader
-            },
+            stage: Stage::CheckingConnection,
+        };
+        Ok(())
+    }
+
+    fn firmware_flash_can_check_version(&self) -> bool {
+        matches!(self.device_scan_state, DeviceScanState::Idle)
+            && !self.hid_write_lifecycle_busy()
+            && self.hid_device.is_none()
+            && self.selected_device.is_none()
+            && matches!(self.connect_state, ConnectState::Idle | ConnectState::SelectingDevice)
+    }
+
+    fn begin_firmware_version_check(
+        &mut self,
+        ctx: &egui::Context,
+        dialog: &mut Dialog,
+    ) -> anyhow::Result<()> {
+        anyhow::ensure!(
+            dialog.post_write_check && matches!(dialog.phase, Phase::Finished(Err(_))),
+            "No firmware version check is available"
+        );
+        anyhow::ensure!(
+            self.firmware_flash_can_check_version(),
+            "Wait for keyboard discovery to finish and leave the target unselected in Entropy"
+        );
+        let prepared = dialog
+            .retry
+            .clone()
+            .ok_or_else(|| anyhow::anyhow!("Firmware is not prepared"))?;
+        let (sender, receiver) = mpsc::channel();
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let result = flash::verify_after_reconnect(&prepared).map_err(|e| format!("{e:#}"));
+            let _ = sender.send(Event::Finished(result));
+            ctx.request_repaint();
+        });
+        dialog.phase = Phase::Flashing {
+            receiver,
+            stage: Stage::WaitingReconnect,
         };
         Ok(())
     }
@@ -351,28 +389,34 @@ impl EntropyApp {
                 }
                 Err(TryRecvError::Empty) => {}
             },
-            Phase::Flashing { receiver, stage } => loop {
-                match receiver.try_recv() {
-                    Ok(Event::Progress(progress)) => *stage = progress,
-                    Ok(Event::Finished(result)) => {
-                        if let Ok(outcome) = result {
-                            dialog.steps.push((dialog.part, outcome));
-                            dialog.retry = None;
+            Phase::Flashing { receiver, stage } => {
+                let result = loop {
+                    match receiver.try_recv() {
+                        Ok(Event::Progress(progress)) => *stage = progress,
+                        Ok(Event::Finished(result)) => {
+                            self.last_device_scan_at = 0.0;
+                            break Some(result);
                         }
-                        replacement = Some(Phase::Finished(result));
-                        self.last_device_scan_at = 0.0;
-                        break;
+                        Err(TryRecvError::Disconnected) => {
+                            break Some(Err(
+                                "Firmware update worker stopped; reconnect the half before retrying"
+                                    .into(),
+                            ));
+                        }
+                        Err(TryRecvError::Empty) => break None,
                     }
-                    Err(TryRecvError::Disconnected) => {
-                        replacement = Some(Phase::Finished(Err(
-                            "Firmware update worker stopped; reconnect the half before retrying"
-                                .into(),
-                        )));
-                        break;
+                };
+                if let Some(result) = result {
+                    dialog.post_write_check = result.is_err()
+                        && dialog.retry.is_some()
+                        && matches!(stage, Stage::WaitingDisconnect | Stage::WaitingReconnect);
+                    if let Ok(outcome) = result {
+                        dialog.steps.push((dialog.part, outcome));
+                        dialog.retry = None;
                     }
-                    Err(TryRecvError::Empty) => break,
+                    replacement = Some(Phase::Finished(result));
                 }
-            },
+            }
             _ => {}
         }
         if let Some(phase) = replacement {
@@ -426,6 +470,7 @@ impl EntropyApp {
             PhysicalReset,
             Next,
             Select,
+            CheckVersion,
             Retry,
         }
         let mut action = None;
@@ -467,8 +512,8 @@ impl EntropyApp {
                 Phase::Preparing(_) => { ui.spinner(); ui.label(text(lang, "Downloading and verifying firmware…", "Скачиваем и проверяем прошивку…")); },
                 Phase::Ready(_) if dialog.moved_target() => {
                     ui.label(text(lang,
-                        "Start the transfer, then connect only the named half to the original USB port. Entropy will prompt for physical unlock keys if this half supports USB maintenance. Older firmware requires BOOT or Reset.",
-                        "Запустите передачу и подключите только указанную половинку к исходному USB-порту. Если половинка поддерживает обслуживание по USB, Entropy покажет клавиши для разблокировки. Для старой прошивки понадобится BOOT или Reset.",
+                        "Start the transfer and wait for Entropy to ask you to move the cable. Connect only the named half to the original USB port. Entropy will prompt for physical unlock keys if this half supports USB maintenance. Older firmware requires BOOT or Reset.",
+                        "Запустите передачу и дождитесь, пока Entropy попросит переставить кабель. Подключите только указанную половинку к исходному USB-порту. Если половинка поддерживает обслуживание по USB, Entropy покажет клавиши для разблокировки. Для старой прошивки понадобится BOOT или Reset.",
                     ));
                     if ui.button(format!("{}: {}", text(lang, "Start transfer", "Начать передачу"), dialog.part_label(lang, dialog.part))).clicked() { action = Some(Action::Flash); }
                 },
@@ -503,6 +548,10 @@ impl EntropyApp {
                     if ui.button(if dialog.part.rp2040() { text(lang, "Use physical BOOT", "Использовать кнопку BOOT") } else { text(lang, "Use physical Reset", "Использовать кнопку Reset") }).clicked() { action = Some(Action::PhysicalReset); }
                     });
                 },
+                Phase::Flashing { .. } if dialog.post_write_check => {
+                    ui.spinner();
+                    ui.label(text(lang, "Checking the firmware version…", "Проверяем версию прошивки…"));
+                },
                 Phase::Flashing { stage, .. } => {
                     ui.spinner();
                     if let Stage::Unlocking(keys) = stage {
@@ -524,8 +573,9 @@ impl EntropyApp {
                         Stage::WaitingBootloader => text(lang, "Waiting for update mode. If needed, double-press Reset on this target. Keep the USB cable connected to the same port.", "Ждём режим прошивки. При необходимости дважды нажмите Reset на этой части. Оставьте USB-кабель в том же порту."),
                         Stage::Writing => text(lang, "Writing firmware. Keep the keyboard connected.", "Записываем прошивку. Не отключайте клавиатуру."),
                         Stage::WaitingReconnect => text(lang, "Waiting for the target to restart and report its firmware version…", "Ждём перезапуска обновляемой части и проверяем версию прошивки…"),
+                        Stage::CheckingConnection => text(lang, "Keep the currently connected component plugged in while Entropy checks the USB connection.", "Не отключайте подключённую часть, пока Entropy проверяет USB-соединение."),
                         Stage::EnteringBootloader => text(lang, "Entering update mode…", "Переходим в режим прошивки…"),
-                        Stage::WaitingDisconnect => text(lang, "Firmware data sent. Waiting for the half to leave update mode.", "Данные прошивки отправлены. Ждём выхода половинки из режима прошивки."),
+                        Stage::WaitingDisconnect => text(lang, "Waiting for the target to leave update mode…", "Ждём выхода обновляемой части из режима прошивки…"),
                     };
                     if matches!(stage, Stage::WaitingBootloader | Stage::WaitingComponent) {
                         ui.label(format!("{}: {instruction}", dialog.part_label(lang, dialog.part)));
@@ -550,7 +600,21 @@ impl EntropyApp {
                 },
                 Phase::Finished(Err(error)) => {
                     ui.colored_label(ui.visuals().error_fg_color, error);
-                    ui.label(if dialog.part.rp2040() { text(lang, "No successful update is recorded for this part. Reconnect it before retrying; hold BOOT while reconnecting if it remains in update mode.", "Успешное обновление этой части не подтверждено. Подключите её заново перед повтором; если она осталась в режиме прошивки, удерживайте BOOT при подключении.") } else { text(lang, "No successful update is recorded for this part. Reconnect it before retrying; use physical Reset if it remains in update mode.", "Успешное обновление этой части не подтверждено. Перед повтором подключите её заново; если она осталась в режиме прошивки, используйте Reset.") });
+                    if dialog.post_write_check {
+                        ui.label(format!("{}: {}", dialog.part_label(lang, dialog.part), text(lang,
+                            "To check the version, reconnect only this target to the original USB port without using BOOT or Reset.",
+                            "Для проверки версии подключите заново только эту часть к исходному USB-порту, не используя BOOT или Reset.",
+                        )));
+                        if ui.add_enabled(
+                            self.firmware_flash_can_check_version(),
+                            egui::Button::new(text(lang, "Check firmware version", "Проверить версию прошивки")),
+                        ).on_disabled_hover_text(text(lang,
+                            "Wait for keyboard discovery to finish and leave the target unselected in Entropy.",
+                            "Дождитесь завершения поиска клавиатур и не выбирайте эту часть в Entropy.",
+                        )).clicked() { action = Some(Action::CheckVersion); }
+                    } else {
+                        ui.label(if dialog.part.rp2040() { text(lang, "No successful update is recorded for this part. Reconnect it before retrying; hold BOOT while reconnecting if it remains in update mode.", "Успешное обновление этой части не подтверждено. Подключите её заново перед повтором; если она осталась в режиме прошивки, удерживайте BOOT при подключении.") } else { text(lang, "No successful update is recorded for this part. Reconnect it before retrying; use physical Reset if it remains in update mode.", "Успешное обновление этой части не подтверждено. Перед повтором подключите её заново; если она осталась в режиме прошивки, используйте Reset.") });
+                    }
                     if dialog.retry.is_some() {
                         if ui.button(text(lang, "Retry this target", "Повторить эту часть")).clicked() { action = Some(Action::Retry); }
                     } else {
@@ -594,9 +658,11 @@ impl EntropyApp {
                     self.firmware_flash.minimized = true;
                     Ok(())
                 }
+                Action::CheckVersion => self.begin_firmware_version_check(ctx, &mut dialog),
                 Action::Retry => {
                     if let Some(prepared) = dialog.retry.clone() {
                         dialog.phase = Phase::Ready(prepared);
+                        dialog.post_write_check = false;
                     }
                     Ok(())
                 }
@@ -938,21 +1004,136 @@ mod tests {
     }
 
     #[test]
-    fn firmware_flash_failed_version_check_does_not_record_a_verified_step() {
+    fn firmware_flash_post_write_check_preserves_progress_and_can_continue() {
+        use egui_kittest::kittest::Queryable;
         let _config = ScopedTempConfig::new();
         let (mut app, recorder) = fixture();
-        let (tx, rx) = mpsc::channel();
-        app.firmware_flash.dialog.as_mut().unwrap().phase = Phase::Flashing {
-            receiver: rx,
-            stage: Stage::WaitingReconnect,
+        app.app_settings.language = crate::i18n::Language::English;
+        app.hid_device = None;
+        app.selected_device = None;
+        app.connect_state = ConnectState::SelectingDevice;
+        let dialog = app.firmware_flash.dialog.as_mut().unwrap();
+        dialog.device.product_id = 0x71;
+        dialog.profile = flash::profile(0x71).unwrap();
+        dialog.origin_part = K04_DONGLE;
+        dialog.part = K04_RIGHT_PERIPHERAL;
+        let previous_step = (K04_LEFT_PERIPHERAL, Outcome::TransferredUnverified);
+        dialog.steps.push(previous_step);
+        let backup = PathBuf::from("saved.entlayout");
+        dialog.backup = Some(backup.clone());
+        let prepared = Prepared {
+            profile: dialog.profile,
+            keyboard_uid: [1; 8],
+            bytes: vec![7],
+            version: "0.3.1".into(),
+            part: dialog.part,
+            remaining: vec![(K04_DONGLE, vec![9])],
+            origin: flash::UsbTarget {
+                port: "original-port".into(),
+                vendor: 0xe126,
+                product: 0x71,
+                mounts: vec![],
+            },
         };
-        tx.send(Event::Finished(Err("not verified".into())))
-            .unwrap();
-        app.poll_firmware_flash(&egui::Context::default());
-        let dialog = app.firmware_flash.dialog.as_ref().unwrap();
-        assert!(matches!(&dialog.phase, Phase::Finished(Err(error)) if error == "not verified"));
-        assert!(dialog.steps.is_empty());
+        dialog.next = prepared.next();
+        dialog.retry = Some(prepared);
+
+        let ctx = egui::Context::default();
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(640.0, 780.0))
+            .with_context_setup(crate::keycode_picker::setup_picker_test_fonts)
+            .build_ui_state(|ui, app: &mut EntropyApp| app.draw_firmware_flash(ui.ctx()), app);
+        for (last_stage, offers_check) in [
+            (Stage::WaitingBootloader, false),
+            (Stage::Writing, false),
+            (Stage::WaitingDisconnect, true),
+            (Stage::WaitingReconnect, true),
+        ] {
+            let (tx, receiver) = mpsc::channel();
+            let app = harness.state_mut();
+            app.firmware_flash.dialog.as_mut().unwrap().phase = Phase::Flashing {
+                receiver,
+                stage: Stage::WaitingComponent,
+            };
+            tx.send(Event::Progress(last_stage)).unwrap();
+            tx.send(Event::Finished(Err("not verified".into()))).unwrap();
+            app.poll_firmware_flash(&ctx);
+            harness.run();
+            assert_eq!(
+                harness.query_by_label("Check firmware version").is_some(),
+                offers_check
+            );
+            harness.get_by_label("Retry this target");
+        }
+        harness.get_by_label("Right half: To check the version, reconnect only this target to the original USB port without using BOOT or Reset.");
+        let dialog = harness.state().firmware_flash.dialog.as_ref().unwrap();
+        assert_eq!(dialog.steps, vec![previous_step]);
+        assert_eq!(dialog.retry.as_ref().unwrap().bytes, vec![7]);
+        assert_eq!(dialog.next.as_ref().unwrap().bytes, vec![9]);
+        assert_eq!(dialog.backup.as_ref(), Some(&backup));
+
+        // Deliver readback results through the normal worker channel, without USB I/O.
+        for result in [Err("readback failed".into()), Ok(Outcome::Verified)] {
+            let (tx, receiver) = mpsc::channel();
+            let app = harness.state_mut();
+            app.firmware_flash.dialog.as_mut().unwrap().phase = Phase::Flashing {
+                receiver,
+                stage: Stage::WaitingReconnect,
+            };
+            assert!(app.firmware_flash.owns_device());
+            assert!(!app.firmware_flash_can_check_version());
+            harness.run_steps(2);
+            harness.get_by_label("Checking the firmware version…");
+            let failed = result.is_err();
+            tx.send(Event::Finished(result)).unwrap();
+            harness.state_mut().poll_firmware_flash(&ctx);
+            harness.run();
+            assert_eq!(
+                harness.query_by_label("Check firmware version").is_some(),
+                failed
+            );
+            if failed {
+                let dialog = harness.state().firmware_flash.dialog.as_ref().unwrap();
+                assert_eq!(dialog.steps, vec![previous_step]);
+                assert_eq!(dialog.retry.as_ref().unwrap().bytes, vec![7]);
+                harness.get_by_label("Retry this target");
+            }
+        }
+        let dialog = harness.state().firmware_flash.dialog.as_ref().unwrap();
+        assert_eq!(
+            dialog.steps,
+            vec![previous_step, (K04_RIGHT_PERIPHERAL, Outcome::Verified)]
+        );
+        assert!(dialog.retry.is_none());
+        assert_eq!(dialog.backup.as_ref(), Some(&backup));
+        let continue_label = format!("Continue: {}", K04_DONGLE.label.0);
+        harness.get_by_label(continue_label.as_str()).click();
+        harness.run();
+        let dialog = harness.state().firmware_flash.dialog.as_ref().unwrap();
+        assert!(matches!(&dialog.phase, Phase::Ready(prepared) if prepared.part == K04_DONGLE));
         assert!(recorder.sent().iter().all(|h| h.cmd != Cmd::BootloaderJump));
+    }
+
+    #[test]
+    fn firmware_flash_version_check_requires_exclusive_device_access() {
+        let _config = ScopedTempConfig::new();
+        let (mut app, _) = fixture();
+        app.connect_state = ConnectState::Idle;
+        assert!(!app.firmware_flash_can_check_version());
+        app.selected_device = None;
+        assert!(!app.firmware_flash_can_check_version());
+        app.hid_device = None;
+        assert!(app.firmware_flash_can_check_version());
+
+        let (_tx, rx) = mpsc::channel();
+        app.device_scan_state = DeviceScanState::Scanning {
+            rx,
+            started_at: std::time::Instant::now(),
+            generation: 0,
+            timeout_logged: false,
+            usb_only: true,
+        };
+        assert!(!app.firmware_flash_can_check_version());
     }
 
     #[test]
@@ -1164,25 +1345,33 @@ mod tests {
         use egui_kittest::kittest::Queryable;
         let _config = ScopedTempConfig::new();
         let (mut app, recorder) = fixture();
-        let (_tx, rx) = mpsc::channel();
+        let (tx, rx) = mpsc::channel();
         let dialog = app.firmware_flash.dialog.as_mut().unwrap();
         dialog.device.product_id = 0x74;
         dialog.profile = flash::profile(0x74).unwrap();
         dialog.part = K04_SECONDARY;
         dialog.phase = Phase::Flashing {
             receiver: rx,
-            stage: Stage::WaitingComponent,
+            stage: Stage::CheckingConnection,
         };
         let mut harness = egui_kittest::Harness::builder()
             .with_size(egui::vec2(640.0, 700.0))
             .with_context_setup(crate::keycode_picker::setup_picker_test_fonts)
             .build_ui_state(
-                |ui, app: &mut EntropyApp| app.draw_firmware_flash(ui.ctx()),
+                |ui, app: &mut EntropyApp| {
+                    app.poll_firmware_flash(ui.ctx());
+                    app.draw_firmware_flash(ui.ctx());
+                },
                 app,
             );
+        let swap = "Secondary half: Disconnect the previous USB component. Connect only the named half to the original USB port. For older firmware, double-press Reset on that half. Check the physical side before pressing Reset.";
+        harness.run_steps(2);
+        harness.get_by_label("Keep the currently connected component plugged in while Entropy checks the USB connection.");
+        assert!(harness.query_by_label(swap).is_none());
+        tx.send(Event::Progress(Stage::WaitingComponent)).unwrap();
         harness.run_steps(2);
         harness.get_by_label("k04 · Update target: Secondary half");
-        harness.get_by_label("Secondary half: Disconnect the previous USB component. Connect only the named half to the original USB port. For older firmware, double-press Reset on that half. Check the physical side before pressing Reset.");
+        harness.get_by_label(swap);
         assert!(recorder.sent().iter().all(|h| h.cmd != Cmd::BootloaderJump));
     }
 
