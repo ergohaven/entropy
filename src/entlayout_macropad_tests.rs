@@ -1340,6 +1340,28 @@ fn macropad_display_failed_readback_requires_refresh_before_backup() {
 }
 
 #[test]
+fn macropad_display_reconnect_refuses_cached_backup() {
+    let _storage = crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app, _) = display_backup_fixture();
+    let mut device = app.device_manager.devices()[0].clone();
+    device.bus_type = "Bluetooth".into();
+    app.device_manager.replace_devices(vec![device]);
+    app.supported_qmk_settings = vec![DISPLAY_BRIGHTNESS_QSID];
+    app.display_settings.supported = true;
+    app.display_settings.brightness_supported = true;
+    app.display_settings.confirmed_brightness = 42;
+    assert_eq!(
+        app.entlayout_snapshot().unwrap().data.portable_settings[0].value,
+        42
+    );
+
+    assert!(app.begin_bluetooth_reconnect("test disconnect"));
+    assert!(app.layout.is_some());
+    assert!(app.entlayout_snapshot().is_none());
+    assert!(app.prepared_entlayout_snapshot().is_err());
+}
+
+#[test]
 fn macropad_display_import_skips_unsupported_and_invalid_settings() {
     let _storage = crate::app::app_storage::ScopedTempConfig::new();
     let (mut app, _, _) = fixture();

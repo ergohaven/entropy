@@ -127,14 +127,21 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(in crate::app) fn entlayout_macropad_display_confirmed(&self) -> bool {
+        let reconnecting = self.bluetooth_reconnect_active();
         self.macropad_display_settings().all(|(spec, _)| {
-            !self.display_settings.unconfirmed_qsids.contains(&spec.qsid)
+            !reconnecting
+                && !self.display_settings.unconfirmed_qsids.contains(&spec.qsid)
                 && self.pending_settings_write_value(spec.qsid).is_none()
         })
     }
 
     #[cfg(not(target_arch = "wasm32"))]
     pub(in crate::app) fn confirm_entlayout_macropad_display(&mut self) -> anyhow::Result<()> {
+        // Reconnect keeps the previous layout and display cache until the new read completes.
+        anyhow::ensure!(
+            !self.bluetooth_reconnect_active() || self.macropad_display_settings().next().is_none(),
+            "Macropad display settings are unconfirmed while the keyboard is reconnecting"
+        );
         let unconfirmed: Vec<_> = self
             .macropad_display_settings()
             .filter(|(spec, _)| self.display_settings.unconfirmed_qsids.contains(&spec.qsid))
