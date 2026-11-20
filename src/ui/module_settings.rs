@@ -537,12 +537,19 @@ impl EntropyApp {
             ModuleSettingKind::Select => {
                 let dropdown_width = metrics.value(120.0);
                 let mixed = self.shared_encoder_values_mixed(field.qsid);
-                let mut selected_idx =
-                    (raw_value as usize).min(field.variants.len().saturating_sub(1));
-                let mut variants = field
+                let choices = field
                     .variants
                     .iter()
-                    .map(|variant| {
+                    .enumerate()
+                    .filter(|(idx, _)| *idx >= usize::from(field.min) && *idx <= usize::from(field.max))
+                    .collect::<Vec<_>>();
+                let mut selected_idx = choices
+                    .iter()
+                    .position(|(value, _)| *value == usize::from(raw_value))
+                    .unwrap_or(0);
+                let mut variants = choices
+                    .iter()
+                    .map(|(_, variant)| {
                         module_setting_variant_label(self.app_settings.language, variant)
                     })
                     .collect::<Vec<_>>();
@@ -578,8 +585,8 @@ impl EntropyApp {
                             &variants,
                             dropdown_width,
                         );
-                        if let Some(picked) = picked.filter(|idx| *idx < field.variants.len()) {
-                            self.write_module_setting_value(group_idx, &field, picked as u16);
+                        if let Some((value, _)) = picked.and_then(|idx| choices.get(idx)) {
+                            self.write_module_setting_value(group_idx, &field, *value as u16);
                         }
                     },
                 );
