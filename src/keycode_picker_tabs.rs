@@ -194,9 +194,11 @@ pub(super) fn universal_russian_letter_rows(
     language: crate::i18n::Language,
     tab: KeycodeTab,
     section: &'static str,
+    extended: bool,
 ) -> Vec<PickerRow> {
     crate::universal_symbols::RUSSIAN_LETTERS
         .iter()
+        .filter(|letter| letter.user_id <= 0xB3 || extended)
         .map(|letter| {
             let binding = crate::universal_symbols::binding(letter.user_id);
             let label = crate::universal_symbols::label_for_user_id(letter.user_id)

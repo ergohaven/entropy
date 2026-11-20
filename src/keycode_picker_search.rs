@@ -263,6 +263,7 @@ mod tests {
             supports_universal_numero: false,
             supports_universal_symbols: true,
             supports_universal_russian_letters: true,
+            supports_extended_russian_letters: false,
             rmk_native_key_actions_allowed_for_target: true,
             custom_keycodes: vec![
                 (
@@ -507,6 +508,7 @@ mod tests {
             supports_rmk_native_key_actions: true,
             rmk_native_key_actions_allowed_for_target: true,
             supports_universal_russian_letters: true,
+            supports_extended_russian_letters: false,
             ..Default::default()
         };
         let results = search(&mut picker, "universal");

@@ -1521,6 +1521,7 @@ mod tests {
                 supports_universal_macros: true,
                 supports_universal_symbols: true,
                 supports_universal_russian_letters: true,
+                supports_extended_russian_letters: false,
                 macro_key_pick: Some((0, 0)),
                 macro_actions: vec![vec![MacroAction::Tap(4)]],
                 ..Default::default()
@@ -1596,6 +1597,7 @@ mod tests {
                 supports_universal_macros: true,
                 supports_universal_symbols: true,
                 supports_universal_russian_letters: true,
+                supports_extended_russian_letters: false,
                 ..Default::default()
             };
             let choices = picker.macro_universal_key_choices(MacroKeyPickKind::Tap);
@@ -1619,6 +1621,7 @@ mod tests {
                     supports_universal_macros: true,
                     supports_universal_symbols: true,
                     supports_universal_russian_letters: true,
+                    supports_extended_russian_letters: false,
                     macro_actions: vec![vec![action.clone()]],
                     macro_key_pick: Some((0, 0)),
                     ..Default::default()
