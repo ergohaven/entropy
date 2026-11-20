@@ -734,6 +734,30 @@ impl EntropyApp {
         }
     }
 
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) fn protected_default_layer_names(&self) -> u16 {
+        let device_key = self.application_layout_device_key();
+        let mut protected = 0;
+        for request in self.pending_layer_name_writes.iter()
+            .chain(&self.uncertain_layer_names)
+            .chain(self.active_layer_name_write())
+        {
+            if request.layer < 16 && request.generation == self.connection_generation
+                && device_key.as_ref() == Some(&request.device_key)
+            {
+                protected |= 1u16 << request.layer;
+            }
+        }
+        if self.editing_layer_layout_id.as_deref() == Some(crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID)
+            && self.editing_layer_device_key.as_ref() == device_key.as_ref()
+        {
+            if let Some(layer) = self.editing_layer.filter(|layer| *layer < 16) {
+                protected |= 1u16 << layer;
+            }
+        }
+        protected
+    }
+
     /// On reconnect the firmware keymap wins over the locally cached Default
     /// profile. Only an explicit Entropy edit may write a layer back.
     #[cfg(not(target_arch = "wasm32"))]
@@ -748,20 +772,8 @@ impl EntropyApp {
             let device_layers = Self::base_application_layers(layout);
             let device_names = (layout.rows == 10 && layout.cols == 7 && layout.keys.len() == 62)
                 .then(|| layout.layer_names.clone());
-            let mut name_mask = self.confirmed_firmware_layer_names;
-            let device_key = self.application_layout_device_key();
-            for request in self.pending_layer_name_writes.iter().chain(self.uncertain_layer_names.iter()) {
-                if request.layer < 16 && request.generation == self.connection_generation
-                    && device_key.as_ref() == Some(&request.device_key) {
-                    name_mask &= !(1u16 << request.layer);
-                }
-            }
-            if self.editing_layer_layout_id.as_deref() == Some(crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID)
-                && self.editing_layer_device_key.as_ref() == device_key.as_ref() {
-                if let Some(layer) = self.editing_layer.filter(|layer| *layer < 16) {
-                    name_mask &= !(1u16 << layer);
-                }
-            }
+            let mut name_mask = self.confirmed_firmware_layer_names
+                & !self.protected_default_layer_names();
             let pending = self.default_layout_pending_layers;
             // Preserve an older host-only Default before reconciling its labels
             // with the confirmed keyboard. Pending edits are excluded above.
@@ -770,16 +782,7 @@ impl EntropyApp {
                     .zip(device_names.as_ref()).is_some_and(|(profile, names)| names.iter().take(16).enumerate().any(|(layer, name)|
                         name_mask & (1u16 << layer) != 0 && profile.layer_names.get(layer) != Some(name)));
                 if differs {
-                    let backup = (|| -> anyhow::Result<()> {
-                        let directory = app_settings_path().parent().ok_or_else(|| anyhow::anyhow!("settings directory unavailable"))?.join("backups");
-                        std::fs::create_dir_all(&directory)?;
-                        let mut file = tempfile::Builder::new().prefix("sm62-default-names-").suffix(".json").tempfile_in(directory)?;
-                        serde_json::to_writer_pretty(file.as_file_mut(), &previous)?;
-                        file.as_file().sync_all()?;
-                        file.keep()?;
-                        Ok(())
-                    })();
-                    if let Err(error) = backup {
+                    if let Err(error) = super::entlayout::archive_sm62_default_names(&previous) {
                         self.status_msg = format!("{}: {error}", app_layout_text(self.app_settings.language,
                             "Имена Default не сверены: не удалось сохранить резервную копию", "Default names not reconciled: backup failed"));
                         name_mask = 0;

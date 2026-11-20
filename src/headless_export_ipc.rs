@@ -40,7 +40,11 @@ enum Request {
 #[derive(Debug, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
 #[serde(tag = "status", rename_all = "kebab-case")]
 pub(crate) enum Reply {
-    Exported { entlayout: String },
+    Exported {
+        entlayout: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        name_backup: Option<String>,
+    },
     NoDevice { message: String },
     Incomplete { missing: Vec<String> },
     Failed { message: String },
@@ -286,16 +290,19 @@ pub(super) fn export_via_socket(path: &Path, request: &HeadlessExportRequest) ->
         }
     };
     Some(match reply {
-        Reply::Exported { entlayout } => match write_export(&request.destination, &entlayout) {
-            Ok(destination) => {
-                log::info!("Exported layout to {destination}");
-                EXIT_OK
+        Reply::Exported { entlayout, name_backup } => {
+            super::report_name_backup(name_backup.as_deref().map(Path::new));
+            match write_export(&request.destination, &entlayout) {
+                Ok(destination) => {
+                    log::info!("Exported layout to {destination}");
+                    EXIT_OK
+                }
+                Err(error) => {
+                    log::error!("Writing the layout failed: {error}");
+                    EXIT_FAILED
+                }
             }
-            Err(error) => {
-                log::error!("Writing the layout failed: {error}");
-                EXIT_FAILED
-            }
-        },
+        }
         Reply::NoDevice { message } => {
             log::error!("{message}");
             EXIT_NO_DEVICE
@@ -334,6 +341,7 @@ pub(crate) fn export_lent_keyboard(
     device: Device,
     deadline: Instant,
     cancelled: &AtomicBool,
+    protected_names: u16,
 ) -> Reply {
     let session = super::ReadOnlySessions::default();
     let Some(view) = hid.read_only_view(session.hid.clone()) else {
@@ -345,7 +353,7 @@ pub(crate) fn export_lent_keyboard(
     let mut app = EntropyApp::new_headless();
     app.device_manager.replace_devices(vec![device]);
     app.connect_hid = Some(view);
-    let exported = export_entlayout(&mut app, 0, &session, deadline, cancelled);
+    let exported = export_entlayout_with_recovery(&mut app, 0, &session, deadline, cancelled, protected_names);
     // A worker the export leaves behind must not reach the keyboard once the
     // GUI has it back.
     session.hid.close();
@@ -354,7 +362,10 @@ pub(crate) fn export_lent_keyboard(
         log::info!("Refused {refused} keyboard write(s) during the console export");
     }
     match exported {
-        Ok(entlayout) => Reply::Exported { entlayout },
+        Ok(export) => Reply::Exported {
+            entlayout: export.json,
+            name_backup: export.name_backup.map(|path| path.display().to_string()),
+        },
         Err(ExportError::Incomplete(missing)) => Reply::Incomplete { missing },
         Err(ExportError::Failed(message)) => Reply::Failed { message },
     }
@@ -482,6 +493,7 @@ impl EntropyApp {
             device: pending.device.clone(),
             deadline: pending.deadline,
             request: pending.id,
+            protected_names: self.protected_default_layer_names(),
         };
         match self.start_vial_hid_operation(ctx, operation) {
             vial_hid_task::VialHidTaskStart::Started => {
@@ -672,6 +684,7 @@ mod tests {
         job.reply
             .send(Reply::Exported {
                 entlayout: "x".repeat(16 << 20),
+                name_backup: None,
             })
             .unwrap();
 

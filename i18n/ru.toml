@@ -496,6 +496,9 @@ entropy_refreshed = "Entropy обновлена из повторного зап
 
 [entlayout]
 connect_keyboard_before_exporting_layout = "Подключите клавиатуру перед экспортом раскладки"
+exported_title = "Раскладка экспортирована"
+export_failed_title = "Не удалось экспортировать раскладку"
+export_name_backup = "Прежние локальные имена слоёв Default сохранены в {path}."
 exported_layout = "Раскладка экспортирована: {path}"
 export_failed = "Экспорт не удался: {error}"
 importing_layout = "Импорт раскладки"

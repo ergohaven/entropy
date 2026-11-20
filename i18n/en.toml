@@ -496,6 +496,9 @@ entropy_refreshed = "Entropy refreshed from a repeated launch"
 
 [entlayout]
 connect_keyboard_before_exporting_layout = "Connect a keyboard before exporting layout"
+exported_title = "Layout exported"
+export_failed_title = "Layout export failed"
+export_name_backup = "Previous local Default layer names were saved to {path}."
 exported_layout = "Exported layout: {path}"
 export_failed = "Export failed: {error}"
 importing_layout = "Importing layout"

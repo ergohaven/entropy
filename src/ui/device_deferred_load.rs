@@ -788,7 +788,7 @@ impl EntropyApp {
         if !self.deferred_device_load.is_staged() {
             if let Err(error) = self.require_complete_entlayout_lighting() {
                 self.deferred_full_layout_action = None;
-                self.status_msg = error.to_string();
+                self.report_entlayout_export_failure(format!("{error:#}"));
                 return;
             }
         }
@@ -799,7 +799,7 @@ impl EntropyApp {
         // queue the action and confirm when that owner returns the handle.
         if !self.deferred_device_load.is_staged() && !self.hid_write_task_owner_active() {
             if let Err(error) = self.confirm_entlayout_macros() {
-                self.status_msg = error.to_string();
+                self.report_entlayout_export_failure(format!("{error:#}"));
                 return;
             }
         }
@@ -859,7 +859,11 @@ impl EntropyApp {
             // the action; later frames must not retry either GET or SET.
             if let Err(error) = self.confirm_entlayout_macros() {
                 self.deferred_full_layout_action = None;
-                self.status_msg = error.to_string();
+                if matches!(action, DeferredFullLayoutAction::ExportEntlayout) {
+                    self.report_entlayout_export_failure(format!("{error:#}"));
+                } else {
+                    self.status_msg = error.to_string();
+                }
                 ctx.request_repaint();
                 return;
             }
@@ -883,15 +887,19 @@ impl EntropyApp {
         });
         if let Some(error) = failed {
             self.deferred_full_layout_action = None;
-            self.status_msg = crate::i18n::tr_catalog_format(
-                self.app_settings.language,
-                if matches!(action, DeferredFullLayoutAction::ImportEntlayout) {
-                    "status_messages.import_failed"
-                } else {
-                    "entlayout.export_failed"
-                },
-                &[("error", &error)],
-            );
+            if matches!(action, DeferredFullLayoutAction::ExportEntlayout) {
+                self.report_entlayout_export_failure(error);
+            } else {
+                self.status_msg = crate::i18n::tr_catalog_format(
+                    self.app_settings.language,
+                    if matches!(action, DeferredFullLayoutAction::ImportEntlayout) {
+                        "status_messages.import_failed"
+                    } else {
+                        "entlayout.export_failed"
+                    },
+                    &[("error", &error)],
+                );
+            }
             ctx.request_repaint();
             return;
         }

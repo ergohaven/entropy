@@ -383,8 +383,7 @@ fn missing_sections(app: &EntropyApp, sessions: &ReadOnlySessions) -> Vec<String
     missing
 }
 
-/// Connects to `device_idx` and returns its `.entlayout` once one connection
-/// has delivered every section, unless `cancelled` is set first.
+#[cfg(test)]
 fn export_entlayout(
     app: &mut EntropyApp,
     device_idx: usize,
@@ -392,6 +391,20 @@ fn export_entlayout(
     deadline: Instant,
     cancelled: &AtomicBool,
 ) -> Result<String, ExportError> {
+    export_entlayout_with_recovery(app, device_idx, session, deadline, cancelled, 0)
+        .map(|export| export.json)
+}
+
+/// Connects to `device_idx` and returns its `.entlayout` once one connection
+/// has delivered every section, unless `cancelled` is set first.
+fn export_entlayout_with_recovery(
+    app: &mut EntropyApp,
+    device_idx: usize,
+    session: &ReadOnlySessions,
+    deadline: Instant,
+    cancelled: &AtomicBool,
+    protected_names: u16,
+) -> Result<super::entlayout::EntlayoutJsonExport, ExportError> {
     // A window-less context still carries the repaint requests and input
     // state the connect and deferred-load pollers consult.
     let ctx = egui::Context::default();
@@ -443,7 +456,7 @@ fn export_entlayout(
         anyhow::ensure!(!cancelled.load(Ordering::Relaxed), "The export was cancelled");
         anyhow::ensure!(Instant::now() < deadline, "The export deadline expired");
         Ok(())
-    });
+    }, protected_names);
     // Cancellation/deadline remains authoritative even if it happens during the
     // last successful read or while serializing the completed document.
     if cancelled.load(Ordering::Relaxed) {
@@ -453,7 +466,7 @@ fn export_entlayout(
         return Err(ExportError::Incomplete(vec!["export deadline expired".to_owned()]));
     }
     match exported {
-        Some(Ok(json)) => Ok(json),
+        Some(Ok(export)) => Ok(export),
         Some(Err(error)) if error.to_string().starts_with("Incomplete resident application catalog") =>
             Err(ExportError::Incomplete(vec![format!("resident application catalog ({error:#})")])),
         Some(Err(error)) => Err(ExportError::Failed(format!("{error:#}"))),
@@ -505,6 +518,12 @@ fn write_export(destination: &ExportDestination, json: &str) -> std::io::Result<
     }
 }
 
+fn report_name_backup(path: Option<&Path>) {
+    if let Some(path) = path {
+        log::info!("Saved previous local Default layer names to {}", path.display());
+    }
+}
+
 /// Runs the export to completion and returns the process exit status.
 ///
 /// Must be called from the main thread before any window exists, and after
@@ -536,25 +555,27 @@ pub(crate) fn run_headless_export(request: HeadlessExportRequest) -> i32 {
     log::info!("Exporting layout of {}", describe(&devices[device_idx]));
     app.device_manager.replace_devices(devices);
 
-    let exported = export_entlayout(
+    let exported = export_entlayout_with_recovery(
         &mut app,
         device_idx,
         &session,
         deadline,
         &AtomicBool::new(false),
+        0,
     );
     let refused = session.hid.refused_requests().len() + session.rynk.refused_requests().len();
     if refused > 0 {
         log::info!("Refused {refused} keyboard write(s) during the export");
     }
-    let json = match exported {
-        Ok(json) => json,
+    let export = match exported {
+        Ok(export) => export,
         Err(error) => {
             error.report();
             return error.exit_code();
         }
     };
-    match write_export(&request.destination, &json) {
+    report_name_backup(export.name_backup.as_deref());
+    match write_export(&request.destination, &export.json) {
         Ok(destination) => {
             log::info!("Exported layout to {destination}");
             EXIT_OK
