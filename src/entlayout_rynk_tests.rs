@@ -29,6 +29,166 @@ fn exported(app: &EntropyApp) -> EntLayoutFile {
 }
 
 #[test]
+fn qmk_micro_home_row_actions_import_as_native_tap_hold() {
+    use rmk_types::keycode::HidKeyCode as Hid;
+    use rmk_types::modifier::ModifierCombination as Mod;
+
+    // QMK f6d3d4d5: phenom_micro/keymaps/v1/keymap.c. The GUI/Scroll
+    // action chooses its hold modifier from the source matrix half.
+    let cases = [
+        (0, "HRM_GUI_SCR", 1, V1Action::User(29), Mod::LGUI),
+        (0, "HRM_GUI_SCR", 6, V1Action::User(29), Mod::RGUI),
+        (
+            7,
+            "HRM_RGUI_EXLM",
+            1,
+            V1Action::KeyWithModifier(Hid::Kc1, Mod::LSHIFT),
+            Mod::RGUI,
+        ),
+        (
+            54,
+            "HRM_LALT_LPRN",
+            1,
+            V1Action::KeyWithModifier(Hid::Kc9, Mod::LSHIFT),
+            Mod::LALT,
+        ),
+        (
+            55,
+            "HRM_LCTL_RPRN",
+            1,
+            V1Action::KeyWithModifier(Hid::Kc0, Mod::LSHIFT),
+            Mod::LCTRL,
+        ),
+        (
+            56,
+            "HRM_RCTL_LCBR",
+            6,
+            V1Action::KeyWithModifier(Hid::LeftBracket, Mod::LSHIFT),
+            Mod::RCTRL,
+        ),
+        (
+            57,
+            "HRM_RALT_RCBR",
+            6,
+            V1Action::KeyWithModifier(Hid::RightBracket, Mod::LSHIFT),
+            Mod::RALT,
+        ),
+    ];
+    for (index, name, row, tap, hold) in cases {
+        let mut source = app_with(vec![KeyBinding::Vial(0x7e00 + index); 3]);
+        source.layout.as_mut().unwrap().custom_keycodes = vec![crate::keyboard::CustomKeycode {
+            name: name.into(),
+            label: name.into(),
+            title: name.into(),
+        }];
+        let mut bundle = exported(&source);
+        bundle.keyboard.name = "Ergohaven Phenom Micro".into();
+        bundle.keyboard.rows = 10;
+        let metadata = bundle.data.source_layout.as_mut().unwrap();
+        metadata.custom_keycodes[0].index = index as usize;
+        metadata.keys[0].row = row;
+
+        let mut target = app_with(vec![KeyBinding::Vial(4); 3]);
+        target.keycode_picker.supports_rmk_native_key_actions = true;
+        target.layout.as_mut().unwrap().custom_keycodes = (0..=29)
+            .map(|slot| crate::keyboard::CustomKeycode {
+                name: if slot == 29 {
+                    "EH_SCR".into()
+                } else {
+                    format!("RESERVED_{slot}")
+                },
+                label: String::new(),
+                title: String::new(),
+            })
+            .collect();
+        let mapping = EntLayoutImportMapping {
+            exact_layout: false,
+            key_mapping: vec![Some(0), None, None],
+            encoder_mapping: Vec::new(),
+        };
+        target
+            .apply_entlayout_local_state(&bundle, &mapping, false)
+            .unwrap();
+        let expected = V1KeyAction::TapHold(tap, V1Action::Modifier(hold), Default::default());
+        assert_eq!(
+            target.layout.as_ref().unwrap().layers[0][0],
+            KeyBinding::Rmk(expected),
+            "{name}, row {row}"
+        );
+
+        let (hid, recorder) = native_v1_board();
+        target.hid_device = Some(hid.into());
+        target.layout.as_mut().unwrap().layers[0][0] = KeyBinding::Vial(4);
+        let (failures, _) = target
+            .apply_entlayout_firmware_state(&bundle, &mapping)
+            .unwrap();
+        assert!(failures.is_empty(), "{failures:?}");
+        assert!(recorder
+            .requests()
+            .iter()
+            .any(|request| request[..3] == [7, 0xe8, 3]));
+        assert_eq!(
+            target
+                .hid_device
+                .as_ref()
+                .unwrap()
+                .require_vial()
+                .unwrap()
+                .get_rmk_key_action(0, 0, 0)
+                .unwrap(),
+            KeyBinding::Rmk(expected)
+        );
+
+        let layout = target.layout.as_ref().unwrap();
+        let limits = target.entlayout_keycode_import_limits();
+        let binding = map_entlayout_key_binding(
+            0x7e00 + index,
+            &bundle,
+            0,
+            layout,
+            limits,
+            NativeTarget::Rynk,
+            true,
+        );
+        assert_eq!(
+            binding,
+            KeyBinding::Rynk(crate::rynk::native_v1::upgrade_native_v1_key_action(expected).action)
+        );
+        assert!(target
+            .entlayout_rynk_losses(&bundle, &mapping, &Default::default(), &[])
+            .unwrap()
+            .is_empty());
+
+        // QMK targets and files without source names keep their existing path.
+        assert_eq!(
+            map_entlayout_key_binding(
+                0x7e00 + index,
+                &bundle,
+                0,
+                layout,
+                limits,
+                NativeTarget::Vial,
+                false
+            ),
+            KeyBinding::Vial(0)
+        );
+        bundle.data.source_layout = None;
+        assert!(matches!(
+            map_entlayout_key_binding(
+                0x7e00 + index,
+                &bundle,
+                0,
+                layout,
+                limits,
+                NativeTarget::Rynk,
+                true
+            ),
+            KeyBinding::Vial(_)
+        ));
+    }
+}
+
+#[test]
 fn rynk_actions_export_as_version_11_and_read_back() {
     let user = KeyAction::Single(Action::User(90));
     // A profile index no keycode spells: the JSON keeps it.
