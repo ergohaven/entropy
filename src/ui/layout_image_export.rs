@@ -1043,24 +1043,7 @@ impl EntropyApp {
             let (label, dimmed) = if binding.is_no() {
                 (String::new(), false)
             } else if binding.is_transparent() {
-                let fallback = (0..layer_idx)
-                    .rev()
-                    .map(|fallback_layer| layout.get_key_binding(fallback_layer, key_idx))
-                    .find(|fallback| !fallback.is_no() && !fallback.is_transparent());
-                match fallback {
-                    Some(fallback_binding) => (
-                        export_key_binding_label_with_macro_names(
-                            fallback_binding,
-                            &layout.custom_keycodes,
-                            &self.layer_names,
-                            &self.keycode_picker.macro_names,
-                            &self.keycode_picker.tap_dance_names,
-                            self.app_settings.layout_image_export.key_legend_layout,
-                        ),
-                        true,
-                    ),
-                    None => (String::new(), false),
-                }
+                (TRANSPARENT_KEY_LABEL.to_owned(), true)
             } else {
                 (
                     export_key_binding_label_with_macro_names(
@@ -1226,24 +1209,7 @@ impl EntropyApp {
             let (label, dimmed) = if binding.is_no() {
                 (String::new(), false)
             } else if binding.is_transparent() {
-                let fallback = (0..layer_idx)
-                    .rev()
-                    .map(|fallback_layer| layout.get_key_binding(fallback_layer, key_idx))
-                    .find(|fallback| !fallback.is_no() && !fallback.is_transparent());
-                match fallback {
-                    Some(fallback_binding) => (
-                        export_key_binding_label_with_macro_names(
-                            fallback_binding,
-                            &layout.custom_keycodes,
-                            &self.layer_names,
-                            &self.keycode_picker.macro_names,
-                            &self.keycode_picker.tap_dance_names,
-                            self.app_settings.layout_image_export.key_legend_layout,
-                        ),
-                        true,
-                    ),
-                    None => (String::new(), false),
-                }
+                (TRANSPARENT_KEY_LABEL.to_owned(), true)
             } else {
                 (
                     export_key_binding_label_with_macro_names(
@@ -1552,18 +1518,9 @@ fn export_encoder_press_label(
     app: &EntropyApp,
 ) -> (String, bool) {
     let keycode = layout.get_keycode(layer_idx, key_idx);
-    let (keycode, dimmed) = if keycode == 0x0001 {
-        let fallback = (0..layer_idx)
-            .rev()
-            .map(|fallback_layer| layout.get_keycode(fallback_layer, key_idx))
-            .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001));
-        match fallback {
-            Some(fallback) => (fallback, true),
-            None => return ("▽".to_owned(), false),
-        }
-    } else {
-        (keycode, false)
-    };
+    if keycode == 0x0001 {
+        return (TRANSPARENT_KEY_LABEL.to_owned(), true);
+    }
     if keycode == 0x0000 {
         return (String::new(), false);
     }
@@ -1578,7 +1535,7 @@ fn export_encoder_press_label(
             app.app_settings.layout_image_export.key_legend_layout,
         )
         .replace('\n', " "),
-        dimmed,
+        false,
     )
 }
 
@@ -1658,28 +1615,16 @@ fn draw_encoder_export(
         )
         .replace('\n', " ")
     };
-    let encoder_label = |visual_idx: usize, kc: u16| -> (String, bool) {
+    let encoder_label = |kc: u16| -> (String, bool) {
         match kc {
             0x0000 => (String::new(), false),
-            0x0001 => {
-                let fallback = (0..layer_idx)
-                    .rev()
-                    .map(|fallback_layer| layout.get_encoder_keycode(fallback_layer, visual_idx))
-                    .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001));
-                match fallback {
-                    Some(fallback_kc) => (encoder_value_label(fallback_kc), true),
-                    None => ("▽".to_string(), false),
-                }
-            }
+            0x0001 => (TRANSPARENT_KEY_LABEL.to_owned(), true),
             value => (encoder_value_label(value), false),
         }
     };
 
     if let Some(visual_idx) = group.cw {
-        let (label, dimmed) = encoder_label(
-            visual_idx,
-            layout.get_encoder_keycode(layer_idx, visual_idx),
-        );
+        let (label, dimmed) = encoder_label(layout.get_encoder_keycode(layer_idx, visual_idx));
         draw_text_centered_rotated(
             image,
             font,
@@ -1702,10 +1647,7 @@ fn draw_encoder_export(
         );
     }
     if let Some(visual_idx) = group.ccw {
-        let (label, dimmed) = encoder_label(
-            visual_idx,
-            layout.get_encoder_keycode(layer_idx, visual_idx),
-        );
+        let (label, dimmed) = encoder_label(layout.get_encoder_keycode(layer_idx, visual_idx));
         draw_text_centered_rotated(
             image,
             font,
@@ -1832,28 +1774,16 @@ fn write_encoder_svg(
         )
         .replace('\n', " ")
     };
-    let encoder_label = |visual_idx: usize, kc: u16| -> (String, bool) {
+    let encoder_label = |kc: u16| -> (String, bool) {
         match kc {
             0x0000 => (String::new(), false),
-            0x0001 => {
-                let fallback = (0..layer_idx)
-                    .rev()
-                    .map(|fallback_layer| layout.get_encoder_keycode(fallback_layer, visual_idx))
-                    .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001));
-                match fallback {
-                    Some(fallback_kc) => (encoder_value_label(fallback_kc), true),
-                    None => ("▽".to_string(), false),
-                }
-            }
+            0x0001 => (TRANSPARENT_KEY_LABEL.to_owned(), true),
             value => (encoder_value_label(value), false),
         }
     };
 
     if let Some(visual_idx) = group.cw {
-        let (label, dimmed) = encoder_label(
-            visual_idx,
-            layout.get_encoder_keycode(layer_idx, visual_idx),
-        );
+        let (label, dimmed) = encoder_label(layout.get_encoder_keycode(layer_idx, visual_idx));
         svg_text_centered_rotated(
             svg,
             &label,
@@ -1875,10 +1805,7 @@ fn write_encoder_svg(
         )?;
     }
     if let Some(visual_idx) = group.ccw {
-        let (label, dimmed) = encoder_label(
-            visual_idx,
-            layout.get_encoder_keycode(layer_idx, visual_idx),
-        );
+        let (label, dimmed) = encoder_label(layout.get_encoder_keycode(layer_idx, visual_idx));
         svg_text_centered_rotated(
             svg,
             &label,

@@ -115,7 +115,7 @@ None"
 Inherit"
                     .into(),
                 0x0001,
-                "KC_TRNS — inherits the key from the layer below".into(),
+                "KC_TRNS — passes through to a lower layer (only active layers on keyboards with layer stacks)".into(),
             ),
             (
                 "Esc

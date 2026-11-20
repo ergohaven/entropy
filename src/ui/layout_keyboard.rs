@@ -475,7 +475,6 @@ impl EntropyApp {
             };
 
             let binding = layout.get_key_binding(layer, *ki);
-            let kc = binding.vial_keycode();
             let combo_colors = combo_key_colors.get(*ki);
             let combo_outline = combo_colors
                 .and_then(|colors| combo_key_outline_color(colors))
@@ -494,36 +493,13 @@ impl EntropyApp {
                 key_border,
             );
 
-            if kc == 0x0001 {
+            if binding.is_transparent() {
                 paint_layout_keycap(painter, draw_rect, key.rotation, bg, key_border_stroke);
                 if !is_hovering {
-                    let fallback_binding = (0..layer)
-                        .rev()
-                        .map(|l| layout.get_key_binding(l, *ki))
-                        .find(|binding| !binding.is_transparent())
-                        .unwrap_or_default();
-                    let label = if fallback_binding.is_no() || fallback_binding.is_transparent() {
-                        String::new()
-                    } else {
-                        key_binding_label_with_macro_names(
-                            fallback_binding,
-                            &layout.custom_keycodes,
-                            &self.layer_names,
-                            &self.keycode_picker.macro_names,
-                            &self.keycode_picker.tap_dance_names,
-                            self.app_settings.key_legend_layout,
-                        )
-                    };
-                    let label = inherited_key_label_or_marker(label);
-                    let label = number_row_shifted_label(
-                        label,
-                        self.app_settings.show_shifted_number_symbols,
-                        self.app_settings.key_legend_layout,
-                    );
                     draw_key_label_dimmed(
                         painter,
                         draw_rect,
-                        &label,
+                        TRANSPARENT_KEY_LABEL,
                         dark,
                         key.rotation.to_radians(),
                     );
@@ -570,21 +546,10 @@ impl EntropyApp {
             )
             .replace('\n', " ")
         };
-        let encoder_label = |layer_idx: usize, visual_idx: usize, kc: u16| -> (String, bool) {
+        let encoder_label = |kc: u16| -> (String, bool) {
             match kc {
                 0x0000 => (String::new(), false),
-                0x0001 => {
-                    let fallback = (0..layer_idx)
-                        .rev()
-                        .map(|fallback_layer| {
-                            layout.get_encoder_keycode(fallback_layer, visual_idx)
-                        })
-                        .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001));
-                    match fallback {
-                        Some(fallback_kc) => (encoder_value_label(fallback_kc), true),
-                        None => ("▽".to_string(), false),
-                    }
-                }
+                0x0001 => (TRANSPARENT_KEY_LABEL.to_owned(), true),
                 value => (encoder_value_label(value), false),
             }
         };
@@ -863,10 +828,10 @@ impl EntropyApp {
 
             let has_press_button = press_slot.is_some();
             let (top_label, top_dimmed) = cw
-                .map(|(visual_idx, kc)| encoder_label(layer, visual_idx, kc))
+                .map(|(_, kc)| encoder_label(kc))
                 .unwrap_or_else(|| (String::new(), false));
             let (bottom_label, bottom_dimmed) = ccw
-                .map(|(visual_idx, kc)| encoder_label(layer, visual_idx, kc))
+                .map(|(_, kc)| encoder_label(kc))
                 .unwrap_or_else(|| (String::new(), false));
             let top_font = if has_press_button {
                 egui::FontId::proportional(
@@ -970,46 +935,8 @@ impl EntropyApp {
                 );
                 let press_text_rect = middle_rect.shrink2(egui::vec2(4.0, 2.0));
 
-                let (press_label, press_dimmed) = {
-                    let kc = layout.get_keycode(layer, press_ki);
-                    if kc == 0x0001 {
-                        let fallback_kc = (0..layer)
-                            .rev()
-                            .map(|l| layout.get_keycode(l, press_ki))
-                            .find(|&k| !matches!(k, 0x0000 | 0x0001))
-                            .unwrap_or(0x0000);
-                        if fallback_kc == 0x0000 {
-                            ("▽".to_string(), false)
-                        } else {
-                            (
-                                keycode_label_with_macro_names(
-                                    fallback_kc,
-                                    &layout.custom_keycodes,
-                                    &self.layer_names,
-                                    &self.keycode_picker.macro_names,
-                                    &self.keycode_picker.tap_dance_names,
-                                    self.app_settings.key_legend_layout,
-                                ),
-                                true,
-                            )
-                        }
-                    } else if kc == 0x0000 {
-                        (String::new(), false)
-                    } else {
-                        (
-                            keycode_label_with_macro_names(
-                                kc,
-                                &layout.custom_keycodes,
-                                &self.layer_names,
-                                &self.keycode_picker.macro_names,
-                                &self.keycode_picker.tap_dance_names,
-                                self.app_settings.key_legend_layout,
-                            ),
-                            false,
-                        )
-                    }
-                };
-                let press_label = press_label.replace('\n', " ");
+                let (press_label, press_dimmed) =
+                    encoder_label(layout.get_keycode(layer, press_ki));
                 let text_color = if press_dimmed {
                     encoder_dim_text_color
                 } else if middle_selected {
@@ -1153,4 +1080,60 @@ fn combo_conflict_marker_colors(colors: &[(usize, Option<Color32>)]) -> Vec<Colo
         }
     }
     marker_colors
+}
+
+#[cfg(test)]
+mod transparency_tests {
+    use super::*;
+
+    #[test]
+    fn transparent_key_shows_marker_instead_of_an_inactive_layers_binding() {
+        let mut layout: KeyboardLayout = serde_json::from_value(serde_json::json!({
+            "name": "Phenom",
+            "rows": 1,
+            "cols": 1,
+            "keys": [{
+                "x": 0.0, "y": 0.0, "w": 1.0, "h": 1.0, "row": 0, "col": 0,
+                "label": "0,0", "rotation": 0.0, "rotation_x": 0.0, "rotation_y": 0.0
+            }],
+            "encoders": [],
+            "layers": [],
+            "encoder_layers": [],
+            "custom_keycodes": [],
+        }))
+        .unwrap();
+        layout.layers = [0x25u16, 0x42, 0x01]
+            .into_iter()
+            .map(|keycode| vec![keycode.into()])
+            .collect();
+        let mut app = EntropyApp::new_inert_for_test();
+        app.app_settings.show_shifted_number_symbols = false;
+        let ctx = egui::Context::default();
+        let size = egui::vec2(400.0, 240.0);
+
+        for (layer, legend) in [(0, "8"), (1, "F9"), (2, "▽")] {
+            app.selected_layer = layer;
+            let frame = ctx.run_ui(
+                egui::RawInput {
+                    screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, size)),
+                    ..Default::default()
+                },
+                |ui| {
+                    app.draw_layout_keyboard_canvas(
+                        ui, &layout, &ctx, size, 100.0, 100.0, 80.0, 4.0, 80.0,
+                    );
+                },
+            );
+            let labels: Vec<_> = frame
+                .shapes
+                .iter()
+                .filter_map(|shape| match &shape.shape {
+                    egui::Shape::Text(text) => Some(text.galley.job.text.clone()),
+                    _ => None,
+                })
+                .collect();
+            frame.drop_without_applying_deltas();
+            assert_eq!(labels, [legend], "layer {layer}");
+        }
+    }
 }

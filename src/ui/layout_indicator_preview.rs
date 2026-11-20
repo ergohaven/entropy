@@ -428,30 +428,22 @@ impl EntropyApp {
                 continue;
             }
 
-            let label_binding = if is_transparent {
-                (0..key_layer)
-                    .rev()
-                    .map(|fallback_layer| layout.get_key_binding(fallback_layer, *ki))
-                    .find(|fallback| !fallback.is_no() && !fallback.is_transparent())
-                    .unwrap_or_default()
+            let label = if is_transparent {
+                TRANSPARENT_KEY_LABEL.to_owned()
             } else {
-                binding
-            };
-            if label_binding.is_no() {
-                continue;
-            }
-            let label = number_row_shifted_label(
-                key_binding_label_with_macro_names(
-                    label_binding,
-                    &layout.custom_keycodes,
-                    layer_names,
-                    macro_names,
-                    tap_dance_names,
+                number_row_shifted_label(
+                    key_binding_label_with_macro_names(
+                        binding,
+                        &layout.custom_keycodes,
+                        layer_names,
+                        macro_names,
+                        tap_dance_names,
+                        key_legend_layout,
+                    ),
+                    show_shifted_number_symbols,
                     key_legend_layout,
-                ),
-                show_shifted_number_symbols,
-                key_legend_layout,
-            );
+                )
+            };
             draw_sticky_key_label(
                 &painter,
                 *key_rect,
@@ -474,23 +466,12 @@ impl EntropyApp {
             .replace('\n', " ")
         };
         let label_for = |encoder_target: Option<(usize, u16)>| -> (String, bool) {
-            let Some((visual_idx, kc)) = encoder_target else {
+            let Some((_, kc)) = encoder_target else {
                 return (String::new(), false);
             };
             let (label, dimmed) = match kc {
                 0x0000 => (String::new(), false),
-                0x0001 => {
-                    let fallback = (0..layer)
-                        .rev()
-                        .map(|fallback_layer| {
-                            layout.get_encoder_keycode(fallback_layer, visual_idx)
-                        })
-                        .find(|fallback| !matches!(*fallback, 0x0000 | 0x0001));
-                    match fallback {
-                        Some(fallback_kc) => (encoder_value_label(fallback_kc), true),
-                        None => ("▽".to_string(), false),
-                    }
-                }
+                0x0001 => (TRANSPARENT_KEY_LABEL.to_owned(), true),
                 value => (encoder_value_label(value), false),
             };
             (sticky_compact_label(&label, 9), dimmed)
@@ -665,26 +646,7 @@ impl EntropyApp {
                         .unwrap_or(layer);
                     let binding = layout.get_key_binding(press_layer, press_ki);
                     if binding.is_transparent() {
-                        let fallback_binding = (0..press_layer)
-                            .rev()
-                            .map(|fallback_layer| layout.get_key_binding(fallback_layer, press_ki))
-                            .find(|fallback| !fallback.is_no() && !fallback.is_transparent())
-                            .unwrap_or_default();
-                        if fallback_binding.is_no() {
-                            ("▽".to_string(), false)
-                        } else {
-                            (
-                                key_binding_label_with_macro_names(
-                                    fallback_binding,
-                                    &layout.custom_keycodes,
-                                    layer_names,
-                                    macro_names,
-                                    tap_dance_names,
-                                    key_legend_layout,
-                                ),
-                                true,
-                            )
-                        }
+                        (TRANSPARENT_KEY_LABEL.to_owned(), true)
                     } else if binding.is_no() {
                         (String::new(), false)
                     } else {

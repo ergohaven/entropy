@@ -629,13 +629,7 @@ pub(crate) fn inherited_key_label_color(dark: bool) -> Color32 {
     }
 }
 
-pub(crate) fn inherited_key_label_or_marker(label: String) -> String {
-    if label.is_empty() {
-        "▽".to_owned()
-    } else {
-        label
-    }
-}
+pub(crate) const TRANSPARENT_KEY_LABEL: &str = "▽";
 
 pub(crate) fn draw_key_label_dimmed(
     painter: &egui::Painter,
@@ -930,11 +924,5 @@ mod tests {
                 "inherited label should be dim but readable for dark={dark}, got {contrast}"
             );
         }
-    }
-
-    #[test]
-    fn inherited_key_without_effective_label_keeps_transparent_marker() {
-        assert_eq!(inherited_key_label_or_marker(String::new()), "▽");
-        assert_eq!(inherited_key_label_or_marker("A".to_owned()), "A");
     }
 }

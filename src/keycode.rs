@@ -2533,7 +2533,7 @@ pub fn keycode_tooltip(value: u16, custom: &[CustomKeycode], layer_names: &[Stri
         return "No key — this key does nothing".to_string();
     }
     if value == 0x0001 {
-        return "Transparent — uses the key assigned on the layer below".to_string();
+        return "Transparent — passes through to a lower layer (only active layers on keyboards with layer stacks)".to_string();
     }
     if let Some(tip) = magic_keycode_tooltip(value) {
         return tip;
@@ -2731,7 +2731,7 @@ fn simple_key_tooltip(kc: &Keycode) -> String {
     let desc: &str = match kc.name {
         // Special
         "KC_NO" => "No key — this key does nothing",
-        "KC_TRNS" => "Transparent — uses the key assigned on the layer below",
+        "KC_TRNS" => "Transparent — passes through to a lower layer (only active layers on keyboards with layer stacks)",
         // Control
         "KC_ENTER" => "Enter — confirm / new line",
         "KC_ESCAPE" => "Escape — cancel / close",
