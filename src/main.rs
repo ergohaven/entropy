@@ -12,6 +12,8 @@ mod device_session;
 mod diagnostics;
 mod connect_timing;
 mod firmware;
+#[cfg(not(target_arch = "wasm32"))]
+mod firmware_flash;
 mod firmware_builtin_icons;
 #[cfg(all(test, not(target_arch = "wasm32")))]
 mod golden_frames;

@@ -1386,6 +1386,7 @@ fn usb_read_timeout_ms(transport: HidTransport, data: &[u8]) -> i32 {
 
 #[cfg(not(target_arch = "wasm32"))]
 fn usb_send_max_attempts(transport: HidTransport, data: &[u8]) -> usize {
+    if data.first() == Some(&0x0b) { return 1; }
     // Runtime firmware metadata and optional QMK-settings discovery both have
     // safe fallbacks, so an unsupported probe must not hold up the whole
     // connection retry budget.

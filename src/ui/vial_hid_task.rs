@@ -3233,6 +3233,16 @@ mod tests {
         let ctx = egui::Context::default();
         let (mut app, _scans) = EntropyApp::new_isolated_hid_for_test();
         let (hid, recorder) = crate::hid::HidDevice::test_device();
+        let mut readback_delay = Some(std::time::Duration::from_millis(250));
+        recorder.respond_by(move |request| {
+            if request[0] == 0x04 {
+                // A slow readback must still reach the rollback assertions.
+                if let Some(delay) = readback_delay.take() {
+                    std::thread::sleep(delay);
+                }
+            }
+            None
+        });
         app.hid_device = Some(hid.into());
         app.layout = Some(single_key_layout(0x0004));
 

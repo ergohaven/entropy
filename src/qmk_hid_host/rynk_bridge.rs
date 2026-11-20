@@ -120,7 +120,12 @@ pub(crate) fn open_link(id: PhysicalId) -> LinkOpening {
         .name("rynk-host-open".into())
         .spawn(move || {
             let opened = match crate::rynk::transport::connected(&id) {
-                Ok(true) => RynkLink::open(&id),
+                Ok(true) => RynkLink::open(&id).and_then(|link| {
+                    if link.board().maintenance_only() {
+                        return Err(io::Error::from(io::ErrorKind::Unsupported).into());
+                    }
+                    Ok(link)
+                }),
                 Ok(false) => Err(io::Error::from(io::ErrorKind::NotConnected).into()),
                 Err(error) => Err(error.into()),
             };

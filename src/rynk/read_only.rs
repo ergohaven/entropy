@@ -4,7 +4,9 @@
 
 use std::sync::{Arc, Mutex, MutexGuard, OnceLock};
 
-use rmk_types_rynk::protocol::rynk::Cmd;
+use rmk_types_rynk::protocol::rynk::{command::Endpoint, Cmd};
+
+use super::client::GetFirmwareTarget;
 
 #[derive(Clone, Default)]
 pub(crate) struct ReadOnlyRynkSession {
@@ -99,5 +101,6 @@ pub(crate) fn is_read_cmd(cmd: Cmd) -> bool {
             | Cmd::GetSetting
             | Cmd::GetLayoutOption
             | Cmd::GetWriteStatus
+            | GetFirmwareTarget::CMD
     )
 }

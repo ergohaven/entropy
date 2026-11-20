@@ -264,6 +264,11 @@ pub(crate) fn start_firmware_update_check(
         return FirmwareUpdateCheckState::Unsupported;
     };
 
+    #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+    if let Some(result) = rmk_actions_test_result(&target) {
+        return FirmwareUpdateCheckState::Ready { target, result };
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     {
         let worker_target = target.clone();
@@ -290,6 +295,91 @@ pub(crate) fn start_firmware_update_check(
         FirmwareUpdateCheckState::Failed {
             target,
             error: "Update checks are not available in the web build".to_owned(),
+        }
+    }
+}
+
+#[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
+fn rmk_actions_test_result(target: &FirmwareReleaseTarget) -> Option<FirmwareUpdateCheckResult> {
+    use crate::firmware_flash::actions_test as test;
+
+    if target.family != FirmwareReleaseFamily::Rynk
+        || !crate::firmware_flash::compatible_version(&target.current_version)
+    {
+        return None;
+    }
+    let artifact = test::artifact_for(&target.asset_prefix)?;
+    build_firmware_update_result(
+        target,
+        vec![GitHubRelease {
+            tag_name: test::VERSION.to_owned(),
+            html_url: test::RUN_URL.to_owned(),
+            draft: false,
+            prerelease: false,
+            assets: vec![GitHubAsset {
+                name: artifact.release_name(),
+                browser_download_url: test::RUN_URL.to_owned(),
+            }],
+        }],
+    )
+}
+
+#[cfg(all(test, debug_assertions, not(target_arch = "wasm32")))]
+#[test]
+#[ignore = "requires the downloaded RMK #79 test archives"]
+fn firmware_flash_pr275_revision_three_artifacts() {
+    use crate::firmware_flash::{actions_test, profiles::PROFILES};
+
+    for profile in PROFILES {
+        let prefix = profile.archive;
+        let target = rynk_firmware_release_target(
+            0xe126,
+            profile.product_id,
+            Some("0.3.0"),
+            &serde_json::json!({"entropy": {"firmwareUpdate": {"asset": prefix}}}),
+            profile.has_dongle(),
+        )
+        .unwrap_or_else(|| panic!("missing release target for {prefix}"));
+        let FirmwareUpdateCheckState::Ready { result, .. } =
+            start_firmware_update_check(Some(target))
+        else {
+            panic!("missing pinned {prefix} ZIP in ENTROPY_PR275_RYNK3_DIR");
+        };
+        assert_eq!(
+            result.relation,
+            VersionRelation::UpdateAvailable,
+            "{prefix}"
+        );
+        assert_eq!(result.latest_version, actions_test::VERSION, "{prefix}");
+        let images = actions_test::load_images(
+            *profile,
+            &result.latest_version,
+            &result.asset.name,
+            &result.asset.url,
+        )
+        .unwrap()
+        .unwrap_or_else(|error| panic!("{prefix}: {error:#}"));
+        assert_eq!(
+            images.iter().map(|(part, _)| *part).collect::<Vec<_>>(),
+            profile.parts,
+            "{prefix}"
+        );
+        for other in PROFILES
+            .iter()
+            .filter(|other| other.product_id == profile.product_id && other.archive != prefix)
+        {
+            let error = actions_test::load_images(
+                *other,
+                &result.latest_version,
+                &result.asset.name,
+                &result.asset.url,
+            )
+            .unwrap()
+            .unwrap_err();
+            assert_eq!(
+                error.to_string(),
+                "Actions artifact does not match this keyboard"
+            );
         }
     }
 }
@@ -450,7 +540,7 @@ pub(crate) fn rmk_firmware_release_target(
         .and_then(serde_json::Value::as_str)
         .is_some_and(|name| name.to_ascii_lowercase().contains("rmk"));
     let legacy_zero_major = numeric_version_parts(current_version).first() == Some(&0);
-    let catalog_asset = legacy_rmk_asset_prefix(product_id, legacy_qube);
+    let catalog_asset = rmk_asset_prefix(product_id, legacy_qube);
 
     if explicit_metadata_present && explicit_asset.is_none() {
         return None;
@@ -477,13 +567,21 @@ pub(crate) fn rynk_firmware_release_target(
     legacy_qube: bool,
 ) -> Option<FirmwareReleaseTarget> {
     let mut target = rmk_firmware_release_target(
-        vendor_id,
-        product_id,
-        firmware_version,
-        board_definition,
-        legacy_qube,
-        true,
+        vendor_id, product_id, firmware_version, board_definition, legacy_qube, true,
     )?;
+    // The classic splits use the same USB IDs and model UID with and without
+    // Qube. Native builds include an explicit archive selector in both cases.
+    if let (Some(standalone), Some(qube)) = (
+        rmk_asset_prefix(product_id, false),
+        rmk_asset_prefix(product_id, true),
+    ) {
+        if standalone != qube
+            && (board_definition.pointer("/entropy/firmwareUpdate/asset").is_none()
+                || (target.asset_prefix != standalone && target.asset_prefix != qube))
+        {
+            return None;
+        }
+    }
     target.family = FirmwareReleaseFamily::Rynk;
     Some(target)
 }
@@ -591,7 +689,7 @@ fn phenom_rmk_asset_prefix(product_id: u16) -> Option<&'static str> {
     }
 }
 
-fn legacy_rmk_asset_prefix(product_id: u16, qube: bool) -> Option<&'static str> {
+fn rmk_asset_prefix(product_id: u16, qube: bool) -> Option<&'static str> {
     match (product_id, qube) {
         (0x0036, false) => Some("op36"),
         (0x0036, true) => Some("op36-qube"),
@@ -890,10 +988,11 @@ fn build_firmware_update_result(
                     format!("{}{variant}-{}.zip", target.asset_prefix, release.tag_name)
                 }
                 FirmwareReleaseFamily::Rmk => {
-                    let native_default =
-                        semver::Version::parse(release.tag_name.trim_start_matches('v'))
-                            .is_ok_and(|version| version >= semver::Version::new(0, 3, 0));
-                    let variant = if native_default { "-vial" } else { "" };
+                    // Preserve manual Vial downloads without sending a Vial board
+                    // to the new native default archive. No Vial flashing is offered.
+                    let native = semver::Version::parse(release.tag_name.trim_start_matches('v'))
+                        .is_ok_and(|v| v >= semver::Version::new(0, 3, 0));
+                    let variant = if native { "-vial" } else { "" };
                     format!("{}{variant}-{}.zip", target.asset_prefix, release.tag_name)
                 }
                 FirmwareReleaseFamily::Qmk => {
@@ -1056,6 +1155,22 @@ fn normalized_arch_label() -> &'static str {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(not(target_arch = "wasm32"))]
+    #[test]
+    fn firmware_flash_registry_agrees_with_release_discovery() {
+        for profile in crate::firmware_flash::profiles::PROFILES {
+            let release = super::rynk_firmware_release_target(
+                0xe126,
+                profile.product_id,
+                Some("0.3.0"),
+                &serde_json::json!({"entropy": {"firmwareUpdate": {"asset": profile.archive}}}),
+                profile.has_dongle(),
+            )
+            .unwrap();
+            assert_eq!(release.asset_prefix, profile.archive);
+        }
+    }
+
     use super::*;
 
     fn entropy_release(tag: &str, assets: &[&str]) -> GitHubRelease {
@@ -1583,6 +1698,39 @@ mod tests {
     }
 
     #[test]
+    fn rynk_classic_usb_models_require_explicit_standalone_or_qube_identity() {
+        for (product, standalone, qube) in [
+            (0x0036, "op36", "op36-qube"),
+            (0x0044, "imperial44", "imperial44-qube"),
+            (0x0070, "k03", "k03-qube"),
+            (0x00be, "velvet", "velvet-qube"),
+        ] {
+            for legacy_qube in [false, true] {
+                for asset in [standalone, qube, "phenom"] {
+                    let target = rynk_firmware_release_target(
+                        ERGOHAVEN_VENDOR_ID,
+                        product,
+                        Some("0.3.0"),
+                        &serde_json::json!({"entropy": {"firmwareUpdate": {"asset": asset}}}),
+                        legacy_qube,
+                    );
+                    assert_eq!(
+                        target.as_ref().map(|target| target.asset_prefix.as_str()),
+                        (asset != "phenom").then_some(asset),
+                    );
+                }
+                assert!(rynk_firmware_release_target(
+                    ERGOHAVEN_VENDOR_ID,
+                    product,
+                    Some("0.3.0"),
+                    &serde_json::json!({}),
+                    legacy_qube,
+                ).is_none());
+            }
+        }
+    }
+
+    #[test]
     fn a_rynk_board_takes_only_rynk_packages() {
         let target = rynk_firmware_release_target(
             ERGOHAVEN_VENDOR_ID,
@@ -1630,6 +1778,10 @@ mod tests {
 
         assert_eq!(result.asset.name, "k04-mini-qube-v0.3.1.zip");
         assert_eq!(result.relation, VersionRelation::UpdateAvailable);
+        let phenom = rynk_firmware_release_target(
+            ERGOHAVEN_VENDOR_ID, 0x0052, Some("0.3.0"), &serde_json::json!({}), false,
+        ).expect("Phenom RMK has no embedded updater selector");
+        assert_eq!(phenom.asset_prefix, "phenom");
     }
 
     #[test]
@@ -1711,6 +1863,19 @@ mod tests {
             vec![release("v0.1.6", false, false, &["k04-v0.1.6.zip"])]
         )
         .is_none());
+    }
+
+    #[test]
+    fn legacy_downloads_keep_non_semver_release_tags() {
+        for (family, asset) in [
+            (FirmwareReleaseFamily::Qmk, "4.1_phenom_v1.uf2"),
+            (FirmwareReleaseFamily::Rmk, "phenom_v1-4.1.zip"),
+        ] {
+            let target = FirmwareReleaseTarget {
+                family, current_version: "4.0".into(), asset_prefix: "phenom_v1".into(),
+            };
+            assert_eq!(build_firmware_update_result(&target, vec![release("4.1", false, false, &[asset])]).unwrap().asset.name, asset);
+        }
     }
 
     #[test]

@@ -877,7 +877,6 @@ impl EntropyApp {
         );
         let rows = device_about_rows(lang, &info, &self.firmware_update_check);
         let firmware_update_supported = info.firmware_update_target.is_some();
-
         crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(metrics.value(18.0));
@@ -889,6 +888,34 @@ impl EntropyApp {
                         .color(app_muted_text(dark)),
                 );
 
+                #[cfg(not(target_arch = "wasm32"))]
+                if self.selected_device.and_then(|i| self.device_manager.devices().get(i))
+                    .is_some_and(|d| d.vendor_id == 0xe126 && crate::firmware_flash::runtime_product(d.product_id))
+                {
+                    ui.label(match lang {
+                        crate::i18n::Language::English => "In-app flashing requires Entropy 0.6.0+ and RMK 0.3.0+ with Rynk over USB. For QMK/Vial or older RMK, first migrate the complete keyboard manually; export your layout before migrating.",
+                        crate::i18n::Language::Russian => "Прошивка из приложения требует Entropy 0.6.0+ и RMK 0.3.0+ с Rynk по USB. С QMK/Vial или старой RMK сначала обновите все части вручную; перед переходом экспортируйте раскладку.",
+                    });
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                if let FirmwareUpdateCheckState::Ready { target, result } = &self.firmware_update_check {
+                    if info.firmware_update_target.as_ref() == Some(target)
+                        && self.selected_device.and_then(|i| self.device_manager.devices().get(i))
+                            .is_some_and(|device| super::firmware_flash_ui::update_profile(device, target, result).is_some()) {
+                        let result = result.clone();
+                        let label = match lang {
+                            crate::i18n::Language::English => "Update firmware…",
+                            crate::i18n::Language::Russian => "Обновить прошивку…",
+                        };
+                        ui.add_space(metrics.value(12.0));
+                        let response = crate::ui_style::modern_button(ui, label,
+                            egui::vec2(metrics.value(220.0), metrics.value(32.0)), true);
+                        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+                        if response.clicked() {
+                            self.open_firmware_flash(result);
+                        }
+                    }
+                }
                 ui.add_space(metrics.value(24.0));
                 let bottom_reserve = if firmware_update_supported {
                     metrics.value(54.0)
