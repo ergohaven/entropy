@@ -1,0 +1,14 @@
+{
+  "source_commit": "1a3a83f50f68611bf7f6cdb0e15be39ea7d7393d",
+  "purpose": "Unchanged full validation workers moved from ordinary CI to release-only execution",
+  "workers": {
+    "release-validation.yml": {
+      "build": "f3ef53c405e621ebf8e6a73ecc6bdd8a457bfe9aab4d2dd86cca0e34aa3f387a",
+      "container": "9bd90fe2d281862110131f8b463ed5bc6c473afa9ada1b1be3778e1b26fc3e69",
+      "packages": "796ab00943e825c342e4a0cd21c5b7156ae4125ad6aa24a91ad35ab95b6e9a3b"
+    },
+    "nix.yml": {
+      "flake": "e03c007d37a7f017768244125b4c04e3ee75ba8dc5c2c818c1c9dfe2da53619b"
+    }
+  }
+}

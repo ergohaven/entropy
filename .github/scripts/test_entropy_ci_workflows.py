@@ -27,37 +27,73 @@ class EntropyCIContract(unittest.TestCase):
         self.assertIn('push:\n    branches: [main]', text)
         self.assertNotIn('disabled-auto-build', text)
 
-    def test_main_and_rynk_prs_run_without_duplicate_integration_push_builds(self):
-        for name in ('build.yml', 'nix.yml'):
-            with self.subTest(workflow=name):
-                text = workflow(name)
-                self.assertRegex(text, r'(?m)^  pull_request:\n    branches: \[main, rynk\]$')
-                self.assertRegex(text, r'(?m)^  push:\n    branches: \[main\]$')
-                self.assertIn('  workflow_dispatch:', text)
+    def test_ordinary_build_only_dispatches_the_artifact_matrix(self):
+        text = workflow('build.yml')
+        self.assertRegex(text, r'(?m)^  pull_request:\n    branches: \[main, rynk\]$')
+        self.assertIn('  workflow_dispatch:', text)
+        self.assertNotIn('workflow_call:', text)
+        owner = job(text, 'build')
+        self.assertIn("if: github.event_name == 'workflow_dispatch'", owner)
+        self.assertNotIn('needs:', owner)
+        for command in ('cargo test', 'cargo nextest', 'docker:', 'nix ', 'test_macos',
+                        'ci_policy.py', 'setup-task', 'secrets.'):
+            self.assertNotIn(command, owner)
+        self.assertEqual(re.findall(r'            artifact: (.+)', owner), [
+            'entropy-linux', 'entropy-windows', 'entropy-macos-arm64', 'entropy-macos-x86_64'])
+        self.assertIn('binary: dist/test/*.AppImage', owner)
+        self.assertIn('scripts/build_linux_appimage.sh "test-${GITHUB_SHA:0:8}"', owner)
+        self.assertIn('cargo build --release --locked --bin entropy', owner)
+        self.assertIn('TARGET="${{ matrix.target }}" scripts/build_macos_app.sh', owner)
+        self.assertIn('if-no-files-found: error', owner)
+        self.assertEqual(owner.count('cargo build'), 1)
 
-    def test_build_plan_is_cheap_and_checks_policy(self):
-        owner = job(workflow('build.yml'), 'plan')
-        self.assertIn('fetch-depth: 0', owner)
-        self.assertIn('unittest discover', owner)
-        self.assertIn('ci_policy.py plan --profile build', owner)
-        self.assertIn('actions: read', owner)
-        self.assertIn('pull-requests: read', owner)
-        self.assertNotIn('cargo ', owner)
+    def test_source_events_keep_only_cheap_workflow_checks(self):
+        text = workflow('build.yml')
+        self.assertEqual(set(re.findall(r'^  ([a-z-]+):$', text.split('jobs:\n')[1], re.M)),
+                         {'contracts', 'build'})
+        owner = job(text, 'contracts')
+        self.assertIn("if: github.event_name != 'workflow_dispatch'", owner)
+        self.assertIn("python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v", owner)
+        for command in ('cargo ', 'nix ', 'docker:', 'ci_policy.py'):
+            self.assertNotIn(command, owner)
 
-    def test_heavy_planners_opt_in_without_gating_lightweight_checks(self):
-        for name, profile in (('build.yml', 'build'), ('nix.yml', 'nix')):
-            with self.subTest(workflow=name):
-                owner = job(workflow(name), 'plan')
-                commands = re.findall(r'^        run: (.+)$', owner, re.M)
-                self.assertEqual(commands, [
-                    "python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v",
-                    f'python3 .github/scripts/ci_policy.py plan --profile {profile} --manual-builds',
-                ])
-                self.assertNotRegex(owner, r'(?m)^\s+if:')
-                self.assertEqual(workflow(name).count('--manual-builds'), 1)
+    def test_full_validation_and_nix_are_release_only_reusable_workflows(self):
+        gate = "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.')"
+        for filename in ('release-validation.yml', 'nix.yml'):
+            text = workflow(filename)
+            self.assertIn('on:\n  workflow_call:\n', text)
+            for trigger in ('workflow_dispatch:', 'pull_request:', '  push:'):
+                self.assertNotIn(trigger, text)
+            owner = job(text, 'plan')
+            self.assertIn(gate, owner)
+            self.assertIn("run: 'true'", owner)
+            self.assertIn('unittest discover', owner)
+            self.assertNotIn('ci_policy.py plan', owner)
+            self.assertNotIn('secrets.', owner)
+
+    def test_release_requires_full_validation_and_nix_before_publication(self):
+        release = workflow('release.yml')
+        gate = "${{ github.repository == 'ergohaven/entropy' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.') }}"
+        for name, filename in [('validate', 'release-validation.yml'), ('nix', 'nix.yml')]:
+            owner = job(release, name)
+            self.assertIn('if: ' + gate, owner)
+            self.assertIn('uses: ./.github/workflows/' + filename, owner)
+            self.assertNotIn('secrets:', owner)
+        self.assertIn('needs: [build, validate, nix]', job(release, 'release'))
+
+    def test_release_workers_are_preserved_byte_for_byte(self):
+        baseline = json.loads((ROOT / '.github/scripts/fixtures/release_validation_workers.json').read_text())
+        self.assertEqual(set(baseline['workers']), {'release-validation.yml', 'nix.yml'})
+        self.assertEqual(set(baseline['workers']['release-validation.yml']), {'build', 'container', 'packages'})
+        self.assertEqual(set(baseline['workers']['nix.yml']), {'flake'})
+        import hashlib
+        for filename, jobs in baseline['workers'].items():
+            for name, digest in jobs.items():
+                with self.subTest(workflow=filename, job=name):
+                    self.assertEqual(hashlib.sha256(job(workflow(filename), name).encode()).hexdigest(), digest)
 
     def test_build_gates_all_expensive_owners(self):
-        text = workflow('build.yml')
+        text = workflow('release-validation.yml')
         for name in ('build', 'container', 'packages'):
             with self.subTest(job=name):
                 owner = job(text, name)
@@ -66,7 +102,7 @@ class EntropyCIContract(unittest.TestCase):
         self.assertIn('needs: [plan, container]', job(text, 'packages'))
 
     def test_build_retains_platform_and_packaging_coverage(self):
-        text = workflow('build.yml')
+        text = workflow('release-validation.yml')
         for marker in ('windows-latest', 'macos-15-intel', 'macos-15', 'ubuntu-latest',
                        'cargo test --all-targets', 'task docker:repro', 'scripts/test_linux_install.sh',
                        'test_macos_stable_signing.sh'):
@@ -74,7 +110,7 @@ class EntropyCIContract(unittest.TestCase):
                 self.assertIn(marker, text)
 
     def test_macos_executes_native_baseline_regressions(self):
-        owner = job(workflow('build.yml'), 'build')
+        owner = job(workflow('release-validation.yml'), 'build')
         match = re.search(
             r'      - name: Test macOS baseline regressions\n(.*?)(?=      - name:|\Z)',
             owner, re.S)
@@ -100,7 +136,7 @@ class EntropyCIContract(unittest.TestCase):
             for name in required])
 
     def test_macos_runs_the_complete_native_suite_in_parallel(self):
-        owner = job(workflow('build.yml'), 'build')
+        owner = job(workflow('release-validation.yml'), 'build')
         self.assertIn('uses: taiki-e/install-action@v2', owner)
         self.assertIn('tool: cargo-nextest@0.9.150', owner)
         match = re.search(
@@ -113,7 +149,7 @@ class EntropyCIContract(unittest.TestCase):
                          'run: cargo nextest run --locked --all-targets --test-threads 4 --no-fail-fast')
 
     def test_build_proof_requires_complete_full_graph(self):
-        owner = job(workflow('build.yml'), 'complete')
+        owner = job(workflow('release-validation.yml'), 'complete')
         self.assertIn('needs: [plan, build, container, packages]', owner)
         self.assertIn('always()', owner)
         self.assertIn('toJSON(needs)', owner)
@@ -125,9 +161,8 @@ class EntropyCIContract(unittest.TestCase):
     def test_nix_plan_and_both_systems_remain(self):
         text = workflow('nix.yml')
         owner = job(text, 'plan')
-        self.assertIn('ci_policy.py plan --profile nix', owner)
-        self.assertIn('actions: read', owner)
-        self.assertIn('pull-requests: read', owner)
+        self.assertIn("run: 'true'", owner)
+        self.assertNotIn('ci_policy.py plan', owner)
         self.assertIn("needs.plan.outputs.run == 'true'", job(text, 'flake'))
         for marker in ('x86_64-linux', 'aarch64-linux', 'nix flake check', 'module-eval', 'entropy-ibus-engine'):
             self.assertIn(marker, text)
@@ -142,7 +177,7 @@ class EntropyCIContract(unittest.TestCase):
         self.assertIn('ci-proof-nix-${{ github.run_id }}-${{ github.run_attempt }}', owner)
 
     def test_only_same_event_and_ref_are_cancelled(self):
-        for name in ('build.yml', 'nix.yml'):
+        for name in ('build.yml', 'release-validation.yml', 'nix.yml'):
             with self.subTest(workflow=name):
                 text = workflow(name)
                 self.assertIn('github.event_name', text)
@@ -167,7 +202,7 @@ class EntropyCIContract(unittest.TestCase):
         return True
 
     def test_actual_completion_gates_reject_incomplete_or_failed_coverage(self):
-        for filename, names in [('build.yml', ('build', 'container', 'packages')), ('nix.yml', ('flake',))]:
+        for filename, names in [('release-validation.yml', ('build', 'container', 'packages')), ('nix.yml', ('flake',))]:
             code = self.completion_code(filename)
             good = dict.fromkeys(names, 'success')
             skipped = dict.fromkeys(names, 'skipped')
@@ -184,7 +219,7 @@ class EntropyCIContract(unittest.TestCase):
                         self.assertFalse(self.accepts(code, 'true', 'success', bad))
 
     def test_gate_assertions_detect_isolated_removal_of_failures(self):
-        for filename, names in [('build.yml', ('build', 'container', 'packages')), ('nix.yml', ('flake',))]:
+        for filename, names in [('release-validation.yml', ('build', 'container', 'packages')), ('nix.yml', ('flake',))]:
             code = self.completion_code(filename)
             mutant = re.sub(r'(?m)^(\s*)raise SystemExit\(.*\)$', r'\1pass', code)
             self.assertNotEqual(code, mutant)

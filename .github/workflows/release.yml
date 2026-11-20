@@ -18,6 +18,16 @@ permissions:
   contents: read
 
 jobs:
+  validate:
+    name: Full release validation
+    if: ${{ github.repository == 'ergohaven/entropy' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.') }}
+    uses: ./.github/workflows/release-validation.yml
+
+  nix:
+    name: Release Nix validation
+    if: ${{ github.repository == 'ergohaven/entropy' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.') }}
+    uses: ./.github/workflows/nix.yml
+
   build:
     name: Build (${{ matrix.os }})
     # Stable tags such as v0.1.2 publish as latest releases.
@@ -202,7 +212,7 @@ jobs:
 
   release:
     name: Create Release
-    needs: build
+    needs: [build, validate, nix]
     if: ${{ github.repository == 'ergohaven/entropy' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.') }}
     permissions:
       contents: write
