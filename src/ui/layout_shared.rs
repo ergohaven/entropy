@@ -649,48 +649,19 @@ pub(crate) fn draw_key_label_dimmed(
 }
 
 pub(crate) fn number_row_shifted_label(
+    binding: crate::keyboard::KeyBinding,
     label: String,
     enabled: bool,
     key_legend_layout: KeyLegendLayout,
 ) -> String {
-    if !enabled {
-        return label;
+    if enabled {
+        if let Some(label) =
+            crate::keycode::shifted_number_row_legend(binding.vial_keycode(), key_legend_layout)
+        {
+            return label;
+        }
     }
-
-    let Some((digit, english, russian)) = (match label.as_str() {
-        "1" => Some(("1", "!", "!")),
-        "2" => Some(("2", "@", "\"")),
-        "3" => Some(("3", "#", "№")),
-        "4" => Some(("4", "$", ";")),
-        "5" => Some(("5", "%", "%")),
-        "6" => Some(("6", "^", ":")),
-        "7" => Some(("7", "&", "?")),
-        "8" => Some(("8", "*", "*")),
-        "9" => Some(("9", "(", "(")),
-        "0" => Some(("0", ")", ")")),
-        _ => None,
-    }) else {
-        return label;
-    };
-
-    let shifted = match key_legend_layout {
-        KeyLegendLayout::English => english.to_string(),
-        KeyLegendLayout::Russian => {
-            if english == russian {
-                english.to_string()
-            } else {
-                format!("{}  {}", english, russian)
-            }
-        }
-        KeyLegendLayout::RussianPrimary => {
-            if english == russian {
-                russian.to_string()
-            } else {
-                format!("{}  {}", russian, english)
-            }
-        }
-    };
-    format!("{}\n{}", shifted, digit)
+    label
 }
 
 pub(crate) fn draw_key_label(
@@ -716,6 +687,36 @@ pub(crate) fn draw_key_label(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn number_row_hints_follow_the_binding_instead_of_the_caption() {
+        let label = |code, enabled| {
+            number_row_shifted_label(
+                crate::keyboard::KeyBinding::Vial(code),
+                "2".to_owned(),
+                enabled,
+                KeyLegendLayout::English,
+            )
+        };
+        assert_eq!(label(0x001F, true), "@\n2");
+        assert_eq!(label(0x001F, false), "2");
+        assert_eq!(label(0x7E00, true), "2");
+        assert_eq!(label(0x005A, true), "2");
+        assert_eq!(label(0x021F, true), "2");
+    }
+
+    #[test]
+    fn number_row_hints_preserve_russian_order_and_shared_symbols() {
+        for (layout, digit_two, digit_three) in [
+            (KeyLegendLayout::Russian, "@  \"\n2", "#  №\n3"),
+            (KeyLegendLayout::RussianPrimary, "\"  @\n2", "№  #\n3"),
+        ] {
+            let label = |value| crate::keycode::shifted_number_row_legend(value, layout).unwrap();
+            assert_eq!(label(0x001E), "!\n1");
+            assert_eq!(label(0x001F), digit_two);
+            assert_eq!(label(0x0020), digit_three);
+        }
+    }
 
     fn physical_key(layout_condition: Option<LayoutCondition>) -> PhysicalKey {
         PhysicalKey {

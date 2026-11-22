@@ -2264,6 +2264,25 @@ fn symbol_legend(base: &str, english: &str, russian: &str, russian_primary: bool
     format!("{}\n{}", shifted, base)
 }
 
+pub(crate) fn shifted_number_row_legend(value: u16, layout: KeyLegendLayout) -> Option<String> {
+    if !(0x001E..=0x0027).contains(&value) {
+        return None;
+    }
+    let (digit, english) = printable_output_for_hid(value, KeyOutputLayout::English)?;
+    let english = english?.to_string();
+    let digit = digit.to_string();
+    if layout == KeyLegendLayout::English {
+        return Some(dual_legend(&english, &digit));
+    }
+    let (_, russian) = printable_output_for_hid(value, KeyOutputLayout::Russian)?;
+    Some(symbol_legend(
+        &digit,
+        &english,
+        &russian?.to_string(),
+        layout == KeyLegendLayout::RussianPrimary,
+    ))
+}
+
 fn shifted_symbol_legend(english: &str, russian: &str, russian_primary: bool) -> String {
     if english == russian {
         english.to_string()

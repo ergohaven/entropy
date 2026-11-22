@@ -441,6 +441,7 @@ impl EntropyApp {
                 continue;
             }
             let label = number_row_shifted_label(
+                label_binding,
                 key_binding_label_with_macro_names(
                     label_binding,
                     &layout.custom_keycodes,

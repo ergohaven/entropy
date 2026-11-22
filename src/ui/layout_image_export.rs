@@ -207,13 +207,19 @@ fn export_key_binding_label_with_macro_names(
     macro_names: &[String],
     tap_dance_names: &[String],
     key_legend_layout: KeyLegendLayout,
+    show_shifted_number_symbols: bool,
 ) -> String {
-    export_safe_key_label(key_binding_label_with_macro_names(
+    export_safe_key_label(number_row_shifted_label(
         binding,
-        custom,
-        layer_names,
-        macro_names,
-        tap_dance_names,
+        key_binding_label_with_macro_names(
+            binding,
+            custom,
+            layer_names,
+            macro_names,
+            tap_dance_names,
+            key_legend_layout,
+        ),
+        show_shifted_number_symbols,
         key_legend_layout,
     ))
 }
@@ -1056,6 +1062,7 @@ impl EntropyApp {
                             &self.keycode_picker.macro_names,
                             &self.keycode_picker.tap_dance_names,
                             self.app_settings.layout_image_export.key_legend_layout,
+                            self.app_settings.show_shifted_number_symbols,
                         ),
                         true,
                     ),
@@ -1070,16 +1077,12 @@ impl EntropyApp {
                         &self.keycode_picker.macro_names,
                         &self.keycode_picker.tap_dance_names,
                         self.app_settings.layout_image_export.key_legend_layout,
+                        self.app_settings.show_shifted_number_symbols,
                     ),
                     false,
                 )
             };
             if !label.is_empty() {
-                let label = number_row_shifted_label(
-                    label,
-                    self.app_settings.show_shifted_number_symbols,
-                    self.app_settings.layout_image_export.key_legend_layout,
-                );
                 write_key_label_svg(
                     svg,
                     font,
@@ -1239,6 +1242,7 @@ impl EntropyApp {
                             &self.keycode_picker.macro_names,
                             &self.keycode_picker.tap_dance_names,
                             self.app_settings.layout_image_export.key_legend_layout,
+                            self.app_settings.show_shifted_number_symbols,
                         ),
                         true,
                     ),
@@ -1253,16 +1257,12 @@ impl EntropyApp {
                         &self.keycode_picker.macro_names,
                         &self.keycode_picker.tap_dance_names,
                         self.app_settings.layout_image_export.key_legend_layout,
+                        self.app_settings.show_shifted_number_symbols,
                     ),
                     false,
                 )
             };
             if !label.is_empty() {
-                let label = number_row_shifted_label(
-                    label,
-                    self.app_settings.show_shifted_number_symbols,
-                    self.app_settings.layout_image_export.key_legend_layout,
-                );
                 draw_key_label_export(
                     image,
                     font,
