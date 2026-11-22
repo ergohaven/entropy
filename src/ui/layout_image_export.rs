@@ -126,19 +126,6 @@ fn export_theme_label(lang: crate::i18n::Language, theme: LayoutImageExportTheme
     }
 }
 
-fn export_key_legend_label(
-    lang: crate::i18n::Language,
-    key_legend_layout: &KeyLegendLayout,
-) -> &'static str {
-    match (lang, key_legend_layout) {
-        (_, KeyLegendLayout::English | KeyLegendLayout::Catalog(_)) => "English",
-        (crate::i18n::Language::Russian, KeyLegendLayout::Russian) => "Русская: EN сверху",
-        (crate::i18n::Language::English, KeyLegendLayout::Russian) => "Russian: EN first",
-        (crate::i18n::Language::Russian, KeyLegendLayout::RussianPrimary) => "Русская: RU сверху",
-        (crate::i18n::Language::English, KeyLegendLayout::RussianPrimary) => "Russian: RU first",
-    }
-}
-
 fn layer_export_label(
     lang: crate::i18n::Language,
     layer_names: &[String],
@@ -187,7 +174,7 @@ fn export_keycode_label_with_macro_names(
     layer_names: &[String],
     macro_names: &[String],
     tap_dance_names: &[String],
-    key_legend_layout: &KeyLegendLayout,
+    legends: KeyLegendStyle<'_>,
 ) -> String {
     export_safe_key_label(keycode_label_with_macro_names(
         value,
@@ -195,7 +182,7 @@ fn export_keycode_label_with_macro_names(
         layer_names,
         macro_names,
         tap_dance_names,
-        key_legend_layout,
+        legends,
     ))
 }
 
@@ -205,21 +192,15 @@ fn export_key_binding_label_with_macro_names(
     layer_names: &[String],
     macro_names: &[String],
     tap_dance_names: &[String],
-    key_legend_layout: &KeyLegendLayout,
-    show_shifted_number_symbols: bool,
+    legends: KeyLegendStyle<'_>,
 ) -> String {
-    export_safe_key_label(number_row_shifted_label(
+    export_safe_key_label(key_binding_label_with_macro_names(
         binding,
-        key_binding_label_with_macro_names(
-            binding,
-            custom,
-            layer_names,
-            macro_names,
-            tap_dance_names,
-            key_legend_layout,
-        ),
-        show_shifted_number_symbols,
-        key_legend_layout,
+        custom,
+        layer_names,
+        macro_names,
+        tap_dance_names,
+        legends,
     ))
 }
 
@@ -358,77 +339,6 @@ fn draw_theme_dropdown(
                 );
                 if option_resp.clicked() {
                     *selected_theme = theme;
-                    egui::Popup::close_all(ui.ctx());
-                }
-            }
-        },
-    );
-}
-
-fn draw_key_legend_dropdown(
-    ui: &mut egui::Ui,
-    metrics: crate::ui_style::ResponsiveMetrics,
-    dark: bool,
-    lang: crate::i18n::Language,
-    selected_layout: &mut KeyLegendLayout,
-) {
-    let dropdown_id = ui.make_persistent_id("layout_image_export_legends_dropdown");
-    let dropdown_resp = crate::ui_style::modern_dropdown_button_sized(
-        ui,
-        dropdown_id,
-        export_key_legend_label(lang, selected_layout),
-        ui.visuals().text_color(),
-        metrics.settings_control_width(),
-        metrics.settings_control_height(),
-        metrics.settings_control_font_size(),
-    );
-    crate::ui_style::popup_below_widget(
-        ui,
-        dropdown_id,
-        &dropdown_resp,
-        egui::PopupCloseBehavior::CloseOnClickOutside,
-        |ui| {
-            ui.set_min_width(metrics.settings_control_width());
-            ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
-            for layout in [
-                KeyLegendLayout::English,
-                KeyLegendLayout::Russian,
-                KeyLegendLayout::RussianPrimary,
-            ] {
-                let selected = layout == *selected_layout;
-                let (option_rect, option_resp) =
-                    ui.allocate_exact_size(metrics.size(168.0, 28.0), Sense::click());
-                if option_resp.hovered() {
-                    ui.ctx().set_cursor_icon(egui::CursorIcon::PointingHand);
-                }
-                let option_fill = if selected {
-                    if dark {
-                        Color32::from_rgb(58, 58, 61)
-                    } else {
-                        Color32::from_rgb(236, 236, 238)
-                    }
-                } else if option_resp.hovered() {
-                    crate::ui_style::hover_fill(dark)
-                } else {
-                    Color32::TRANSPARENT
-                };
-                ui.painter().rect_filled(option_rect, 7.0, option_fill);
-                ui.painter().text(
-                    egui::pos2(
-                        option_rect.left() + metrics.value(10.0),
-                        option_rect.center().y,
-                    ),
-                    egui::Align2::LEFT_CENTER,
-                    export_key_legend_label(lang, &layout),
-                    FontId::proportional(metrics.value(12.0)),
-                    if selected {
-                        ui.visuals().text_color()
-                    } else {
-                        app_muted_text(dark)
-                    },
-                );
-                if option_resp.clicked() {
-                    *selected_layout = layout;
                     egui::Popup::close_all(ui.ctx());
                 }
             }
@@ -648,12 +558,12 @@ impl EntropyApp {
                         export_text(lang, "legends"),
                         true,
                         tooltip(export_text(lang, "legends_tooltip")),
-                        metrics.settings_control_width(),
+                        super::layout_legend_selector::legend_selector_width(metrics),
                         |ui| {
-                            draw_key_legend_dropdown(
+                            super::layout_legend_selector::draw_key_legend_selector(
                                 ui,
+                                "layout_image_export_legends_dropdown",
                                 metrics,
-                                dark,
                                 lang,
                                 &mut key_legend_layout,
                             )
@@ -1064,8 +974,7 @@ impl EntropyApp {
                             &self.layer_names,
                             &self.keycode_picker.macro_names,
                             &self.keycode_picker.tap_dance_names,
-                            &self.app_settings.layout_image_export.key_legend_layout,
-                            self.app_settings.show_shifted_number_symbols,
+                            self.app_settings.export_legend_style(),
                         ),
                         true,
                     ),
@@ -1079,8 +988,7 @@ impl EntropyApp {
                         &self.layer_names,
                         &self.keycode_picker.macro_names,
                         &self.keycode_picker.tap_dance_names,
-                        &self.app_settings.layout_image_export.key_legend_layout,
-                        self.app_settings.show_shifted_number_symbols,
+                        self.app_settings.export_legend_style(),
                     ),
                     false,
                 )
@@ -1244,8 +1152,7 @@ impl EntropyApp {
                             &self.layer_names,
                             &self.keycode_picker.macro_names,
                             &self.keycode_picker.tap_dance_names,
-                            &self.app_settings.layout_image_export.key_legend_layout,
-                            self.app_settings.show_shifted_number_symbols,
+                            self.app_settings.export_legend_style(),
                         ),
                         true,
                     ),
@@ -1259,8 +1166,7 @@ impl EntropyApp {
                         &self.layer_names,
                         &self.keycode_picker.macro_names,
                         &self.keycode_picker.tap_dance_names,
-                        &self.app_settings.layout_image_export.key_legend_layout,
-                        self.app_settings.show_shifted_number_symbols,
+                        self.app_settings.export_legend_style(),
                     ),
                     false,
                 )
@@ -1578,7 +1484,7 @@ fn export_encoder_press_label(
             &app.layer_names,
             &app.keycode_picker.macro_names,
             &app.keycode_picker.tap_dance_names,
-            &app.app_settings.layout_image_export.key_legend_layout,
+            app.app_settings.export_legend_style(),
         )
         .replace('\n', " "),
         dimmed,
@@ -1657,7 +1563,7 @@ fn draw_encoder_export(
             &app.layer_names,
             &app.keycode_picker.macro_names,
             &app.keycode_picker.tap_dance_names,
-            &app.app_settings.layout_image_export.key_legend_layout,
+            app.app_settings.export_legend_style(),
         )
         .replace('\n', " ")
     };
@@ -1831,7 +1737,7 @@ fn write_encoder_svg(
             &app.layer_names,
             &app.keycode_picker.macro_names,
             &app.keycode_picker.tap_dance_names,
-            &app.app_settings.layout_image_export.key_legend_layout,
+            app.app_settings.export_legend_style(),
         )
         .replace('\n', " ")
     };

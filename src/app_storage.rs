@@ -1245,6 +1245,78 @@ mod tests {
     }
 
     #[test]
+    fn catalog_key_legend_settings_preserve_legacy_and_unavailable_choices() {
+        let old = r#"{
+            "key_legend_layout": "russian_primary",
+            "layout_image_export": { "key_legend_layout": "russian" }
+        }"#;
+        let mut settings: AppSettings = serde_json::from_str(old).unwrap();
+        apply_app_settings_migrations(&mut settings, Some(old));
+        assert_eq!(settings.key_legend_layout, KeyLegendLayout::RussianPrimary);
+        assert_eq!(
+            settings.layout_image_export.key_legend_layout,
+            KeyLegendLayout::Russian
+        );
+
+        settings.key_legend_layout = KeyLegendLayout::Catalog("ru-typewriter".into());
+        settings.layout_image_export.key_legend_layout = KeyLegendLayout::Catalog("missing".into());
+        let saved = serde_json::to_string(&settings).unwrap();
+        let fields: serde_json::Value = serde_json::from_str(&saved).unwrap();
+        assert_eq!(fields["key_legend_layout"], "english");
+        assert_eq!(fields["key_legend_catalog"], "ru-typewriter");
+        assert_eq!(
+            fields["layout_image_export"]["key_legend_layout"],
+            "english"
+        );
+        assert_eq!(
+            fields["layout_image_export"]["key_legend_catalog"],
+            "missing"
+        );
+        let restored: AppSettings = serde_json::from_str(&saved).unwrap();
+        assert_eq!(restored.key_legend_layout, settings.key_legend_layout);
+        assert_eq!(
+            restored.layout_image_export.key_legend_layout,
+            settings.layout_image_export.key_legend_layout
+        );
+        assert!(restored.export_legend_style().is_english_only());
+
+        let fallback =
+            r#"{ "key_legend_layout": "russian", "key_legend_catalog": "ru-typewriter" }"#;
+        let mut settings: AppSettings = serde_json::from_str(fallback).unwrap();
+        apply_app_settings_migrations(&mut settings, Some(fallback));
+        assert_eq!(
+            settings.layout_image_export.key_legend_layout,
+            settings.key_legend_layout
+        );
+        let independent = r#"{ "key_legend_catalog": "ru-typewriter", "layout_image_export": { "key_legend_layout": "english" } }"#;
+        let mut settings: AppSettings = serde_json::from_str(independent).unwrap();
+        apply_app_settings_migrations(&mut settings, Some(independent));
+        assert_eq!(
+            settings.layout_image_export.key_legend_layout,
+            KeyLegendLayout::English
+        );
+    }
+
+    #[test]
+    fn catalog_key_legend_sidecars_can_explicitly_clear_or_override_legacy_choices() {
+        let data = r#"{
+            "key_legend_layout": "russian_primary",
+            "key_legend_catalog": "",
+            "layout_image_export": { "key_legend_catalog": "fr-azerty-legacy" }
+        }"#;
+        let mut settings: AppSettings = serde_json::from_str(data).unwrap();
+        apply_app_settings_migrations(&mut settings, Some(data));
+        assert_eq!(settings.key_legend_layout, KeyLegendLayout::English);
+        assert_eq!(
+            settings.layout_image_export.key_legend_layout,
+            KeyLegendLayout::Catalog("fr-azerty-legacy".into()),
+        );
+
+        let migrated: AppSettings = serde_json::from_str(r#"{"key_legend_catalog":"ru-standard"}"#).unwrap();
+        assert_eq!(migrated.key_legend_layout, KeyLegendLayout::Russian);
+    }
+
+    #[test]
     fn macro_metadata_round_trip_preserves_names_and_descriptions() {
         let path = temp_macro_metadata_path("round_trip");
         let expected = MacroMetadata {

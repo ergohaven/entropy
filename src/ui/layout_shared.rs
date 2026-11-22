@@ -648,22 +648,6 @@ pub(crate) fn draw_key_label_dimmed(
     draw_key_label_with_colors(painter, rect, label, color, color, rotation);
 }
 
-pub(crate) fn number_row_shifted_label(
-    binding: crate::keyboard::KeyBinding,
-    label: String,
-    enabled: bool,
-    key_legend_layout: &KeyLegendLayout,
-) -> String {
-    if enabled {
-        if let Some(label) =
-            crate::keycode::shifted_number_row_legend(binding.vial_keycode(), key_legend_layout)
-        {
-            return label;
-        }
-    }
-    label
-}
-
 pub(crate) fn draw_key_label(
     painter: &egui::Painter,
     rect: egui::Rect,
@@ -690,19 +674,24 @@ mod tests {
 
     #[test]
     fn number_row_hints_follow_the_binding_instead_of_the_caption() {
+        let custom = crate::keyboard::CustomKeycode {
+            name: "2".to_owned(),
+            title: "2".to_owned(),
+            label: "2".to_owned(),
+        };
         let label = |code, enabled| {
-            number_row_shifted_label(
-                crate::keyboard::KeyBinding::Vial(code),
-                "2".to_owned(),
-                enabled,
-                &KeyLegendLayout::English,
+            crate::keycode::keycode_label_with_names_and_layout(
+                code,
+                std::slice::from_ref(&custom),
+                &[],
+                KeyLegendLayout::English.style(enabled),
             )
         };
         assert_eq!(label(0x001F, true), "@\n2");
         assert_eq!(label(0x001F, false), "2");
         assert_eq!(label(0x7E00, true), "2");
-        assert_eq!(label(0x005A, true), "2");
-        assert_eq!(label(0x021F, true), "2");
+        assert_eq!(label(0x005A, true), label(0x005A, false));
+        assert_eq!(label(0x021F, true), label(0x021F, false));
     }
 
     #[test]
@@ -711,7 +700,7 @@ mod tests {
             (KeyLegendLayout::Russian, "@  \"\n2", "#  №\n3"),
             (KeyLegendLayout::RussianPrimary, "\"  @\n2", "№  #\n3"),
         ] {
-            let label = |value| crate::keycode::shifted_number_row_legend(value, &layout).unwrap();
+            let label = |value| layout.style(true).caption(value).unwrap();
             assert_eq!(label(0x001E), "!\n1");
             assert_eq!(label(0x001F), digit_two);
             assert_eq!(label(0x0020), digit_three);

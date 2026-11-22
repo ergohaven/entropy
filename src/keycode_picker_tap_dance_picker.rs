@@ -173,7 +173,7 @@ impl KeycodePicker {
                                     &self.layer_names,
                                     true,
                                     self.language,
-                                    &self.key_legend_layout,
+                                    self.key_legend_style(),
                                 ) {
                                     self.set_tap_dance_field(td_idx, field, value);
                                     self.td_key_pick = None;
@@ -254,7 +254,7 @@ impl KeycodePicker {
             &self.layer_names,
             false,
             self.language,
-            &self.key_legend_layout,
+            self.key_legend_style(),
         ) {
             self.set_tap_dance_field(td_idx, field, value);
             self.td_key_pick = None;

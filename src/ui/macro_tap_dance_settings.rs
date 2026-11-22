@@ -18,6 +18,8 @@ impl EntropyApp {
         let lang = self.app_settings.language;
         self.keycode_picker.language = lang;
         self.keycode_picker.key_legend_layout = self.app_settings.key_legend_layout.clone();
+        self.keycode_picker.show_shifted_number_symbols =
+            self.app_settings.show_shifted_number_symbols;
         self.draw_advanced_action_editor_page(
             ui,
             content_rect,
@@ -45,6 +47,8 @@ impl EntropyApp {
         let lang = self.app_settings.language;
         self.keycode_picker.language = lang;
         self.keycode_picker.key_legend_layout = self.app_settings.key_legend_layout.clone();
+        self.keycode_picker.show_shifted_number_symbols =
+            self.app_settings.show_shifted_number_symbols;
         self.draw_advanced_action_editor_page(
             ui,
             content_rect,

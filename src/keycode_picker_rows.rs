@@ -336,7 +336,7 @@ impl KeycodePicker {
                 value,
                 &[],
                 &self.layer_names,
-                &self.key_legend_layout,
+                self.key_legend_style(),
             ),
             crate::i18n::tr_text(self.language, &self.picker_keycode_tooltip(value, &[])),
         )

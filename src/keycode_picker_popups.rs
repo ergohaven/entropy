@@ -124,7 +124,7 @@ pub(super) fn popup_key_button_label(
     kc: &crate::keycode::Keycode,
     layer_names: &[String],
     friendly_mods: bool,
-    key_legend_layout: &KeyLegendLayout,
+    legends: KeyLegendStyle<'_>,
 ) -> String {
     if matches!(kc.category, KeycodeCategory::Numpad) {
         return match kc.name {
@@ -165,7 +165,7 @@ pub(super) fn popup_key_button_label(
             _ => {}
         }
     }
-    keycode_label_with_names_and_layout(kc.value, &[], layer_names, key_legend_layout)
+    keycode_label_with_names_and_layout(kc.value, &[], layer_names, legends)
 }
 
 fn friendly_plain_modifier_entry(value: u16) -> Option<(String, u16, u16, String)> {
@@ -193,7 +193,7 @@ pub(super) fn show_grouped_popup_key_buttons(
     layer_names: &[String],
     friendly_mods: bool,
     language: crate::i18n::Language,
-    key_legend_layout: &KeyLegendLayout,
+    legends: KeyLegendStyle<'_>,
 ) -> Option<u16> {
     let default_group_order = [
         "Letters",
@@ -270,8 +270,7 @@ pub(super) fn show_grouped_popup_key_buttons(
                     }
                 }
 
-                let label =
-                    popup_key_button_label(kc, layer_names, friendly_mods, key_legend_layout);
+                let label = popup_key_button_label(kc, layer_names, friendly_mods, legends);
                 let size = popup_key_button_size(ui, &label);
                 let resp = picker_keycap_button(ui, &label, size, true, false);
                 if resp.clicked() {

@@ -135,7 +135,7 @@ pub(crate) struct AppSettings {
     pub(crate) encoder_hover_enlarge: bool,
     #[serde(default = "default_show_made_by_signature")]
     pub(crate) show_made_by_signature: bool,
-    #[serde(default)]
+    #[serde(flatten, with = "crate::keycode::stored_legend_layout")]
     pub(crate) key_legend_layout: KeyLegendLayout,
     #[serde(default)]
     pub(crate) layout_image_export: LayoutImageExportState,
@@ -320,15 +320,58 @@ impl Default for AppSettings {
     }
 }
 
+impl AppSettings {
+    pub(crate) fn key_legend_style(&self) -> KeyLegendStyle<'_> {
+        self.key_legend_layout
+            .style(self.show_shifted_number_symbols)
+    }
+
+    pub(crate) fn export_legend_style(&self) -> KeyLegendStyle<'_> {
+        self.layout_image_export
+            .key_legend_layout
+            .style(self.show_shifted_number_symbols)
+    }
+}
+
 #[cfg(test)]
 mod app_settings_tests {
     use super::*;
 
     #[test]
+    fn native_key_legend_preserves_right_shift_hold_and_profile() {
+        use rmk_types::action::Action;
+        use rmk_types::keycode::HidKeyCode;
+        use rmk_types::modifier::ModifierCombination;
+
+        let layout = KeyLegendLayout::Catalog("ru-typewriter".into());
+        let key_two = HidKeyCode::Kc2;
+        let tap = Action::KeyWithModifier(key_two, ModifierCombination::RSHIFT);
+        // RMK's packed five bits are the QMK side bit followed by four modifiers.
+        assert_eq!(native_printable_keycode(tap), Some(0x121F));
+        let legends = layout.style(false);
+        assert_eq!(
+            native_tap_hold_legend(tap, Action::LayerOn(3), legends, Some(7)).as_deref(),
+            Some("L3 · profile 7\n@\n2")
+        );
+        let hold = Action::Modifier(ModifierCombination::LCTRL);
+        assert_eq!(
+            native_tap_hold_legend(tap, hold, legends, None).as_deref(),
+            Some("Ctrl\n@\n2")
+        );
+    }
+
+    #[test]
     fn tap_dance_keycap_keeps_slot_label_and_tooltip_keeps_custom_name() {
         let names = &["t1".to_owned()];
         assert_eq!(
-            keycode_label_with_macro_names(0x5700, &[], &[], &[], names, &KeyLegendLayout::English),
+            keycode_label_with_macro_names(
+                0x5700,
+                &[],
+                &[],
+                &[],
+                names,
+                KeyLegendLayout::English.style(false)
+            ),
             "TD0"
         );
         assert_eq!(
@@ -336,7 +379,14 @@ mod app_settings_tests {
             "t1 — tap dance 0"
         );
         assert_eq!(
-            keycode_label_with_macro_names(0x5700, &[], &[], &[], &[], &KeyLegendLayout::English),
+            keycode_label_with_macro_names(
+                0x5700,
+                &[],
+                &[],
+                &[],
+                &[],
+                KeyLegendLayout::English.style(false)
+            ),
             "TD0"
         );
     }
@@ -388,7 +438,7 @@ pub(crate) fn keycode_label_with_macro_names(
     layer_names: &[String],
     macro_names: &[String],
     _tap_dance_names: &[String],
-    key_legend_layout: &KeyLegendLayout,
+    legends: KeyLegendStyle<'_>,
 ) -> String {
     if (0x7700..=0x77FF).contains(&value) {
         let idx = (value - 0x7700) as usize;
@@ -403,7 +453,7 @@ pub(crate) fn keycode_label_with_macro_names(
         // the tooltip and editor, not on the macropad preview.
         return format!("TD{}", idx);
     }
-    keycode_label_with_names_and_layout(value, custom, layer_names, key_legend_layout)
+    keycode_label_with_names_and_layout(value, custom, layer_names, legends)
 }
 
 pub(crate) fn keycode_tooltip_with_macro_names(
@@ -436,7 +486,7 @@ pub(crate) fn key_binding_label_with_macro_names(
     layer_names: &[String],
     macro_names: &[String],
     tap_dance_names: &[String],
-    key_legend_layout: &KeyLegendLayout,
+    legends: KeyLegendStyle<'_>,
 ) -> String {
     match binding {
         crate::keyboard::KeyBinding::Vial(value) => keycode_label_with_macro_names(
@@ -445,13 +495,19 @@ pub(crate) fn key_binding_label_with_macro_names(
             layer_names,
             macro_names,
             tap_dance_names,
-            key_legend_layout,
+            legends,
         ),
-        crate::keyboard::KeyBinding::VialTapHold { tap, hold, profile } => format!(
-            "Vial TapHold {tap:?} / {hold:?} (profile {}: {:#x})",
-            profile.index, profile.raw
-        ),
+        crate::keyboard::KeyBinding::VialTapHold { tap, hold, profile } => {
+            native_tap_hold_legend(tap, hold, legends, Some(profile.index)).unwrap_or_else(|| {
+                format!(
+                    "Vial TapHold {tap:?} / {hold:?} (profile {}: {:#x})",
+                    profile.index, profile.raw
+                )
+            })
+        }
         crate::keyboard::KeyBinding::Rmk(action) => {
+            use rmk_types::action::KeyAction;
+
             if let Some(label) = crate::universal_symbols::label(action) {
                 return label;
             }
@@ -462,7 +518,7 @@ pub(crate) fn key_binding_label_with_macro_names(
                     parts.tap_value(),
                     custom,
                     layer_names,
-                    key_legend_layout,
+                    legends,
                 );
                 return format!("{hold}\n{tap}");
             }
@@ -478,11 +534,18 @@ pub(crate) fn key_binding_label_with_macro_names(
                     layer_names,
                     macro_names,
                     tap_dance_names,
-                    key_legend_layout,
+                    legends,
                 );
                 return format!("{hold}\n{tap}");
             }
-            "RMK\nAction".to_owned()
+            let legend = match action {
+                KeyAction::Single(tap) | KeyAction::Tap(tap) => {
+                    native_printable_keycode(tap).and_then(|value| legends.caption(value))
+                }
+                KeyAction::TapHold(tap, hold, _) => native_tap_hold_legend(tap, hold, legends, None),
+                _ => None,
+            };
+            legend.unwrap_or_else(|| "RMK\nAction".to_owned())
         }
         crate::keyboard::KeyBinding::Rynk(action) => {
             match crate::rynk::native_v1::v1_label_action(action) {
@@ -492,12 +555,49 @@ pub(crate) fn key_binding_label_with_macro_names(
                     layer_names,
                     macro_names,
                     tap_dance_names,
-                    key_legend_layout,
+                    legends,
                 ),
                 None => crate::rynk::native_v1::fallback_label(action),
             }
         }
     }
+}
+
+fn native_printable_keycode(action: rmk_types::action::Action) -> Option<u16> {
+    use rmk_types::action::Action;
+    use rmk_types::keycode::KeyCode;
+
+    match action {
+        Action::Key(KeyCode::Hid(key)) => Some(key as u16),
+        Action::KeyWithModifier(key, modifiers) => {
+            Some((u16::from(modifiers.into_packed_bits()) << 8) | key as u16)
+        }
+        _ => None,
+    }
+}
+
+fn native_tap_hold_legend(
+    tap: rmk_types::action::Action,
+    hold: rmk_types::action::Action,
+    legends: KeyLegendStyle<'_>,
+    profile_index: Option<u8>,
+) -> Option<String> {
+    use rmk_types::action::Action;
+
+    let tap = legends.caption(native_printable_keycode(tap)?)?;
+    let hold = match hold {
+        Action::Modifier(modifiers) => {
+            crate::keycode::modifier_label_from_bits(u16::from(modifiers.into_packed_bits()))
+        }
+        Action::LayerOn(layer) => format!("L{layer}"),
+        action => native_printable_keycode(action)
+            .map(|value| crate::keycode::keycode_label(value).replace('\n', " "))
+            .unwrap_or_else(|| format!("{action:?}")),
+    };
+    Some(match profile_index {
+        Some(index) => format!("{hold} · profile {index}\n{tap}"),
+        None => format!("{hold}\n{tap}"),
+    })
 }
 
 /// Characters a key binding types in the given input layout: the direct output
@@ -591,7 +691,7 @@ pub(crate) fn key_binding_tooltip_with_macro_names(
                     parts.tap_value(),
                     custom,
                     layer_names,
-                    &KeyLegendLayout::English,
+                    KeyLegendLayout::English.style(false),
                 )
                 .replace('\n', " ");
                 return format!(
@@ -5498,7 +5598,7 @@ struct LayoutImageExportStatePersisted {
     export_pdf: bool,
     #[serde(default)]
     theme: LayoutImageExportTheme,
-    #[serde(default)]
+    #[serde(flatten, with = "crate::keycode::stored_legend_layout")]
     key_legend_layout: KeyLegendLayout,
     #[serde(default = "default_layout_image_export_show_layer_names")]
     show_layer_names: bool,

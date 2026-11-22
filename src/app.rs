@@ -3,8 +3,8 @@ use crate::firmware::FirmwareProtocol;
 
 use crate::keyboard::{KeyboardLayout, LayoutOption, PhysicalEncoder, PhysicalKey};
 use crate::keycode::{
-    KeyLegendLayout, KeyOutputLayout, key_label_font_sizes, keycode_label_with_names_and_layout,
-    keycode_tooltip,
+    key_label_font_sizes, keycode_label_with_names_and_layout, keycode_tooltip, KeyLegendLayout,
+    KeyLegendStyle, KeyOutputLayout,
 };
 use crate::keycode_picker::{DeferredPickerDataState, KeycodePicker, KeycodeTab};
 use egui::{Color32, FontId, RichText, Sense, Stroke, Vec2};
@@ -159,6 +159,8 @@ mod layout_indicator_window;
 use layout_indicator_window::StickyLayoutViewportEventQueue;
 #[path = "ui/layout_options_settings.rs"]
 mod layout_options_settings_ui;
+#[path = "ui/layout_legend_selector.rs"]
+mod layout_legend_selector;
 #[path = "ui/layout_shared.rs"]
 mod layout_shared;
 use layout_shared::*;

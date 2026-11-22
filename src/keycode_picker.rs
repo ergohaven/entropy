@@ -3,7 +3,7 @@ use crate::app::MacroExtKeycodesDisabledReason;
 use crate::keycode::{
     gui_label, gui_mod_name, is_extended_function_key, key_label_font_sizes,
     keycode_label_with_names_and_layout, keycode_tooltip, modifier_label_from_bits,
-    KeyLegendLayout, KeycodeCategory, KEYCODES,
+    KeyLegendLayout, KeyLegendStyle, KeycodeCategory, KEYCODES,
 };
 use crate::popup_state::{PopupKey, PopupState};
 use egui::{Color32, Key, RichText, Vec2};
@@ -1581,6 +1581,11 @@ impl Default for KeycodePicker {
 }
 
 impl KeycodePicker {
+    fn key_legend_style(&self) -> KeyLegendStyle<'_> {
+        self.key_legend_layout
+            .style(self.show_shifted_number_symbols)
+    }
+
     pub(crate) fn has_open_modal(&self) -> bool {
         self.open
             || self.macro_key_pick.is_some()
@@ -2211,7 +2216,7 @@ impl KeycodePicker {
                                         &self.layer_names,
                                         true,
                                         self.language,
-                                        &self.key_legend_layout,
+                                        self.key_legend_style(),
                                     ) {
                                         self.set_macro_key_pick_value(macro_idx, action_idx, value);
                                     }
@@ -2632,7 +2637,7 @@ impl KeycodePicker {
                                     &self.layer_names,
                                     false,
                                     self.language,
-                                    &self.key_legend_layout,
+                                    self.key_legend_style(),
                                 ) {
                                     self.finish_regular_key_pick(value);
                                 }

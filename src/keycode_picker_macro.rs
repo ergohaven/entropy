@@ -962,7 +962,7 @@ impl KeycodePicker {
                                                             *keycode,
                                                             &custom_pairs,
                                                             &self.layer_names,
-                                                            &self.key_legend_layout,
+                                                            self.key_legend_style(),
                                                         )
                                                     });
                                                 let response =

@@ -139,7 +139,10 @@ fn draw_sticky_key_label(
         let t = parts.next().unwrap_or("");
         let b = parts.next().unwrap_or(label);
         (Some(t), b)
-    } else if let Some(pos) = label.find('/') {
+    } else if let Some(pos) = label
+        .find('/')
+        .filter(|pos| *pos > 0 && *pos + 1 < label.len())
+    {
         (Some(&label[..pos]), &label[pos + 1..])
     } else {
         (None, label)
@@ -296,8 +299,7 @@ impl EntropyApp {
         layer_names: &[String],
         macro_names: &[String],
         tap_dance_names: &[String],
-        key_legend_layout: &KeyLegendLayout,
-        show_shifted_number_symbols: bool,
+        legends: KeyLegendStyle<'_>,
         layout_options_value: Option<u32>,
         encoder_visibility: &[bool],
         module_settings: &ModuleSettingsState,
@@ -440,18 +442,13 @@ impl EntropyApp {
             if label_binding.is_no() {
                 continue;
             }
-            let label = number_row_shifted_label(
+            let label = key_binding_label_with_macro_names(
                 label_binding,
-                key_binding_label_with_macro_names(
-                    label_binding,
-                    &layout.custom_keycodes,
-                    layer_names,
-                    macro_names,
-                    tap_dance_names,
-                    key_legend_layout,
-                ),
-                show_shifted_number_symbols,
-                key_legend_layout,
+                &layout.custom_keycodes,
+                layer_names,
+                macro_names,
+                tap_dance_names,
+                legends,
             );
             draw_sticky_key_label(
                 &painter,
@@ -470,7 +467,7 @@ impl EntropyApp {
                 layer_names,
                 macro_names,
                 tap_dance_names,
-                key_legend_layout,
+                legends,
             )
             .replace('\n', " ")
         };
@@ -681,7 +678,7 @@ impl EntropyApp {
                                     layer_names,
                                     macro_names,
                                     tap_dance_names,
-                                    key_legend_layout,
+                                    legends,
                                 ),
                                 true,
                             )
@@ -696,7 +693,7 @@ impl EntropyApp {
                                 layer_names,
                                 macro_names,
                                 tap_dance_names,
-                                key_legend_layout,
+                                legends,
                             ),
                             false,
                         )

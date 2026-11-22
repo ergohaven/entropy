@@ -36,15 +36,6 @@ pub enum KeyLegendLayout {
 }
 
 impl KeyLegendLayout {
-    pub const ALL: [KeyLegendLayout; 2] = [KeyLegendLayout::English, KeyLegendLayout::Russian];
-
-    pub fn i18n_key(&self) -> &'static str {
-        match self {
-            KeyLegendLayout::English | KeyLegendLayout::Catalog(_) => "ui.key_legends_english",
-            KeyLegendLayout::Russian | KeyLegendLayout::RussianPrimary => "ui.key_legends_russian",
-        }
-    }
-
     pub fn is_multilingual(&self) -> bool {
         self.order_i18n_key().is_some()
     }
@@ -74,10 +65,88 @@ impl KeyLegendLayout {
         }
     }
 
-    pub(crate) fn caption(&self, value: u16, show_number_shift: bool) -> Option<String> {
-        let layout = self.catalog_layout()?;
-        let secondary_first = matches!(self, Self::RussianPrimary);
-        crate::key_legends::caption(value, layout, secondary_first, show_number_shift)
+    pub(crate) fn style(&self, show_shifted_number_symbols: bool) -> KeyLegendStyle<'_> {
+        KeyLegendStyle {
+            layout: self,
+            show_shifted_number_symbols,
+        }
+    }
+}
+
+#[derive(Clone, Copy)]
+pub(crate) struct KeyLegendStyle<'a> {
+    layout: &'a KeyLegendLayout,
+    pub(crate) show_shifted_number_symbols: bool,
+}
+
+impl KeyLegendStyle<'_> {
+    pub(crate) fn is_english_only(self) -> bool {
+        self.layout.catalog_layout().is_none()
+    }
+
+    pub(crate) fn has_caption(self, value: u16) -> bool {
+        self.caption(value).is_some() || self.caption(tap_base_keycode(value)).is_some()
+    }
+
+    fn catalog_caption(self, value: u16) -> Option<String> {
+        crate::key_legends::caption(
+            value,
+            self.layout.catalog_layout()?,
+            matches!(self.layout, KeyLegendLayout::RussianPrimary),
+            self.show_shifted_number_symbols,
+        )
+    }
+
+    pub(crate) fn caption(self, value: u16) -> Option<String> {
+        self.catalog_caption(value).or_else(|| {
+            if !self.show_shifted_number_symbols || !crate::key_legends::is_number_row(value) {
+                return None;
+            }
+            let (digit, shift) = printable_output_for_hid(value, KeyOutputLayout::English)?;
+            Some(format!("{}\n{digit}", shift?))
+        })
+    }
+}
+
+pub(crate) mod stored_legend_layout {
+    use super::KeyLegendLayout;
+    use serde::{Deserialize, Deserializer, Serialize, Serializer};
+
+    // The sidecar carries arbitrary IDs. Older Entropy versions still read a
+    // valid legacy preference and retain the rest of the settings.
+    #[derive(Deserialize, Serialize)]
+    struct Fields {
+        #[serde(default)]
+        key_legend_layout: KeyLegendLayout,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        key_legend_catalog: Option<String>,
+    }
+
+    pub(crate) fn serialize<S: Serializer>(
+        layout: &KeyLegendLayout,
+        serializer: S,
+    ) -> Result<S::Ok, S::Error> {
+        let (key_legend_layout, key_legend_catalog) = match layout {
+            KeyLegendLayout::Catalog(id) => (KeyLegendLayout::English, Some(id.clone())),
+            legacy => (legacy.clone(), None),
+        };
+        Fields {
+            key_legend_layout,
+            key_legend_catalog,
+        }
+        .serialize(serializer)
+    }
+
+    pub(crate) fn deserialize<'de, D: Deserializer<'de>>(
+        deserializer: D,
+    ) -> Result<KeyLegendLayout, D::Error> {
+        let fields = Fields::deserialize(deserializer)?;
+        Ok(match fields.key_legend_catalog.as_deref() {
+            None => fields.key_legend_layout,
+            Some("") => KeyLegendLayout::English,
+            Some(crate::key_legends::STANDARD_RUSSIAN) => KeyLegendLayout::Russian,
+            Some(id) => KeyLegendLayout::Catalog(id.to_owned()),
+        })
     }
 }
 
@@ -2036,17 +2105,23 @@ pub fn keycode_label_with_custom(value: u16, custom: &[CustomKeycode]) -> String
     keycode_label_with_names(value, custom, &[])
 }
 
-pub fn keycode_label_with_names_and_layout(
+pub(crate) fn keycode_label_with_names_and_layout(
     value: u16,
     custom: &[CustomKeycode],
     layer_names: &[String],
-    key_legend_layout: &KeyLegendLayout,
+    legends: KeyLegendStyle<'_>,
 ) -> String {
-    apply_key_legend_layout(
-        value,
-        keycode_label_with_names(value, custom, layer_names),
-        key_legend_layout,
-    )
+    if let Some(label) = legends.caption(value) {
+        return label;
+    }
+    let label = keycode_label_with_names(value, custom, layer_names);
+    let tap = tap_base_keycode(value);
+    if tap != value {
+        if let (Some((hold, _)), Some(tap_label)) = (label.split_once('\n'), legends.caption(tap)) {
+            return format!("{hold}\n{tap_label}");
+        }
+    }
+    label
 }
 
 fn compact_compound_key_label(kc: &Keycode) -> String {
@@ -2251,24 +2326,6 @@ fn decode_mods(mods: u16, _right: bool) -> String {
 
 pub fn keycode_label(value: u16) -> String {
     keycode_label_with_custom(value, &[])
-}
-
-fn apply_key_legend_layout(
-    value: u16,
-    label: String,
-    key_legend_layout: &KeyLegendLayout,
-) -> String {
-    key_legend_layout.caption(value, false).unwrap_or(label)
-}
-
-pub(crate) fn shifted_number_row_legend(value: u16, layout: &KeyLegendLayout) -> Option<String> {
-    if !crate::key_legends::is_number_row(value) {
-        return None;
-    }
-    layout.caption(value, true).or_else(|| {
-        let (digit, shift) = printable_output_for_hid(value, KeyOutputLayout::English)?;
-        Some(format!("{}\n{digit}", shift?))
-    })
 }
 
 /// Keyboard layout selected in the operating system, i.e. what the host
@@ -2828,7 +2885,7 @@ mod tests {
         ] {
             for layout in [KeyLegendLayout::English, KeyLegendLayout::RussianPrimary] {
                 assert_eq!(
-                    keycode_label_with_names_and_layout(value, &[], &[], &layout),
+                    keycode_label_with_names_and_layout(value, &[], &[], layout.style(false)),
                     expected
                 );
             }
@@ -2877,7 +2934,12 @@ mod tests {
     #[test]
     fn layer_lock_uses_a_readable_keycap_label() {
         assert_eq!(
-            keycode_label_with_names_and_layout(0x7C7B, &[], &[], &KeyLegendLayout::English,),
+            keycode_label_with_names_and_layout(
+                0x7C7B,
+                &[],
+                &[],
+                KeyLegendLayout::English.style(false),
+            ),
             "Layer\nLock"
         );
     }
@@ -2894,7 +2956,7 @@ mod tests {
                 (0x342D, "Alt\n_\n-"),
             ] {
                 assert_eq!(
-                    keycode_label_with_names_and_layout(value, &[], &[], &layout),
+                    keycode_label_with_names_and_layout(value, &[], &[], layout.style(false)),
                     expected,
                 );
                 assert_eq!(
@@ -3015,6 +3077,22 @@ mod tests {
         assert_eq!(
             printable_output(0x0204, KeyOutputLayout::Russian),
             Some(('Ф', None))
+        );
+    }
+
+    #[test]
+    fn catalog_key_legend_keeps_the_tap_and_hold_roles() {
+        let layout = KeyLegendLayout::Catalog("ru-typewriter".into());
+        for (value, expected_hold) in [(0x211F, "Ctrl"), (0x411F, "LT 1")] {
+            let label = keycode_label_with_names_and_layout(value, &[], &[], layout.style(true));
+            let (hold, tap) = label.split_once('\n').unwrap();
+            assert!(hold.contains(expected_hold), "{label}");
+            assert_eq!(tap, "@  2\n2  -");
+        }
+        let english = KeyLegendLayout::English.style(true);
+        assert_eq!(
+            keycode_label_with_names_and_layout(0x411F, &[], &[], english),
+            "LT 1\n@\n2"
         );
     }
 

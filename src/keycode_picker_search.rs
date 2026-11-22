@@ -42,7 +42,7 @@ fn normalized_query(query: &str) -> String {
 /// Disambiguate equal captions within a search group with their QMK names.
 /// The regular tab keeps its compact keycaps; search can put distinct actions
 /// (e.g. media Stop and browser Stop) right next to one another.
-fn search_result_row(row: &PickerRow, group: &[PickerRow]) -> PickerRow {
+fn search_result_row(row: &PickerRow, group: &[PickerRow], preserve_legend: bool) -> PickerRow {
     let mut result = row.clone();
     if group
         .iter()
@@ -53,7 +53,15 @@ fn search_result_row(row: &PickerRow, group: &[PickerRow]) -> PickerRow {
             .split_whitespace()
             .find(|name| name.starts_with("KC_"))
         {
-            let caption = row.label.rsplit('\n').next().unwrap_or(&row.label);
+            if preserve_legend && row.label.lines().count() >= 3 {
+                result.tooltip = format!("{name}\n{}", row.tooltip);
+                return result;
+            }
+            let caption = if preserve_legend {
+                &row.label
+            } else {
+                row.label.rsplit('\n').next().unwrap_or(&row.label)
+            };
             result.label = format!("{}\n{}", name.trim_start_matches("KC_"), caption);
         }
     }
@@ -172,7 +180,17 @@ impl KeycodePicker {
             ui.add_space(4.0);
             ui.horizontal_wrapped(|ui| {
                 for row in &rows {
-                    self.show_picker_row(ui, &search_result_row(row, &rows), states);
+                    let preserve_legend = match row.action {
+                        PickerAction::Assign(crate::keyboard::KeyBinding::Vial(value)) => {
+                            self.key_legend_style().has_caption(value)
+                        }
+                        _ => false,
+                    };
+                    self.show_picker_row(
+                        ui,
+                        &search_result_row(row, &rows, preserve_legend),
+                        states,
+                    );
                 }
             });
         }
@@ -204,6 +222,36 @@ mod tests {
 
     fn special_section(picker: &KeycodePicker, key: &'static str) -> &'static str {
         crate::i18n::tr_catalog(picker.language, key)
+    }
+
+    #[test]
+    fn catalog_key_legend_is_searchable_and_updates_with_variant_and_shift() {
+        let mut picker = KeycodePicker::default();
+        let digit_two = PickerAction::Assign(KeyBinding::Vial(0x001F));
+        picker.key_legend_layout = KeyLegendLayout::Catalog("fr-azerty-legacy".into());
+        picker.show_shifted_number_symbols = true;
+        let matches = search(&mut picker, "É");
+        assert_eq!(hit(&matches, digit_two).unwrap().label, "@  2\n2  é");
+
+        picker.show_shifted_number_symbols = false;
+        let matches = search(&mut picker, "É");
+        assert_eq!(hit(&matches, digit_two).unwrap().label, "2\né");
+
+        picker.key_legend_layout = KeyLegendLayout::Catalog("ru-typewriter".into());
+        let matches = search(&mut picker, "É");
+        assert!(hit(&matches, digit_two).is_none());
+    }
+
+    #[test]
+    fn search_disambiguation_keeps_the_visible_shift_row() {
+        let picker = KeycodePicker::default();
+        let mut row = picker.table_keycode_row(KeycodeTab::Basic, "", 0x001F);
+        row.aliases = "KC_2".into();
+        let mut other = row.clone();
+        other.action = PickerAction::Assign(KeyBinding::Vial(0x005A));
+        assert!(picker.key_legend_style().has_caption(0x001F));
+        assert!(!picker.key_legend_style().has_caption(0x005A));
+        assert_eq!(search_result_row(&row, &[other], true).label, "2\n@\n2");
     }
 
     #[test]
@@ -360,16 +408,16 @@ mod tests {
             .cloned()
             .collect();
         assert_eq!(
-            search_result_row(media, &stop_group).accessible_name(),
+            search_result_row(media, &stop_group, false).accessible_name(),
             "MSTP Stop"
         );
         assert_eq!(
-            search_result_row(browser, &stop_group).accessible_name(),
+            search_result_row(browser, &stop_group, false).accessible_name(),
             "WSTP Stop"
         );
         assert_ne!(
-            search_result_row(media, &stop_group).label,
-            search_result_row(browser, &stop_group).label
+            search_result_row(media, &stop_group, false).label,
+            search_result_row(browser, &stop_group, false).label
         );
 
         let results = search(&mut picker, "kana");

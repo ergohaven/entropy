@@ -131,26 +131,20 @@ fn qwerty_picker_grid_keys_for_values(
 fn qwerty_picker_key_label(
     value: u16,
     fallback_label: &str,
-    key_legend_layout: &KeyLegendLayout,
-    show_shifted_number_symbols: bool,
+    legends: KeyLegendStyle<'_>,
     layer_names: &[String],
 ) -> String {
-    if show_shifted_number_symbols {
-        if let Some(label) = crate::keycode::shifted_number_row_legend(value, key_legend_layout) {
-            return label;
-        }
-        if key_legend_layout == &KeyLegendLayout::English {
-            match value {
-                0x0035 => return "~\n`".to_string(),
-                0x002D => return "_\n-".to_string(),
-                0x002E => return "+\n=".to_string(),
-                _ => {}
-            }
+    if legends.show_shifted_number_symbols && legends.is_english_only() {
+        match value {
+            0x0035 => return "~\n`".to_string(),
+            0x002D => return "_\n-".to_string(),
+            0x002E => return "+\n=".to_string(),
+            _ => {}
         }
     }
 
     crate::keycode::find_keycode(value)
-        .map(|_| keycode_label_with_names_and_layout(value, &[], layer_names, key_legend_layout))
+        .map(|_| keycode_label_with_names_and_layout(value, &[], layer_names, legends))
         .unwrap_or_else(|| fallback_label.to_string())
 }
 
@@ -172,8 +166,7 @@ impl KeycodePicker {
                 let label = qwerty_picker_key_label(
                     value,
                     key.label,
-                    &self.key_legend_layout,
-                    self.show_shifted_number_symbols,
+                    self.key_legend_style(),
                     &self.layer_names,
                 );
                 let tooltip = crate::i18n::tr_text(
@@ -370,8 +363,7 @@ impl KeycodePicker {
             let label = qwerty_picker_key_label(
                 value,
                 key.label,
-                &self.key_legend_layout,
-                self.show_shifted_number_symbols,
+                self.key_legend_style(),
                 &self.layer_names,
             );
             let resp = picker_keycap_button_in_rect(ui, rect, &label, enabled, false);
@@ -430,7 +422,7 @@ impl KeycodePicker {
                 &self.layer_names,
                 friendly_mods,
                 self.language,
-                &self.key_legend_layout,
+                self.key_legend_style(),
             ),
         }
     }
