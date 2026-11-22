@@ -2740,7 +2740,7 @@ impl eframe::App for EntropyApp {
         if !self.unlock_open && !self.vial_unlock_polling {
             self.keycode_picker.language = self.app_settings.language;
             self.keycode_picker.rynk_board = self.rynk_board_connected();
-            self.keycode_picker.key_legend_layout = self.app_settings.key_legend_layout;
+            self.keycode_picker.key_legend_layout = self.app_settings.key_legend_layout.clone();
             self.keycode_picker.show_shifted_number_symbols =
                 self.app_settings.show_shifted_number_symbols;
             let macro_data_state = self.picker_macro_data_state();

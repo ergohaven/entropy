@@ -1395,7 +1395,7 @@ mod tests {
             &[],
             &[],
             &[],
-            crate::keycode::KeyLegendLayout::English,
+            &crate::keycode::KeyLegendLayout::English,
         );
         let tooltip =
             crate::app::key_binding_tooltip_with_macro_names(binding, &[], &[], &[], &[], &[]);

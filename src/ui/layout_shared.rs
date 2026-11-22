@@ -652,7 +652,7 @@ pub(crate) fn number_row_shifted_label(
     binding: crate::keyboard::KeyBinding,
     label: String,
     enabled: bool,
-    key_legend_layout: KeyLegendLayout,
+    key_legend_layout: &KeyLegendLayout,
 ) -> String {
     if enabled {
         if let Some(label) =
@@ -695,7 +695,7 @@ mod tests {
                 crate::keyboard::KeyBinding::Vial(code),
                 "2".to_owned(),
                 enabled,
-                KeyLegendLayout::English,
+                &KeyLegendLayout::English,
             )
         };
         assert_eq!(label(0x001F, true), "@\n2");
@@ -711,7 +711,7 @@ mod tests {
             (KeyLegendLayout::Russian, "@  \"\n2", "#  №\n3"),
             (KeyLegendLayout::RussianPrimary, "\"  @\n2", "№  #\n3"),
         ] {
-            let label = |value| crate::keycode::shifted_number_row_legend(value, layout).unwrap();
+            let label = |value| crate::keycode::shifted_number_row_legend(value, &layout).unwrap();
             assert_eq!(label(0x001E), "!\n1");
             assert_eq!(label(0x001F), digit_two);
             assert_eq!(label(0x0020), digit_three);

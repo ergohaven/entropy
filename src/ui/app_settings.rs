@@ -304,7 +304,7 @@ impl EntropyApp {
                     }
                 }
                 1 => {
-                    let mut selected_key_legend_layout = self.app_settings.key_legend_layout;
+                    let mut selected_key_legend_layout = self.app_settings.key_legend_layout.clone();
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
                         content_width,

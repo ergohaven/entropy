@@ -511,7 +511,7 @@ impl EntropyApp {
                             &self.layer_names,
                             &self.keycode_picker.macro_names,
                             &self.keycode_picker.tap_dance_names,
-                            self.app_settings.key_legend_layout,
+                            &self.app_settings.key_legend_layout,
                         )
                     };
                     let label = inherited_key_label_or_marker(label);
@@ -519,7 +519,7 @@ impl EntropyApp {
                         fallback_binding,
                         label,
                         self.app_settings.show_shifted_number_symbols,
-                        self.app_settings.key_legend_layout,
+                        &self.app_settings.key_legend_layout,
                     );
                     draw_key_label_dimmed(
                         painter,
@@ -541,10 +541,10 @@ impl EntropyApp {
                         &self.layer_names,
                         &self.keycode_picker.macro_names,
                         &self.keycode_picker.tap_dance_names,
-                        self.app_settings.key_legend_layout,
+                        &self.app_settings.key_legend_layout,
                     ),
                     self.app_settings.show_shifted_number_symbols,
-                    self.app_settings.key_legend_layout,
+                    &self.app_settings.key_legend_layout,
                 );
                 draw_key_label(painter, draw_rect, &label, dark, key.rotation.to_radians());
             }
@@ -560,7 +560,7 @@ impl EntropyApp {
         let encoder_layer_names = self.layer_names.clone();
         let encoder_macro_names = self.keycode_picker.macro_names.clone();
         let encoder_tap_dance_names = self.keycode_picker.tap_dance_names.clone();
-        let encoder_key_legend_layout = self.app_settings.key_legend_layout;
+        let encoder_key_legend_layout = self.app_settings.key_legend_layout.clone();
         let encoder_value_label = |kc: u16| -> String {
             keycode_label_with_macro_names(
                 kc,
@@ -568,7 +568,7 @@ impl EntropyApp {
                 &encoder_layer_names,
                 &encoder_macro_names,
                 &encoder_tap_dance_names,
-                encoder_key_legend_layout,
+                &encoder_key_legend_layout,
             )
             .replace('\n', " ")
         };
@@ -990,7 +990,7 @@ impl EntropyApp {
                                     &self.layer_names,
                                     &self.keycode_picker.macro_names,
                                     &self.keycode_picker.tap_dance_names,
-                                    self.app_settings.key_legend_layout,
+                                    &self.app_settings.key_legend_layout,
                                 ),
                                 true,
                             )
@@ -1005,7 +1005,7 @@ impl EntropyApp {
                                 &self.layer_names,
                                 &self.keycode_picker.macro_names,
                                 &self.keycode_picker.tap_dance_names,
-                                self.app_settings.key_legend_layout,
+                                &self.app_settings.key_legend_layout,
                             ),
                             false,
                         )

@@ -1,0 +1,56 @@
+# Physical positions and Base/Shift outputs from https://kbdlayout.info/kbdfr/
+# Usage 32 is the ISO position sharing Windows scan code 2B with usage 31.
+id = "fr-azerty-legacy"
+language = "French"
+name = "AZERTY (Legacy)"
+
+[keys]
+"04" = { base = "q", shift = "Q" }
+"05" = { base = "b", shift = "B" }
+"06" = { base = "c", shift = "C" }
+"07" = { base = "d", shift = "D" }
+"08" = { base = "e", shift = "E" }
+"09" = { base = "f", shift = "F" }
+"0a" = { base = "g", shift = "G" }
+"0b" = { base = "h", shift = "H" }
+"0c" = { base = "i", shift = "I" }
+"0d" = { base = "j", shift = "J" }
+"0e" = { base = "k", shift = "K" }
+"0f" = { base = "l", shift = "L" }
+"10" = { base = ",", shift = "?" }
+"11" = { base = "n", shift = "N" }
+"12" = { base = "o", shift = "O" }
+"13" = { base = "p", shift = "P" }
+"14" = { base = "a", shift = "A" }
+"15" = { base = "r", shift = "R" }
+"16" = { base = "s", shift = "S" }
+"17" = { base = "t", shift = "T" }
+"18" = { base = "u", shift = "U" }
+"19" = { base = "v", shift = "V" }
+"1a" = { base = "z", shift = "Z" }
+"1b" = { base = "x", shift = "X" }
+"1c" = { base = "y", shift = "Y" }
+"1d" = { base = "w", shift = "W" }
+"1e" = { base = "&", shift = "1" }
+"1f" = { base = "é", shift = "2" }
+"20" = { base = "\"", shift = "3" }
+"21" = { base = "'", shift = "4" }
+"22" = { base = "(", shift = "5" }
+"23" = { base = "-", shift = "6" }
+"24" = { base = "è", shift = "7" }
+"25" = { base = "_", shift = "8" }
+"26" = { base = "ç", shift = "9" }
+"27" = { base = "à", shift = "0" }
+"2d" = { base = ")", shift = "°" }
+"2e" = { base = "=", shift = "+" }
+"2f" = { base = { dead = "^" }, shift = { dead = "¨" } }
+"30" = { base = "$", shift = "£" }
+"31" = { base = "*", shift = "µ" }
+"32" = { base = "*", shift = "µ" }
+"33" = { base = "m", shift = "M" }
+"34" = { base = "ù", shift = "%" }
+"35" = { base = "²" }
+"36" = { base = ";", shift = "." }
+"37" = { base = ":", shift = "/" }
+"38" = { base = "!", shift = "§" }
+"64" = { base = "<", shift = ">" }

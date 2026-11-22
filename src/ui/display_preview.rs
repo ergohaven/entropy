@@ -984,7 +984,7 @@ impl EntropyApp {
                 &self.layer_names,
                 &self.keycode_picker.macro_names,
                 &self.keycode_picker.tap_dance_names,
-                self.app_settings.key_legend_layout,
+                &self.app_settings.key_legend_layout,
             )),
         )
     }
@@ -1013,7 +1013,7 @@ impl EntropyApp {
                 &self.layer_names,
                 &self.keycode_picker.macro_names,
                 &self.keycode_picker.tap_dance_names,
-                self.app_settings.key_legend_layout,
+                &self.app_settings.key_legend_layout,
             )),
         )
     }

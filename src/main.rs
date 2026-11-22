@@ -20,6 +20,7 @@ mod hid;
 mod i18n;
 mod integration_icons;
 mod keyboard;
+mod key_legends;
 mod keycode;
 mod keycode_picker;
 #[cfg(test)]

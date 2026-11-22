@@ -24,7 +24,7 @@ pub fn gui_mod_name() -> &'static str {
     gui_name_for_target_os(std::env::consts::OS)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
+#[derive(Clone, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
 #[serde(rename_all = "snake_case")]
 #[derive(Default)]
 pub enum KeyLegendLayout {
@@ -32,36 +32,52 @@ pub enum KeyLegendLayout {
     English,
     Russian,
     RussianPrimary,
+    Catalog(String),
 }
 
 impl KeyLegendLayout {
     pub const ALL: [KeyLegendLayout; 2] = [KeyLegendLayout::English, KeyLegendLayout::Russian];
 
-    pub fn i18n_key(self) -> &'static str {
+    pub fn i18n_key(&self) -> &'static str {
         match self {
-            KeyLegendLayout::English => "ui.key_legends_english",
+            KeyLegendLayout::English | KeyLegendLayout::Catalog(_) => "ui.key_legends_english",
             KeyLegendLayout::Russian | KeyLegendLayout::RussianPrimary => "ui.key_legends_russian",
         }
     }
 
-    pub fn is_multilingual(self) -> bool {
-        !matches!(self, KeyLegendLayout::English)
+    pub fn is_multilingual(&self) -> bool {
+        self.order_i18n_key().is_some()
     }
 
-    pub fn order_i18n_key(self) -> Option<&'static str> {
+    pub fn order_i18n_key(&self) -> Option<&'static str> {
         match self {
-            KeyLegendLayout::English => None,
+            KeyLegendLayout::English | KeyLegendLayout::Catalog(_) => None,
             KeyLegendLayout::Russian => Some("main_menu.key_legends_english_first"),
             KeyLegendLayout::RussianPrimary => Some("main_menu.key_legends_russian_first"),
         }
     }
 
-    pub fn toggled_order(self) -> Self {
+    pub fn toggled_order(&self) -> Self {
         match self {
-            KeyLegendLayout::English => KeyLegendLayout::English,
+            KeyLegendLayout::English | KeyLegendLayout::Catalog(_) => self.clone(),
             KeyLegendLayout::Russian => KeyLegendLayout::RussianPrimary,
             KeyLegendLayout::RussianPrimary => KeyLegendLayout::Russian,
         }
+    }
+    pub(crate) fn catalog_layout(&self) -> Option<&'static crate::key_legends::Layout> {
+        match self {
+            Self::English => None,
+            Self::Russian | Self::RussianPrimary => {
+                crate::key_legends::layout(crate::key_legends::STANDARD_RUSSIAN)
+            }
+            Self::Catalog(id) => crate::key_legends::layout(id),
+        }
+    }
+
+    pub(crate) fn caption(&self, value: u16, show_number_shift: bool) -> Option<String> {
+        let layout = self.catalog_layout()?;
+        let secondary_first = matches!(self, Self::RussianPrimary);
+        crate::key_legends::caption(value, layout, secondary_first, show_number_shift)
     }
 }
 
@@ -2024,7 +2040,7 @@ pub fn keycode_label_with_names_and_layout(
     value: u16,
     custom: &[CustomKeycode],
     layer_names: &[String],
-    key_legend_layout: KeyLegendLayout,
+    key_legend_layout: &KeyLegendLayout,
 ) -> String {
     apply_key_legend_layout(
         value,
@@ -2240,146 +2256,19 @@ pub fn keycode_label(value: u16) -> String {
 fn apply_key_legend_layout(
     value: u16,
     label: String,
-    key_legend_layout: KeyLegendLayout,
+    key_legend_layout: &KeyLegendLayout,
 ) -> String {
-    match key_legend_layout {
-        KeyLegendLayout::English => label,
-        KeyLegendLayout::Russian => russian_key_legend(value, false).unwrap_or(label),
-        KeyLegendLayout::RussianPrimary => russian_key_legend(value, true).unwrap_or(label),
-    }
+    key_legend_layout.caption(value, false).unwrap_or(label)
 }
 
-fn dual_legend(primary: &str, secondary: &str) -> String {
-    format!("{}\n{}", primary, secondary)
-}
-
-fn symbol_legend(base: &str, english: &str, russian: &str, russian_primary: bool) -> String {
-    let shifted = if english == russian {
-        english.to_string()
-    } else if russian_primary {
-        format!("{}  {}", russian, english)
-    } else {
-        format!("{}  {}", english, russian)
-    };
-    format!("{}\n{}", shifted, base)
-}
-
-pub(crate) fn shifted_number_row_legend(value: u16, layout: KeyLegendLayout) -> Option<String> {
-    if !(0x001E..=0x0027).contains(&value) {
+pub(crate) fn shifted_number_row_legend(value: u16, layout: &KeyLegendLayout) -> Option<String> {
+    if !crate::key_legends::is_number_row(value) {
         return None;
     }
-    let (digit, english) = printable_output_for_hid(value, KeyOutputLayout::English)?;
-    let english = english?.to_string();
-    let digit = digit.to_string();
-    if layout == KeyLegendLayout::English {
-        return Some(dual_legend(&english, &digit));
-    }
-    let (_, russian) = printable_output_for_hid(value, KeyOutputLayout::Russian)?;
-    Some(symbol_legend(
-        &digit,
-        &english,
-        &russian?.to_string(),
-        layout == KeyLegendLayout::RussianPrimary,
-    ))
-}
-
-fn shifted_symbol_legend(english: &str, russian: &str, russian_primary: bool) -> String {
-    if english == russian {
-        english.to_string()
-    } else if russian_primary {
-        format!("{}\n{}", russian, english)
-    } else {
-        format!("{}\n{}", english, russian)
-    }
-}
-
-fn russian_key_legend(value: u16, russian_primary: bool) -> Option<String> {
-    // Physical-style legends: both English and Russian legends are shown in the
-    // same key-position system. The app setting controls which one is primary.
-    let pair = |english: &str, russian: &str| {
-        if russian_primary {
-            dual_legend(russian, english)
-        } else {
-            dual_legend(english, russian)
-        }
-    };
-    let symbol = |base: &str, english: &str, russian: &str| {
-        symbol_legend(base, english, russian, russian_primary)
-    };
-    let shifted_symbol =
-        |english: &str, russian: &str| shifted_symbol_legend(english, russian, russian_primary);
-
-    match value {
-        0x0004 => Some(pair("A", "Ф")),
-        0x0005 => Some(pair("B", "И")),
-        0x0006 => Some(pair("C", "С")),
-        0x0007 => Some(pair("D", "В")),
-        0x0008 => Some(pair("E", "У")),
-        0x0009 => Some(pair("F", "А")),
-        0x000A => Some(pair("G", "П")),
-        0x000B => Some(pair("H", "Р")),
-        0x000C => Some(pair("I", "Ш")),
-        0x000D => Some(pair("J", "О")),
-        0x000E => Some(pair("K", "Л")),
-        0x000F => Some(pair("L", "Д")),
-        0x0010 => Some(pair("M", "Ь")),
-        0x0011 => Some(pair("N", "Т")),
-        0x0012 => Some(pair("O", "Щ")),
-        0x0013 => Some(pair("P", "З")),
-        0x0014 => Some(pair("Q", "Й")),
-        0x0015 => Some(pair("R", "К")),
-        0x0016 => Some(pair("S", "Ы")),
-        0x0017 => Some(pair("T", "Е")),
-        0x0018 => Some(pair("U", "Г")),
-        0x0019 => Some(pair("V", "М")),
-        0x001A => Some(pair("W", "Ц")),
-        0x001B => Some(pair("X", "Ч")),
-        0x001C => Some(pair("Y", "Н")),
-        0x001D => Some(pair("Z", "Я")),
-
-        0x001E => Some("1".into()),
-        0x001F => Some("2".into()),
-        0x0020 => Some("3".into()),
-        0x0021 => Some("4".into()),
-        0x0022 => Some("5".into()),
-        0x0023 => Some("6".into()),
-        0x0024 => Some("7".into()),
-        0x0025 => Some("8".into()),
-        0x0026 => Some("9".into()),
-        0x0027 => Some("0".into()),
-        0x002D => Some(symbol("-", "_", "_")),
-        0x002E => Some(symbol("=", "+", "+")),
-        0x002F => Some(symbol("[", "{", "Х")),
-        0x0030 => Some(symbol("]", "}", "Ъ")),
-        0x0033 => Some(symbol(";", ":", "Ж")),
-        0x0034 => Some(symbol("'", "\"", "Э")),
-        0x0035 => Some(symbol("`", "~", "Ё")),
-        0x0036 => Some(symbol(",", "<", "Б")),
-        0x0037 => Some(symbol(".", ">", "Ю")),
-        0x0038 => Some(symbol("/", "?", ".")),
-
-        0x021E => Some(shifted_symbol("!", "!")),
-        0x021F => Some(shifted_symbol("@", "\"")),
-        0x0220 => Some(shifted_symbol("#", "№")),
-        0x0221 => Some(shifted_symbol("$", ";")),
-        0x0222 => Some(shifted_symbol("%", "%")),
-        0x0223 => Some(shifted_symbol("^", ":")),
-        0x0224 => Some(shifted_symbol("&", "?")),
-        0x0225 => Some(shifted_symbol("*", "*")),
-        0x0226 => Some(shifted_symbol("(", "(")),
-        0x0227 => Some(shifted_symbol(")", ")")),
-        0x022D => Some(shifted_symbol("_", "_")),
-        0x022E => Some(shifted_symbol("+", "+")),
-        0x022F => Some(shifted_symbol("{", "Х")),
-        0x0230 => Some(shifted_symbol("}", "Ъ")),
-        0x0233 => Some(shifted_symbol(":", "Ж")),
-        0x0234 => Some(shifted_symbol("\"", "Э")),
-        0x0235 => Some(shifted_symbol("~", "Ё")),
-        0x0236 => Some(shifted_symbol("<", "Б")),
-        0x0237 => Some(shifted_symbol(">", "Ю")),
-        0x0238 => Some(shifted_symbol("?", ".")),
-        _ => None,
-    }
+    layout.caption(value, true).or_else(|| {
+        let (digit, shift) = printable_output_for_hid(value, KeyOutputLayout::English)?;
+        Some(format!("{}\n{digit}", shift?))
+    })
 }
 
 /// Keyboard layout selected in the operating system, i.e. what the host
@@ -2393,15 +2282,6 @@ pub enum KeyOutputLayout {
     #[default]
     English,
     Russian,
-}
-
-impl From<KeyLegendLayout> for KeyOutputLayout {
-    fn from(legend: KeyLegendLayout) -> Self {
-        match legend {
-            KeyLegendLayout::English => Self::English,
-            KeyLegendLayout::Russian | KeyLegendLayout::RussianPrimary => Self::Russian,
-        }
-    }
 }
 
 /// Characters a keycode types in the given input layout: the direct output and
@@ -2420,7 +2300,7 @@ pub fn printable_output(value: u16, layout: KeyOutputLayout) -> Option<(char, Op
 
 /// Unwraps `LSFT(kc)`/`RSFT(kc)` QMK keycodes; other modifier combinations do
 /// not have a plain printable output and are rejected.
-fn shift_wrapped_base_keycode(value: u16) -> Option<u16> {
+pub(crate) fn shift_wrapped_base_keycode(value: u16) -> Option<u16> {
     if !(0x0100..0x2000).contains(&value) {
         return None;
     }
@@ -2440,7 +2320,10 @@ fn tap_base_keycode(value: u16) -> u16 {
     value
 }
 
-fn printable_output_for_hid(keycode: u16, layout: KeyOutputLayout) -> Option<(char, Option<char>)> {
+pub(crate) fn printable_output_for_hid(
+    keycode: u16,
+    layout: KeyOutputLayout,
+) -> Option<(char, Option<char>)> {
     if let Some(index) = keycode.checked_sub(0x0004).filter(|index| *index < 26) {
         let letter = match layout {
             KeyOutputLayout::English => char::from(b'a' + index as u8),
@@ -2945,7 +2828,7 @@ mod tests {
         ] {
             for layout in [KeyLegendLayout::English, KeyLegendLayout::RussianPrimary] {
                 assert_eq!(
-                    keycode_label_with_names_and_layout(value, &[], &[], layout),
+                    keycode_label_with_names_and_layout(value, &[], &[], &layout),
                     expected
                 );
             }
@@ -2994,7 +2877,7 @@ mod tests {
     #[test]
     fn layer_lock_uses_a_readable_keycap_label() {
         assert_eq!(
-            keycode_label_with_names_and_layout(0x7C7B, &[], &[], KeyLegendLayout::English,),
+            keycode_label_with_names_and_layout(0x7C7B, &[], &[], &KeyLegendLayout::English,),
             "Layer\nLock"
         );
     }
@@ -3011,7 +2894,7 @@ mod tests {
                 (0x342D, "Alt\n_\n-"),
             ] {
                 assert_eq!(
-                    keycode_label_with_names_and_layout(value, &[], &[], layout),
+                    keycode_label_with_names_and_layout(value, &[], &[], &layout),
                     expected,
                 );
                 assert_eq!(
@@ -3159,17 +3042,6 @@ mod tests {
         assert_eq!(printable_output(0x0104, KeyOutputLayout::English), None);
     }
 
-    #[test]
-    fn key_output_layout_follows_the_selected_legend_family() {
-        assert_eq!(
-            KeyOutputLayout::from(KeyLegendLayout::English),
-            KeyOutputLayout::English
-        );
-        assert_eq!(
-            KeyOutputLayout::from(KeyLegendLayout::RussianPrimary),
-            KeyOutputLayout::Russian
-        );
-    }
     #[test]
     fn mod_tap_tooltips_decode_gui_chords() {
         for (value, modifier) in [(0x2904, "Ctrl"), (0x2A04, "Shift")] {

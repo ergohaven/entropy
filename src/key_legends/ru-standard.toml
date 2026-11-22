@@ -1,0 +1,56 @@
+# Physical positions and Base/Shift outputs from https://kbdlayout.info/kbdru/
+# Usage 32 is the ISO position sharing Windows scan code 2B with usage 31.
+id = "ru-standard"
+language = "Russian"
+name = "Standard"
+
+[keys]
+"04" = { base = "ф", shift = "Ф" }
+"05" = { base = "и", shift = "И" }
+"06" = { base = "с", shift = "С" }
+"07" = { base = "в", shift = "В" }
+"08" = { base = "у", shift = "У" }
+"09" = { base = "а", shift = "А" }
+"0a" = { base = "п", shift = "П" }
+"0b" = { base = "р", shift = "Р" }
+"0c" = { base = "ш", shift = "Ш" }
+"0d" = { base = "о", shift = "О" }
+"0e" = { base = "л", shift = "Л" }
+"0f" = { base = "д", shift = "Д" }
+"10" = { base = "ь", shift = "Ь" }
+"11" = { base = "т", shift = "Т" }
+"12" = { base = "щ", shift = "Щ" }
+"13" = { base = "з", shift = "З" }
+"14" = { base = "й", shift = "Й" }
+"15" = { base = "к", shift = "К" }
+"16" = { base = "ы", shift = "Ы" }
+"17" = { base = "е", shift = "Е" }
+"18" = { base = "г", shift = "Г" }
+"19" = { base = "м", shift = "М" }
+"1a" = { base = "ц", shift = "Ц" }
+"1b" = { base = "ч", shift = "Ч" }
+"1c" = { base = "н", shift = "Н" }
+"1d" = { base = "я", shift = "Я" }
+"1e" = { base = "1", shift = "!" }
+"1f" = { base = "2", shift = "\"" }
+"20" = { base = "3", shift = "№" }
+"21" = { base = "4", shift = ";" }
+"22" = { base = "5", shift = "%" }
+"23" = { base = "6", shift = ":" }
+"24" = { base = "7", shift = "?" }
+"25" = { base = "8", shift = "*" }
+"26" = { base = "9", shift = "(" }
+"27" = { base = "0", shift = ")" }
+"2d" = { base = "-", shift = "_" }
+"2e" = { base = "=", shift = "+" }
+"2f" = { base = "х", shift = "Х" }
+"30" = { base = "ъ", shift = "Ъ" }
+"31" = { base = "\\", shift = "/" }
+"32" = { base = "\\", shift = "/" }
+"33" = { base = "ж", shift = "Ж" }
+"34" = { base = "э", shift = "Э" }
+"35" = { base = "ё", shift = "Ё" }
+"36" = { base = "б", shift = "Б" }
+"37" = { base = "ю", shift = "Ю" }
+"38" = { base = ".", shift = "," }
+"64" = { base = "\\", shift = "/" }

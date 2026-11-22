@@ -128,11 +128,10 @@ fn export_theme_label(lang: crate::i18n::Language, theme: LayoutImageExportTheme
 
 fn export_key_legend_label(
     lang: crate::i18n::Language,
-    key_legend_layout: KeyLegendLayout,
+    key_legend_layout: &KeyLegendLayout,
 ) -> &'static str {
     match (lang, key_legend_layout) {
-        (crate::i18n::Language::Russian, KeyLegendLayout::English) => "English",
-        (crate::i18n::Language::English, KeyLegendLayout::English) => "English",
+        (_, KeyLegendLayout::English | KeyLegendLayout::Catalog(_)) => "English",
         (crate::i18n::Language::Russian, KeyLegendLayout::Russian) => "Русская: EN сверху",
         (crate::i18n::Language::English, KeyLegendLayout::Russian) => "Russian: EN first",
         (crate::i18n::Language::Russian, KeyLegendLayout::RussianPrimary) => "Русская: RU сверху",
@@ -188,7 +187,7 @@ fn export_keycode_label_with_macro_names(
     layer_names: &[String],
     macro_names: &[String],
     tap_dance_names: &[String],
-    key_legend_layout: KeyLegendLayout,
+    key_legend_layout: &KeyLegendLayout,
 ) -> String {
     export_safe_key_label(keycode_label_with_macro_names(
         value,
@@ -206,7 +205,7 @@ fn export_key_binding_label_with_macro_names(
     layer_names: &[String],
     macro_names: &[String],
     tap_dance_names: &[String],
-    key_legend_layout: KeyLegendLayout,
+    key_legend_layout: &KeyLegendLayout,
     show_shifted_number_symbols: bool,
 ) -> String {
     export_safe_key_label(number_row_shifted_label(
@@ -377,7 +376,7 @@ fn draw_key_legend_dropdown(
     let dropdown_resp = crate::ui_style::modern_dropdown_button_sized(
         ui,
         dropdown_id,
-        export_key_legend_label(lang, *selected_layout),
+        export_key_legend_label(lang, selected_layout),
         ui.visuals().text_color(),
         metrics.settings_control_width(),
         metrics.settings_control_height(),
@@ -420,7 +419,7 @@ fn draw_key_legend_dropdown(
                         option_rect.center().y,
                     ),
                     egui::Align2::LEFT_CENTER,
-                    export_key_legend_label(lang, layout),
+                    export_key_legend_label(lang, &layout),
                     FontId::proportional(metrics.value(12.0)),
                     if selected {
                         ui.visuals().text_color()
@@ -637,8 +636,11 @@ impl EntropyApp {
                     }
                 }
                 2 => {
-                    let before = self.app_settings.layout_image_export.key_legend_layout;
-                    let mut key_legend_layout = before;
+                    let mut key_legend_layout = self
+                        .app_settings
+                        .layout_image_export
+                        .key_legend_layout
+                        .clone();
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
                         content_width,
@@ -657,7 +659,8 @@ impl EntropyApp {
                             )
                         },
                     );
-                    if key_legend_layout != before {
+                    if key_legend_layout != self.app_settings.layout_image_export.key_legend_layout
+                    {
                         self.app_settings.layout_image_export.key_legend_layout = key_legend_layout;
                         save_app_settings(&self.app_settings);
                     }
@@ -1061,7 +1064,7 @@ impl EntropyApp {
                             &self.layer_names,
                             &self.keycode_picker.macro_names,
                             &self.keycode_picker.tap_dance_names,
-                            self.app_settings.layout_image_export.key_legend_layout,
+                            &self.app_settings.layout_image_export.key_legend_layout,
                             self.app_settings.show_shifted_number_symbols,
                         ),
                         true,
@@ -1076,7 +1079,7 @@ impl EntropyApp {
                         &self.layer_names,
                         &self.keycode_picker.macro_names,
                         &self.keycode_picker.tap_dance_names,
-                        self.app_settings.layout_image_export.key_legend_layout,
+                        &self.app_settings.layout_image_export.key_legend_layout,
                         self.app_settings.show_shifted_number_symbols,
                     ),
                     false,
@@ -1241,7 +1244,7 @@ impl EntropyApp {
                             &self.layer_names,
                             &self.keycode_picker.macro_names,
                             &self.keycode_picker.tap_dance_names,
-                            self.app_settings.layout_image_export.key_legend_layout,
+                            &self.app_settings.layout_image_export.key_legend_layout,
                             self.app_settings.show_shifted_number_symbols,
                         ),
                         true,
@@ -1256,7 +1259,7 @@ impl EntropyApp {
                         &self.layer_names,
                         &self.keycode_picker.macro_names,
                         &self.keycode_picker.tap_dance_names,
-                        self.app_settings.layout_image_export.key_legend_layout,
+                        &self.app_settings.layout_image_export.key_legend_layout,
                         self.app_settings.show_shifted_number_symbols,
                     ),
                     false,
@@ -1575,7 +1578,7 @@ fn export_encoder_press_label(
             &app.layer_names,
             &app.keycode_picker.macro_names,
             &app.keycode_picker.tap_dance_names,
-            app.app_settings.layout_image_export.key_legend_layout,
+            &app.app_settings.layout_image_export.key_legend_layout,
         )
         .replace('\n', " "),
         dimmed,
@@ -1654,7 +1657,7 @@ fn draw_encoder_export(
             &app.layer_names,
             &app.keycode_picker.macro_names,
             &app.keycode_picker.tap_dance_names,
-            app.app_settings.layout_image_export.key_legend_layout,
+            &app.app_settings.layout_image_export.key_legend_layout,
         )
         .replace('\n', " ")
     };
@@ -1828,7 +1831,7 @@ fn write_encoder_svg(
             &app.layer_names,
             &app.keycode_picker.macro_names,
             &app.keycode_picker.tap_dance_names,
-            app.app_settings.layout_image_export.key_legend_layout,
+            &app.app_settings.layout_image_export.key_legend_layout,
         )
         .replace('\n', " ")
     };
@@ -1931,7 +1934,9 @@ fn write_key_label_svg(
 ) -> anyhow::Result<()> {
     let lines: Vec<&str> = label
         .lines()
-        .map(str::trim)
+        .map(|line| {
+            line.trim_matches(|ch: char| ch.is_whitespace() && ch != crate::key_legends::EMPTY_LEGEND_SLOT)
+        })
         .filter(|line| !line.is_empty())
         .collect();
     if lines.is_empty() {
@@ -2064,7 +2069,9 @@ fn draw_key_label_export(
 ) {
     let lines: Vec<&str> = label
         .lines()
-        .map(str::trim)
+        .map(|line| {
+            line.trim_matches(|ch: char| ch.is_whitespace() && ch != crate::key_legends::EMPTY_LEGEND_SLOT)
+        })
         .filter(|line| !line.is_empty())
         .collect();
     if lines.is_empty() {

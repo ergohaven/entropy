@@ -124,7 +124,7 @@ pub(super) fn popup_key_button_label(
     kc: &crate::keycode::Keycode,
     layer_names: &[String],
     friendly_mods: bool,
-    key_legend_layout: KeyLegendLayout,
+    key_legend_layout: &KeyLegendLayout,
 ) -> String {
     if matches!(kc.category, KeycodeCategory::Numpad) {
         return match kc.name {
@@ -193,7 +193,7 @@ pub(super) fn show_grouped_popup_key_buttons(
     layer_names: &[String],
     friendly_mods: bool,
     language: crate::i18n::Language,
-    key_legend_layout: KeyLegendLayout,
+    key_legend_layout: &KeyLegendLayout,
 ) -> Option<u16> {
     let default_group_order = [
         "Letters",

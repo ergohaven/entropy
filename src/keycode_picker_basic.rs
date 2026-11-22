@@ -131,7 +131,7 @@ fn qwerty_picker_grid_keys_for_values(
 fn qwerty_picker_key_label(
     value: u16,
     fallback_label: &str,
-    key_legend_layout: KeyLegendLayout,
+    key_legend_layout: &KeyLegendLayout,
     show_shifted_number_symbols: bool,
     layer_names: &[String],
 ) -> String {
@@ -139,7 +139,7 @@ fn qwerty_picker_key_label(
         if let Some(label) = crate::keycode::shifted_number_row_legend(value, key_legend_layout) {
             return label;
         }
-        if key_legend_layout == KeyLegendLayout::English {
+        if key_legend_layout == &KeyLegendLayout::English {
             match value {
                 0x0035 => return "~\n`".to_string(),
                 0x002D => return "_\n-".to_string(),
@@ -172,7 +172,7 @@ impl KeycodePicker {
                 let label = qwerty_picker_key_label(
                     value,
                     key.label,
-                    self.key_legend_layout,
+                    &self.key_legend_layout,
                     self.show_shifted_number_symbols,
                     &self.layer_names,
                 );
@@ -370,7 +370,7 @@ impl KeycodePicker {
             let label = qwerty_picker_key_label(
                 value,
                 key.label,
-                self.key_legend_layout,
+                &self.key_legend_layout,
                 self.show_shifted_number_symbols,
                 &self.layer_names,
             );
@@ -430,7 +430,7 @@ impl KeycodePicker {
                 &self.layer_names,
                 friendly_mods,
                 self.language,
-                self.key_legend_layout,
+                &self.key_legend_layout,
             ),
         }
     }

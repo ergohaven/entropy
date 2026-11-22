@@ -470,7 +470,7 @@ fn apply_app_settings_migrations(settings: &mut AppSettings, settings_data: Opti
         .as_ref()
         .is_some_and(|fields| fields.contains_key("layout_image_export"));
     if !has_layout_image_export {
-        settings.layout_image_export.key_legend_layout = settings.key_legend_layout;
+        settings.layout_image_export.key_legend_layout = settings.key_legend_layout.clone();
     }
 }
 

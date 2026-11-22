@@ -296,7 +296,7 @@ impl EntropyApp {
         layer_names: &[String],
         macro_names: &[String],
         tap_dance_names: &[String],
-        key_legend_layout: KeyLegendLayout,
+        key_legend_layout: &KeyLegendLayout,
         show_shifted_number_symbols: bool,
         layout_options_value: Option<u32>,
         encoder_visibility: &[bool],

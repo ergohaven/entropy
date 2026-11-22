@@ -328,7 +328,7 @@ mod app_settings_tests {
     fn tap_dance_keycap_keeps_slot_label_and_tooltip_keeps_custom_name() {
         let names = &["t1".to_owned()];
         assert_eq!(
-            keycode_label_with_macro_names(0x5700, &[], &[], &[], names, KeyLegendLayout::English),
+            keycode_label_with_macro_names(0x5700, &[], &[], &[], names, &KeyLegendLayout::English),
             "TD0"
         );
         assert_eq!(
@@ -336,7 +336,7 @@ mod app_settings_tests {
             "t1 — tap dance 0"
         );
         assert_eq!(
-            keycode_label_with_macro_names(0x5700, &[], &[], &[], &[], KeyLegendLayout::English),
+            keycode_label_with_macro_names(0x5700, &[], &[], &[], &[], &KeyLegendLayout::English),
             "TD0"
         );
     }
@@ -388,7 +388,7 @@ pub(crate) fn keycode_label_with_macro_names(
     layer_names: &[String],
     macro_names: &[String],
     _tap_dance_names: &[String],
-    key_legend_layout: KeyLegendLayout,
+    key_legend_layout: &KeyLegendLayout,
 ) -> String {
     if (0x7700..=0x77FF).contains(&value) {
         let idx = (value - 0x7700) as usize;
@@ -436,7 +436,7 @@ pub(crate) fn key_binding_label_with_macro_names(
     layer_names: &[String],
     macro_names: &[String],
     tap_dance_names: &[String],
-    key_legend_layout: KeyLegendLayout,
+    key_legend_layout: &KeyLegendLayout,
 ) -> String {
     match binding {
         crate::keyboard::KeyBinding::Vial(value) => keycode_label_with_macro_names(
@@ -591,7 +591,7 @@ pub(crate) fn key_binding_tooltip_with_macro_names(
                     parts.tap_value(),
                     custom,
                     layer_names,
-                    KeyLegendLayout::English,
+                    &KeyLegendLayout::English,
                 )
                 .replace('\n', " ");
                 return format!(
