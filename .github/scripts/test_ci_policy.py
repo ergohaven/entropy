@@ -382,9 +382,28 @@ class GitAndTransportTests(unittest.TestCase):
                     self.p.changed_paths(dict(GITHUB_EVENT_NAME='push'), event)
 
     def test_real_git_diff_is_exercised(self):
-        head = self.p.git('rev-parse', 'HEAD')
-        paths = self.p.changed_paths(dict(GITHUB_EVENT_NAME='push'), dict(before=head, after=head))
-        self.assertEqual(paths, [])
+        # The workflow can use a shallow checkout while this test exercises a real diff.
+        with tempfile.TemporaryDirectory() as tmp:
+            repo = Path(tmp)
+            env = {key: value for key, value in os.environ.items() if not key.startswith('GIT_')}
+            env.update(GIT_DIR=str(repo / '.git'), GIT_WORK_TREE=str(repo),
+                       GIT_CONFIG_NOSYSTEM='1', GIT_CONFIG_GLOBAL=os.devnull)
+
+            def git(*args):
+                return subprocess.check_output(
+                    ['git', '-c', 'user.name=CI', '-c', 'user.email=ci@example.test', *args],
+                    cwd=repo, text=True,
+                ).strip()
+
+            with patch.dict(os.environ, env, clear=True):
+                git('init', '--quiet', '--object-format=sha1', str(repo))
+                before = git('commit-tree', git('write-tree'), '--no-gpg-sign', '-m', 'Base')
+                changed = repo / 'changed.txt'
+                changed.write_text('content\n', encoding='utf-8')
+                git('add', changed.name)
+                after = git('commit-tree', git('write-tree'), '--no-gpg-sign', '-p', before, '-m', 'Change')
+                paths = self.p.changed_paths(dict(GITHUB_EVENT_NAME='push'), dict(before=before, after=after))
+            self.assertEqual(paths, [changed.name])
 
     def test_signed_archive_redirect_drops_authorization(self):
         from unittest.mock import Mock
