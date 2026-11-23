@@ -176,7 +176,7 @@ fn firmware_key(target: &FirmwareReleaseTarget) -> String {
     let family = match target.family {
         FirmwareReleaseFamily::Rmk => "rmk",
         FirmwareReleaseFamily::Rynk => "rynk",
-        FirmwareReleaseFamily::RynkMigration => "rynk-migration",
+        FirmwareReleaseFamily::QmkMigration => "qmk-migration",
         FirmwareReleaseFamily::Qmk => "qmk",
     };
     format!("{family}:{}", target.asset_prefix)
@@ -200,7 +200,7 @@ struct PendingClick {
 
 fn notification_release_url(key: &str, version: &str) -> Option<String> {
     let repository = key.split_once(':').and_then(|(family, _)| match family {
-        "qmk" => Some("vial-qmk"),
+        "qmk" | "qmk-migration" => Some("vial-qmk"),
         "rmk" | "rynk" | "rynk-migration" => Some("rmk"),
         _ => None,
     })?;

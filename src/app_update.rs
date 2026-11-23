@@ -63,7 +63,7 @@ impl UpdateCheckResult {
 pub(crate) enum FirmwareReleaseFamily {
     Rmk,
     Rynk,
-    RynkMigration,
+    QmkMigration,
     Qmk,
 }
 
@@ -270,10 +270,10 @@ pub(crate) fn start_firmware_update_check(
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
             let outcome = match fetch_github_json(match worker_target.family {
-                FirmwareReleaseFamily::Rmk
-                | FirmwareReleaseFamily::Rynk
-                | FirmwareReleaseFamily::RynkMigration => RMK_RELEASES_API,
-                FirmwareReleaseFamily::Qmk => QMK_RELEASES_API,
+                FirmwareReleaseFamily::Rmk | FirmwareReleaseFamily::Rynk => RMK_RELEASES_API,
+                FirmwareReleaseFamily::Qmk | FirmwareReleaseFamily::QmkMigration => {
+                    QMK_RELEASES_API
+                }
             }) {
                 Ok(releases) => build_firmware_update_result(&worker_target, releases)
                     .map(FirmwareUpdateCheckOutcome::Success)
@@ -431,7 +431,7 @@ pub(crate) fn rmk_firmware_release_target(
     legacy_qube: bool,
     native_rmk_marker: bool,
 ) -> Option<FirmwareReleaseTarget> {
-    if vendor_id != ERGOHAVEN_VENDOR_ID {
+    if vendor_id != ERGOHAVEN_VENDOR_ID || phenom_qmk_asset_prefix(product_id).is_some() {
         return None;
     }
 
@@ -476,6 +476,16 @@ pub(crate) fn rynk_firmware_release_target(
     board_definition: &serde_json::Value,
     legacy_qube: bool,
 ) -> Option<FirmwareReleaseTarget> {
+    if vendor_id == ERGOHAVEN_VENDOR_ID && phenom_qmk_asset_prefix(product_id).is_some() {
+        return firmware_release_target(
+            vendor_id,
+            product_id,
+            firmware_version,
+            board_definition,
+            legacy_qube,
+            true,
+        );
+    }
     let mut target = rmk_firmware_release_target(
         vendor_id,
         product_id,
@@ -497,19 +507,6 @@ pub(crate) fn firmware_release_target(
     native_rmk_marker: bool,
 ) -> Option<FirmwareReleaseTarget> {
     let version = firmware_version?.trim();
-    // Phenom's maintained firmware is Rynk, even when the connected board
-    // still speaks Vial and its definition points at an old QMK release.
-    if vendor_id == ERGOHAVEN_VENDOR_ID {
-        if let Some(asset) = phenom_rmk_asset_prefix(product_id) {
-            parse_semver(version)?;
-            return Some(FirmwareReleaseTarget {
-                family: FirmwareReleaseFamily::RynkMigration,
-                current_version: version.to_owned(),
-                asset_prefix: asset.to_owned(),
-            });
-        }
-    }
-
     let firmware_name_is_rmk = vial_json
         .pointer("/firmware/name")
         .and_then(serde_json::Value::as_str)
@@ -517,6 +514,22 @@ pub(crate) fn firmware_release_target(
     let is_rmk = native_rmk_marker
         || numeric_version_parts(version).first() == Some(&0)
         || firmware_name_is_rmk;
+    // Official Phenom firmware is QMK/Vial while RMK distribution is paused.
+    // This selects the download, not the installed device's protocol/backend.
+    if vendor_id == ERGOHAVEN_VENDOR_ID {
+        if let Some(asset) = phenom_qmk_asset_prefix(product_id) {
+            parse_semver(version)?;
+            return Some(FirmwareReleaseTarget {
+                family: if is_rmk {
+                    FirmwareReleaseFamily::QmkMigration
+                } else {
+                    FirmwareReleaseFamily::Qmk
+                },
+                current_version: version.to_owned(),
+                asset_prefix: asset.to_owned(),
+            });
+        }
+    }
     let explicit_family = match vial_json.pointer("/entropy/firmwareUpdate/family") {
         None => None,
         Some(value) => Some(match value.as_str()? {
@@ -582,11 +595,11 @@ pub(crate) fn firmware_release_target(
     })
 }
 
-fn phenom_rmk_asset_prefix(product_id: u16) -> Option<&'static str> {
+fn phenom_qmk_asset_prefix(product_id: u16) -> Option<&'static str> {
     match product_id {
-        0x0052 => Some("phenom"),
-        0x0053 => Some("phenom-mini"),
-        0x0054 => Some("phenom-micro"),
+        0x0052 => Some("phenom_v1"),
+        0x0053 => Some("phenom_mini_v1"),
+        0x0054 => Some("phenom_micro_v1"),
         _ => None,
     }
 }
@@ -607,7 +620,7 @@ fn legacy_rmk_asset_prefix(product_id: u16, qube: bool) -> Option<&'static str> 
         (0x0071, _) => Some("k04-qube"),
         (0x0072, _) => Some("k04-mini-qube"),
         (0x0073, _) => Some("k04-micro-qube"),
-        _ => phenom_rmk_asset_prefix(product_id),
+        _ => None,
     }
 }
 
@@ -876,7 +889,7 @@ fn build_firmware_update_result(
         .filter(|release| !release.draft && !release.prerelease)
         .filter_map(|mut release| {
             let expected_asset = match target.family {
-                FirmwareReleaseFamily::Rynk | FirmwareReleaseFamily::RynkMigration => {
+                FirmwareReleaseFamily::Rynk => {
                     let version =
                         semver::Version::parse(release.tag_name.trim_start_matches('v')).ok()?;
                     if !version.pre.is_empty() || !version.build.is_empty() {
@@ -896,7 +909,7 @@ fn build_firmware_update_result(
                     let variant = if native_default { "-vial" } else { "" };
                     format!("{}{variant}-{}.zip", target.asset_prefix, release.tag_name)
                 }
-                FirmwareReleaseFamily::Qmk => {
+                FirmwareReleaseFamily::Qmk | FirmwareReleaseFamily::QmkMigration => {
                     format!("{}_{}.uf2", release.tag_name, target.asset_prefix)
                 }
             };
@@ -907,8 +920,8 @@ fn build_firmware_update_result(
             Some((numeric_version_parts(&release.tag_name), release, asset))
         })
         .max_by(|left, right| left.0.cmp(&right.0))?;
-    let relation = if target.family == FirmwareReleaseFamily::RynkMigration {
-        // The installed Vial and target Rynk versions are independent series.
+    let relation = if target.family == FirmwareReleaseFamily::QmkMigration {
+        // Installed RMK and target QMK versions belong to independent series.
         VersionRelation::UpdateAvailable
     } else {
         compare_firmware_versions(&target.current_version, &release.tag_name)
@@ -1714,12 +1727,12 @@ mod tests {
     }
 
     #[test]
-    fn vial_phenoms_offer_their_exact_rynk_migration_packages() {
+    fn qmk_phenoms_offer_their_exact_qmk_packages() {
         let assets = [
+            "4.2.0_phenom_v1.uf2",
+            "4.2.0_phenom_mini_v1.uf2",
+            "4.2.0_phenom_micro_v1.uf2",
             "phenom-v0.3.0.zip",
-            "phenom-mini-v0.3.0.zip",
-            "phenom-micro-v0.3.0.zip",
-            "phenom-vial-v0.3.0.zip",
         ];
         for (pid, legacy_asset, expected) in [
             (0x0052, "phenom_v1", assets[0]),
@@ -1737,42 +1750,79 @@ mod tests {
                 false,
             )
             .unwrap();
-            assert_eq!(target.family, FirmwareReleaseFamily::RynkMigration);
+            assert_eq!(target.family, FirmwareReleaseFamily::Qmk);
             assert_eq!(target.current_version, "4.0.5");
             let result = build_firmware_update_result(
                 &target,
                 vec![
-                    release("v0.3.0", false, false, &assets),
-                    release("v0.3.1", false, false, &["phenom-vial-v0.3.1.zip"]),
-                    release("v0.4.0", false, true, &["phenom-v0.4.0.zip"]),
+                    release("4.2.0", false, false, &assets),
+                    release("4.3.0", false, false, &["phenom-v0.3.0.zip"]),
+                    release("4.4.0", false, true, &["4.4.0_phenom_v1.uf2"]),
                 ],
             )
             .unwrap();
             assert_eq!(result.asset.name, expected);
-            assert_eq!(result.latest_version, "v0.3.0");
+            assert_eq!(result.latest_version, "4.2.0");
             assert_eq!(result.relation, VersionRelation::UpdateAvailable);
             assert!(is_trusted_release_url(&result.asset.url));
         }
     }
 
     #[test]
-    fn native_rynk_phenom_compares_rmk_versions() {
-        let target = rynk_firmware_release_target(
-            ERGOHAVEN_VENDOR_ID,
-            0x0052,
-            Some("0.3.0"),
-            &serde_json::json!({}),
-            false,
-        )
-        .unwrap();
-        assert_eq!(target.family, FirmwareReleaseFamily::Rynk);
-        let result = build_firmware_update_result(
-            &target,
-            vec![release("v0.3.0", false, false, &["phenom-v0.3.0.zip"])],
-        )
-        .unwrap();
-        assert_eq!(result.asset.name, "phenom-v0.3.0.zip");
-        assert_eq!(result.relation, VersionRelation::UpToDate);
+    fn installed_rmk_phenoms_offer_qmk_migration_without_comparing_families() {
+        for (pid, asset) in [
+            (0x0052, "phenom_v1"),
+            (0x0053, "phenom_mini_v1"),
+            (0x0054, "phenom_micro_v1"),
+        ] {
+            let definition = serde_json::json!({
+                "firmware": { "name": "RMK" },
+                "entropy": { "firmwareUpdate": { "asset": "phenom" } }
+            });
+            let native = rynk_firmware_release_target(
+                ERGOHAVEN_VENDOR_ID,
+                pid,
+                Some("9.0.0"),
+                &definition,
+                false,
+            )
+            .unwrap();
+            let vial = firmware_release_target(
+                ERGOHAVEN_VENDOR_ID,
+                pid,
+                Some("9.0.0"),
+                &definition,
+                false,
+                true,
+            )
+            .unwrap();
+            assert_eq!(native, vial);
+            assert_eq!(native.family, FirmwareReleaseFamily::QmkMigration);
+            assert_eq!(native.current_version, "9.0.0");
+            assert_eq!(native.asset_prefix, asset);
+            let expected = format!("4.2.0_{asset}.uf2");
+            let result = build_firmware_update_result(
+                &native,
+                vec![release(
+                    "4.2.0",
+                    false,
+                    false,
+                    &[&expected, "phenom-v0.3.0.zip"],
+                )],
+            )
+            .unwrap();
+            assert_eq!(result.asset.name, expected);
+            assert_eq!(result.relation, VersionRelation::UpdateAvailable);
+            assert!(rmk_firmware_release_target(
+                ERGOHAVEN_VENDOR_ID,
+                pid,
+                Some("0.3.0"),
+                &definition,
+                false,
+                true,
+            )
+            .is_none());
+        }
     }
 
     #[test]
