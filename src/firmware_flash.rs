@@ -1,9 +1,11 @@
-//! Guided UF2 updates for explicitly reviewed Rynk keyboard profiles.
+//! Guided UF2 updates for supported QMK and RMK release profiles.
 use anyhow::{bail, ensure, Context, Result};
+use crate::app::{firmware_release_target_for_usb, FirmwareReleaseFamily};
+use crate::device_session::DeviceSession;
+use crate::hid::HidDevice;
 use crate::rynk::{
     client::{RynkBoard, RynkClient, RynkTimeouts, RynkTransport},
     link::{LinkClient, PhysicalId, RynkLink},
-    session::RynkSession,
     transport,
 };
 use rmk_types_rynk::protocol::rynk::command;
@@ -43,9 +45,26 @@ pub(crate) struct Prepared {
     pub part: Part,
     pub remaining: Vec<(Part, Vec<u8>)>,
     pub keyboard_uid: [u8; 8],
+    pub qmk_serial: Option<String>,
 }
 
 impl Prepared {
+    pub(crate) fn bind_qmk_serial(&mut self, serial: &str) -> Result<()> {
+        self.check_qmk_serial(serial)?;
+        if !serial.is_empty() {
+            self.qmk_serial = Some(serial.to_owned());
+        }
+        Ok(())
+    }
+
+    fn check_qmk_serial(&self, serial: &str) -> Result<()> {
+        ensure!(
+            self.qmk_serial.as_deref().is_none_or(|bound| bound == serial),
+            "Reconnect the same QMK keyboard part before continuing"
+        );
+        Ok(())
+    }
+
     pub(crate) fn next(&self) -> Option<Self> {
         let ((part, bytes), remaining) = self.remaining.split_first()?;
         Some(Self {
@@ -56,6 +75,7 @@ impl Prepared {
             part: *part,
             remaining: remaining.to_vec(),
             keyboard_uid: self.keyboard_uid,
+            qmk_serial: None,
         })
     }
 }
@@ -87,13 +107,28 @@ pub(crate) fn supported(device: &crate::device::Device) -> bool {
     semver::Version::parse(env!("CARGO_PKG_VERSION"))
         .is_ok_and(|v| v >= semver::Version::new(0, 6, 0))
         && device.vendor_id == 0xe126
-        && runtime_product(device.product_id)
-        && device.firmware == crate::firmware::FirmwareProtocol::Rynk
         && !device.is_bluetooth_transport()
+        && match device.firmware {
+            crate::firmware::FirmwareProtocol::Rynk => profiles::PROFILES
+                .iter().any(|profile| profile.product_id == device.product_id),
+            crate::firmware::FirmwareProtocol::Vial => crate::app::QMK_RELEASE_PROFILES
+                .iter().any(|(pid, _, _)| *pid == device.product_id),
+        }
 }
 
 pub(crate) fn runtime_product(pid: u16) -> bool {
+    rynk_product(pid)
+        || crate::app::QMK_RELEASE_PROFILES.iter().any(|(product, _, _)| *product == pid)
+}
+
+fn rynk_product(pid: u16) -> bool {
     profiles::PROFILES.iter().any(|profile| profile.product_id == pid)
+}
+
+pub(crate) fn qmk_version(version: &str) -> Option<semver::Version> {
+    semver::Version::parse(version.strip_prefix('v').unwrap_or(version))
+        .ok()
+        .filter(|v| v.major > 0 && v.pre.is_empty() && v.build.is_empty())
 }
 
 pub(crate) fn compatible_version(version: &str) -> bool {
@@ -113,6 +148,18 @@ fn validate_profile_asset(
     name: &str,
     address: &str,
 ) -> Result<()> {
+    if profile.qmk {
+        ensure!(qmk_version(version).is_some(), "Expected a stable QMK version");
+        ensure!(
+            name == format!("{version}_{}.uf2", profile.archive),
+            "Firmware does not match this QMK model and revision"
+        );
+        ensure!(
+            address == format!("https://github.com/ergohaven/vial-qmk/releases/download/{version}/{name}"),
+            "Unexpected QMK firmware download address"
+        );
+        return Ok(());
+    }
     ensure!(
         compatible_version(version),
         "Firmware updates require RMK 0.3.0 or later"
@@ -195,7 +242,6 @@ fn require_newer_version(current: Option<&str>, expected: &str) -> Result<()> {
 }
 
 fn find_origin(devices: &[UsbTarget], pid: u16) -> Result<UsbTarget> {
-    // Bind the transfer to one physical supported keyboard, regardless of protocol.
     // Require one physical supported keyboard, including other model variants.
     let candidates: Vec<_> = devices
         .iter()
@@ -249,12 +295,14 @@ pub(crate) fn prepare(
 ) -> Result<Prepared> {
     let origin = find_origin(&platform::snapshot()?, profile.product_id)?;
     let mut images = load_images(profile, version, name, url)?;
-    let runtime_index = images
-        .iter()
-        .position(|(part, _)| *part == runtime_part)
-        .context("USB component is not in this firmware package")?;
-    let runtime_image = images.remove(runtime_index);
-    images.push(runtime_image);
+    if !profile.qmk {
+        let runtime_index = images
+            .iter()
+            .position(|(part, _)| *part == runtime_part)
+            .context("USB component is not in this firmware package")?;
+        let runtime_image = images.remove(runtime_index);
+        images.push(runtime_image);
+    }
     let (part, bytes) = images.remove(0);
     let version = version.strip_prefix('v').unwrap_or(version);
     Ok(Prepared {
@@ -265,13 +313,16 @@ pub(crate) fn prepare(
         part,
         remaining: images,
         keyboard_uid,
+        qmk_serial: None,
     })
 }
 
 fn load_images(profile: profiles::Profile, version: &str, name: &str, url: &str) -> Result<Vec<(Part, Vec<u8>)>> {
     #[cfg(debug_assertions)]
-    if let Some(images) = actions_test::load_images(profile, version, name, url) {
-        return images;
+    if !profile.qmk {
+        if let Some(images) = actions_test::load_images(profile, version, name, url) {
+            return images;
+        }
     }
 
     validate_profile_asset(profile, version, name, url)?;
@@ -292,9 +343,10 @@ fn load_images(profile: profiles::Profile, version: &str, name: &str, url: &str)
     let agent = ureq::AgentBuilder::new()
         .timeout(Duration::from_secs(30))
         .build();
+    let repo = if profile.qmk { "vial-qmk" } else { "rmk" };
     let release: Release = agent
         .get(&format!(
-            "https://api.github.com/repos/ergohaven/rmk/releases/tags/{version}"
+            "https://api.github.com/repos/ergohaven/{repo}/releases/tags/{version}"
         ))
         .set("User-Agent", "Entropy")
         .call()?
@@ -324,7 +376,12 @@ fn load_images(profile: profiles::Profile, version: &str, name: &str, url: &str)
         .take((MAX_DOWNLOAD + 1) as u64)
         .read_to_end(&mut bytes)?;
     validate_checksum(&bytes, asset.size, &digest)?;
-    packages::unpack_profile(&bytes, profile)
+    if profile.qmk {
+        validate_uf2_for(&bytes, profile.parts[0])?;
+        Ok(profile.parts.iter().map(|part| (*part, bytes.clone())).collect())
+    } else {
+        packages::unpack_profile(&bytes, profile)
+    }
 }
 
 fn wait_for_usb<T>(
@@ -354,11 +411,11 @@ fn wait_for_usb<T>(
     }
 }
 
-/// Own the selected Rynk session until bootloader entry; UI discovery is paused
+/// Own the selected USB session until bootloader entry; UI discovery is paused
 /// until this worker finishes, so no reconnect worker can borrow the same half.
 pub(crate) fn flash(
     prepared: Prepared,
-    session: Option<RynkSession>,
+    session: Option<DeviceSession>,
     physical_reset: bool,
     events: &Sender<Event>,
 ) -> Result<Outcome> {
@@ -367,7 +424,21 @@ pub(crate) fn flash(
         !final_step || session.is_some() || physical_reset,
         "Reconnect the original USB component first"
     );
-    if let Some(session) = &session {
+    if prepared.profile.qmk {
+        ensure!(!physical_reset, "QMK updates require the active Vial connection");
+        let hid = session.as_ref().and_then(DeviceSession::as_vial)
+            .context("Connect and select the requested QMK keyboard part")?;
+        confirm_original_port(&prepared)?;
+        let device = scan_qmk_usb(&prepared)?.context("Could not confirm the active QMK USB device")?;
+        let current = qmk_identity(hid, &prepared, &device)?;
+        let current = qmk_version(&current).context("Invalid installed QMK version")?;
+        let expected = qmk_version(&prepared.version).context("Invalid proposed QMK version")?;
+        ensure!(current < expected, "This target already has this firmware or a newer version");
+        confirm_original_port(&prepared)?;
+        let _ = events.send(Event::Progress(Stage::EnteringBootloader));
+        hid.enter_qmk_bootloader()?;
+    } else if let Some(session) = &session {
+        let session = session.as_rynk().context("RMK updates require a Rynk connection")?;
         let current = find_origin(&platform::snapshot()?, prepared.origin.product)
             .context("Could not confirm the original USB connection before transfer")?;
         ensure!(
@@ -395,8 +466,8 @@ pub(crate) fn flash(
         }
     }
     drop(session);
-    let mut software_entry = final_step && !physical_reset;
-    let mut wait_for_component = !final_step && !physical_reset;
+    let mut software_entry = prepared.profile.qmk || (final_step && !physical_reset);
+    let mut wait_for_component = !prepared.profile.qmk && !final_step && !physical_reset;
     let _ = events.send(Event::Progress(if wait_for_component {
         log::info!("Ready for the requested firmware component on {}", prepared.origin.port);
         Stage::WaitingComponent
@@ -418,7 +489,9 @@ pub(crate) fn flash(
         Ok(None)
     })
     .with_context(|| {
-        if prepared.part.rp2040() {
+        if prepared.profile.qmk {
+            "QMK bootloader did not appear on the original USB port"
+        } else if prepared.part.rp2040() {
             "Bootloader did not appear. Hold BOOT while reconnecting the requested half to USB"
         } else {
             "Bootloader did not appear. Reconnect the requested part and double-press Reset"
@@ -533,7 +606,7 @@ pub(crate) fn verify_after_reconnect(prepared: &Prepared) -> Result<Outcome> {
 fn runtime_id(devices: &[UsbTarget], prepared: &Prepared) -> Result<Option<PhysicalId>> {
     if !devices
         .iter()
-        .any(|d| d.vendor == 0xe126 && runtime_product(d.product))
+        .any(|d| d.vendor == 0xe126 && rynk_product(d.product))
     {
         return Ok(None);
     }
@@ -551,7 +624,7 @@ fn runtime_id(devices: &[UsbTarget], prepared: &Prepared) -> Result<Option<Physi
     };
     let mut matches = boards
         .into_iter()
-        .filter(|d| d.vendor_id == 0xe126 && runtime_product(d.product_id));
+        .filter(|d| d.vendor_id == 0xe126 && rynk_product(d.product_id));
     let first = matches.next();
     ensure!(matches.next().is_none(), "Rynk keyboard identity is ambiguous");
     Ok(first.filter(|d| d.product_id == current.product).map(|d| d.id))
@@ -635,7 +708,71 @@ fn unlock_component(client: &mut RynkClient<impl RynkTransport>, events: &Sender
     bail!("Physical unlock timed out. Reconnect the requested part and try again")
 }
 
+fn confirm_original_port(prepared: &Prepared) -> Result<()> {
+    let current = find_origin(&platform::snapshot_usb()?, prepared.origin.product)?;
+    ensure!(current.port == prepared.origin.port, "Keyboard moved to a different USB port");
+    Ok(())
+}
+
+fn qmk_identity(hid: &HidDevice, prepared: &Prepared, device: &crate::device::Device) -> Result<String> {
+    prepared.check_qmk_serial(&device.serial_number)?;
+    let (_, uid) = hid.get_keyboard_id()?;
+    ensure!(
+        uid != 0 && uid.to_le_bytes() == prepared.keyboard_uid,
+        "Connected QMK device has a different keyboard identity"
+    );
+    let version = hid.get_firmware_version()?.context("Keyboard did not report a firmware version")?;
+    let definition = hid.get_layout_json()?;
+    let native = hid.get_rmk_native_capabilities()?;
+    let target = firmware_release_target_for_usb(
+        prepared.origin.vendor, prepared.origin.product, Some(&version), &definition,
+        false, native.version != 0, Some(&device.name),
+    ).context("Connected QMK firmware revision could not be identified")?;
+    ensure!(
+        target.family == FirmwareReleaseFamily::Qmk && target.asset_prefix == prepared.profile.archive,
+        "Connected keyboard is running a different firmware family or revision"
+    );
+    Ok(version)
+}
+
+fn scan_qmk_usb(prepared: &Prepared) -> Result<Option<crate::device::Device>> {
+    let Ok(devices) = crate::device::DeviceManager::scan_usb_devices() else {
+        return Ok(None);
+    };
+    let mut matches = devices.into_iter().filter(|device| {
+        device.vendor_id == prepared.origin.vendor && device.product_id == prepared.origin.product
+            && device.firmware == crate::firmware::FirmwareProtocol::Vial
+    });
+    let first = matches.next();
+    ensure!(matches.next().is_none(), "QMK keyboard identity is ambiguous");
+    Ok(first)
+}
+
+fn verify_qmk_on_port(devices: &[UsbTarget], prepared: &Prepared) -> Result<bool> {
+    let Ok(current) = find_origin(devices, prepared.origin.product) else {
+        return Ok(false);
+    };
+    if current.port != prepared.origin.port {
+        return Ok(false);
+    }
+    let Ok(Some(device)) = scan_qmk_usb(prepared) else {
+        return Ok(false);
+    };
+    let Ok(hid) = HidDevice::open_fresh_for(&device) else {
+        return Ok(false);
+    };
+    let Ok(version) = qmk_identity(&hid, prepared, &device) else {
+        return Ok(false);
+    };
+    Ok(qmk_version(&version).is_some_and(|version| {
+        qmk_version(&prepared.version) == Some(version)
+    }))
+}
+
 fn verify_on_port(devices: &[UsbTarget], prepared: &Prepared, require_target: bool) -> Result<bool> {
+    if prepared.profile.qmk {
+        return verify_qmk_on_port(devices, prepared);
+    }
     let Some(id) = runtime_id(devices, prepared)? else {
         return Ok(false);
     };
@@ -759,6 +896,26 @@ mod tests {
     use profiles::*;
 
     #[test]
+    fn firmware_flash_qmk_retry_keeps_serial_until_the_next_part() {
+        let profile = qmk_profile(0x52, "phenom_v1").unwrap();
+        let mut prepared = Prepared {
+            profile,
+            bytes: Vec::new(),
+            origin: UsbTarget { port: "port".into(), vendor: 0xe126, product: 0x52, mounts: Vec::new() },
+            version: "4.2.0".into(),
+            part: profile.parts[0],
+            remaining: vec![(profile.parts[1], Vec::new())],
+            keyboard_uid: [1; 8],
+            qmk_serial: None,
+        };
+        prepared.bind_qmk_serial("first-half").unwrap();
+        assert!(prepared.bind_qmk_serial("other-keyboard").is_err());
+        assert!(prepared.check_qmk_serial("").is_err());
+        assert!(prepared.check_qmk_serial("first-half").is_ok());
+        prepared.next().unwrap().bind_qmk_serial("second-half").unwrap();
+    }
+
+    #[test]
     fn firmware_flash_classic_requires_the_topology_in_the_fresh_definition() {
         use crate::rynk::client::{fnv1a, testing::{handshake, info, ok, quick, FakeBoard}};
         use rmk_types_rynk::protocol::rynk::{Cmd, LayoutChunk};
@@ -803,6 +960,7 @@ mod tests {
             part: PHENOM_PERIPHERAL,
             remaining: Vec::new(),
             keyboard_uid: info.keyboard_uid,
+            qmk_serial: None,
         };
         let mut board = RynkBoard {
             info,
@@ -950,12 +1108,11 @@ mod tests {
             assert!(require_newer_version(Some(old), "0.3.1").is_err());
         }
         assert!(compatible_version("0.3.0"));
-        let mut legacy = crate::device::test_usb_device("port", 1, 0x52);
-        assert!(!supported(&legacy));
-        legacy.firmware = crate::firmware::FirmwareProtocol::Rynk;
-        assert!(supported(&legacy));
-        legacy.bus_type = "Bluetooth".into();
-        assert!(!supported(&legacy));
+        let mut device = crate::device::test_usb_device("port", 1, 0x52);
+        device.firmware = crate::firmware::FirmwareProtocol::Rynk;
+        assert!(supported(&device));
+        device.bus_type = "Bluetooth".into();
+        assert!(!supported(&device));
     }
 
     #[test]
@@ -979,7 +1136,52 @@ mod tests {
             assert!(validate_asset(pid, "v0.3.0", &name, &url).is_ok());
             assert!(validate_asset(pid, "v0.3.0", "k03-v0.3.0.zip", &url).is_err());
         }
-        assert!(!supported(&crate::device::test_usb_device("port", 1, 0x70)));
+        assert!(!supported(&crate::device::test_usb_device("port", 1, 0x89)));
+    }
+
+    #[test]
+    fn firmware_flash_qmk_accepts_only_exact_published_asset() {
+        for &(pid, asset, split) in crate::app::QMK_RELEASE_PROFILES {
+            let profile = profiles::qmk_profile(pid, asset).unwrap();
+            let name = format!("4.2.0_{asset}.uf2");
+            let url = format!("https://github.com/ergohaven/vial-qmk/releases/download/4.2.0/{name}");
+            assert_eq!(profile.parts.len(), if split { 2 } else { 1 });
+            assert!(validate_profile_asset(profile, "4.2.0", &name, &url).is_ok());
+            assert!(validate_profile_asset(profile, "4.2.0", "4.2.0_wrong.uf2", &url).is_err());
+            assert!(validate_profile_asset(profile, "4.2.0", &name, &url.replace("vial-qmk", "rmk")).is_err());
+        }
+        let layout = profiles::qmk_profile(0xb2, "sm62_v1").unwrap().parts[0].layout;
+        assert_eq!(layout.limits().2, 0x101f2000);
+        assert!(profiles::qmk_profile(0xb2, "sm30_v1").is_none());
+    }
+
+    #[test]
+    fn firmware_flash_qmk_bootloader_requires_completed_physical_unlock() {
+        for (unlocked, in_progress, physical_keys, acknowledged) in [
+            (false, false, true, true),
+            (true, true, true, true),
+            (true, false, false, true),
+            (true, false, true, false),
+            (true, false, true, true),
+        ] {
+            let (hid, recorder) = HidDevice::test_device();
+            let mut status = [0xff; 32];
+            status[0] = u8::from(unlocked);
+            status[1] = u8::from(in_progress);
+            if physical_keys {
+                status[2..6].copy_from_slice(&[1, 4, 1, 5]);
+            }
+            let mut ack = [0; 32];
+            if acknowledged {
+                ack[0] = 0x0b;
+            }
+            recorder.respond_with([status, ack]);
+            let can_enter = unlocked && !in_progress && physical_keys;
+            assert_eq!(hid.enter_qmk_bootloader().is_ok(), can_enter && acknowledged);
+            let commands = recorder.requests();
+            assert_eq!(commands[0][..2], [0xfe, 5]);
+            assert_eq!(commands.iter().filter(|cmd| cmd[0] == 0x0b).count(), usize::from(can_enter));
+        }
     }
 
     #[test]

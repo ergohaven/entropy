@@ -60,17 +60,29 @@ pub(super) fn update_profile(
     target: &FirmwareReleaseTarget,
     release: &FirmwareUpdateCheckResult,
 ) -> Option<flash::profiles::Profile> {
-    if !flash::supported(device)
-        || target.family != FirmwareReleaseFamily::Rynk
-        || release.relation != VersionRelation::UpdateAvailable
-        || !flash::compatible_version(&target.current_version)
-        || !flash::compatible_version(&release.latest_version)
-    {
+    use crate::app::FirmwareReleaseFamily;
+
+    if !flash::supported(device) || release.relation != VersionRelation::UpdateAvailable {
         return None;
     }
-    let profile = flash::profiles::profile_for_archive(device.product_id, &target.asset_prefix)?;
-    (release.asset.name == format!("{}-{}.zip", profile.archive, release.latest_version))
-        .then_some(profile)
+    match (device.firmware, target.family) {
+        (crate::firmware::FirmwareProtocol::Vial, FirmwareReleaseFamily::Qmk)
+            if flash::qmk_version(&target.current_version)? < flash::qmk_version(&release.latest_version)? =>
+        {
+            let profile = flash::profiles::qmk_profile(device.product_id, &target.asset_prefix)?;
+            (release.asset.name == format!("{}_{}.uf2", release.latest_version, profile.archive))
+                .then_some(profile)
+        }
+        (crate::firmware::FirmwareProtocol::Rynk, FirmwareReleaseFamily::Rynk)
+            if flash::compatible_version(&target.current_version)
+                && flash::compatible_version(&release.latest_version) =>
+        {
+            let profile = flash::profiles::profile_for_archive(device.product_id, &target.asset_prefix)?;
+            (release.asset.name == format!("{}-{}.zip", profile.archive, release.latest_version))
+                .then_some(profile)
+        }
+        _ => None,
+    }
 }
 
 impl Dialog {
@@ -82,12 +94,25 @@ impl Dialog {
         self.part != self.origin_part
     }
 
+    fn requires_original_owner(&self) -> bool {
+        self.steps.is_empty() && !(self.profile.qmk && self.retry.is_some())
+    }
+
     fn physical_recovery(&self, app: &EntropyApp, physical_reset: bool) -> bool {
-        physical_reset
+        !self.profile.qmk
+            && physical_reset
             && self.retry.is_some()
             && self.backup.is_some()
             && app.hid_device.is_none()
             && app.selected_device.is_none()
+    }
+
+    fn session_part(profile: flash::profiles::Profile, session: &DeviceSession) -> Option<Part> {
+        if profile.qmk {
+            session.as_vial()?;
+            return profile.parts.first().copied();
+        }
+        profile.runtime_part(session.as_rynk()?.link().board())
     }
 
     fn part_label(&self, language: crate::i18n::Language, part: Part) -> &'static str {
@@ -121,8 +146,7 @@ impl EntropyApp {
         let Some(origin_part) = self
             .hid_device
             .as_ref()
-            .and_then(DeviceSession::as_rynk)
-            .and_then(|session| profile.runtime_part(session.link().board()))
+            .and_then(|session| Dialog::session_part(profile, session))
         else {
             self.status_msg = text(
                 self.app_settings.language,
@@ -131,9 +155,13 @@ impl EntropyApp {
             ).into();
             return;
         };
-        let first = profile.parts.iter().copied().find(|part| *part != origin_part);
+        let first = if profile.qmk {
+            origin_part
+        } else {
+            profile.parts.iter().copied().find(|part| *part != origin_part).unwrap_or(origin_part)
+        };
         self.firmware_flash.dialog = Some(Dialog {
-            part: first.unwrap_or(origin_part),
+            part: first,
             origin_part,
             profile,
             device,
@@ -162,17 +190,25 @@ impl EntropyApp {
                 })
     }
 
-    fn firmware_flash_can_prepare(&self) -> bool {
+    fn firmware_flash_session_matches(&self, dialog: &Dialog) -> bool {
+        let part = self.hid_device.as_ref()
+            .and_then(|session| Dialog::session_part(dialog.profile, session));
+        part == Some(dialog.origin_part)
+            && (!dialog.profile.qmk || self.device_about_info.as_ref()
+                .and_then(|info| info.firmware_update_target.as_ref())
+                .is_some_and(|target| {
+                    target.family == crate::app::FirmwareReleaseFamily::Qmk
+                        && target.asset_prefix == dialog.profile.archive
+                }))
+    }
+
+    fn firmware_flash_can_prepare(&self, dialog: &Dialog) -> bool {
         !self.hid_write_lifecycle_busy()
             && !self.keycode_picker.macros_dirty
             && !self.keycode_picker.tap_dance_dirty
             && !self.combo_dirty
             && !self.combo_term_dirty
-            && self
-                .hid_device
-                .as_ref()
-                .and_then(DeviceSession::as_rynk)
-                .is_some()
+            && self.firmware_flash_session_matches(dialog)
             && matches!(self.connect_state, ConnectState::Idle)
     }
 
@@ -190,16 +226,16 @@ impl EntropyApp {
             "Keyboard changed; start the update again"
         );
         anyhow::ensure!(
-            self.firmware_flash_can_prepare(),
+            self.firmware_flash_can_prepare(dialog),
             "Wait for pending keyboard edits to finish"
         );
-        let keyboard_uid = self
-            .hid_device
-            .as_ref()
-            .and_then(DeviceSession::as_rynk)
-            .ok_or_else(|| anyhow::anyhow!("Firmware updates require Rynk"))?
-            .info()
-            .keyboard_uid;
+        let keyboard_uid = if dialog.profile.qmk {
+            self.current_keyboard_id.filter(|uid| *uid != 0)
+                .ok_or_else(|| anyhow::anyhow!("QMK keyboard identity is missing"))?.to_le_bytes()
+        } else {
+            self.hid_device.as_ref().and_then(DeviceSession::as_rynk)
+                .ok_or_else(|| anyhow::anyhow!("Firmware updates require Rynk"))?.info().keyboard_uid
+        };
         dialog.backup = Some(self.write_firmware_update_backup()?);
         let (sender, receiver) = mpsc::channel();
         let profile = dialog.profile;
@@ -229,12 +265,13 @@ impl EntropyApp {
         dialog: &mut Dialog,
         physical_reset: bool,
     ) -> anyhow::Result<()> {
-        let Phase::Ready(_) = &dialog.phase else {
+        let Phase::Ready(prepared) = &dialog.phase else {
             anyhow::bail!("Firmware is not prepared");
         };
+        anyhow::ensure!(!dialog.profile.qmk || !physical_reset, "Select and unlock the QMK keyboard first");
         let recovery = dialog.physical_recovery(self, physical_reset);
-        let needs_session = !recovery && (dialog.steps.is_empty() || !dialog.moved_target());
-        if dialog.steps.is_empty() && !recovery {
+        let needs_session = !recovery && (dialog.profile.qmk || dialog.steps.is_empty() || !dialog.moved_target());
+        if dialog.requires_original_owner() && !recovery {
             anyhow::ensure!(
                 self.firmware_flash_owner_matches(dialog),
                 "Keyboard changed; start the update again"
@@ -249,7 +286,7 @@ impl EntropyApp {
                     .is_some_and(
                         |d| flash::supported(d) && d.product_id == dialog.device.product_id
                     ),
-                "Reconnect and select this keyboard's primary half or Qube USB dongle first"
+                "Reconnect and select the requested keyboard component first"
             );
         }
         anyhow::ensure!(
@@ -259,7 +296,7 @@ impl EntropyApp {
         );
         if needs_session {
             anyhow::ensure!(
-                self.firmware_flash_can_prepare(),
+                self.firmware_flash_can_prepare(dialog),
                 "Wait for pending keyboard edits to finish"
             );
         } else {
@@ -274,11 +311,18 @@ impl EntropyApp {
             );
         }
         anyhow::ensure!(
-            dialog.moved_target()
+            (dialog.moved_target() && !dialog.profile.qmk)
                 || physical_reset
                 || (self.vial_unlocked == Some(true) && !self.vial_unlock_polling),
             "Unlock the keyboard first"
         );
+        let mut prepared = prepared.clone();
+        if dialog.profile.qmk {
+            let device = self.selected_device
+                .and_then(|i| self.device_manager.devices().get(i))
+                .ok_or_else(|| anyhow::anyhow!("Keyboard disconnected"))?;
+            prepared.bind_qmk_serial(&device.serial_number)?;
+        }
         // Save again immediately before relinquishing HID, including any edits
         // made during physical unlocking. Backup failure never authorizes reboot.
         let hid = if needs_session {
@@ -287,20 +331,10 @@ impl EntropyApp {
                 .hid_device
                 .take()
                 .ok_or_else(|| anyhow::anyhow!("Keyboard disconnected"))?;
-            let hid = match session {
-                DeviceSession::Rynk(session) => session,
-                other => {
-                    self.hid_device = Some(other);
-                    anyhow::bail!("Firmware updates require Rynk");
-                }
-            };
-            Some(hid)
+            Some(session)
         } else {
             anyhow::ensure!(dialog.backup.is_some(), "Configuration backup is missing");
             None
-        };
-        let Phase::Ready(prepared) = std::mem::replace(&mut dialog.phase, Phase::Confirm) else {
-            unreachable!()
         };
         dialog.next = prepared.next();
         dialog.retry = Some(prepared.clone());
@@ -409,7 +443,9 @@ impl EntropyApp {
                 if let Some(result) = result {
                     dialog.post_write_check = result.is_err()
                         && dialog.retry.is_some()
-                        && matches!(stage, Stage::WaitingDisconnect | Stage::WaitingReconnect);
+                        && (matches!(stage, Stage::WaitingDisconnect | Stage::WaitingReconnect)
+                            || (dialog.profile.qmk && matches!(stage,
+                                Stage::EnteringBootloader | Stage::WaitingBootloader | Stage::Writing)));
                     if let Ok(outcome) = result {
                         dialog.steps.push((dialog.part, outcome));
                         dialog.retry = None;
@@ -442,15 +478,17 @@ impl EntropyApp {
                 .selected_device
                 .and_then(|i| self.device_manager.devices().get(i))
                 .is_some_and(|d| flash::supported(d) && d.product_id == dialog.device.product_id)
-            && self.hid_device.as_ref().and_then(DeviceSession::as_rynk).is_some_and(|session| {
-                dialog.profile.runtime_part(session.link().board()) == Some(dialog.origin_part)
-            })
-            && (!dialog.steps.is_empty() || self.firmware_flash_owner_matches(&dialog));
+            && self.firmware_flash_session_matches(&dialog)
+            && (!dialog.requires_original_owner() || self.firmware_flash_owner_matches(&dialog));
         if self.firmware_flash.minimized {
             let mut discard = false;
             egui::Window::new(text(lang, "Firmware update", "Обновление прошивки"))
                 .collapsible(false).show(ctx, |ui| {
-                    ui.label(text(lang, "Reconnect and select the primary half or Qube USB dongle, then resume the guide.", "Подключите и выберите основную половинку или USB-донгл Qube, затем вернитесь к инструкции."));
+                    ui.label(if dialog.profile.qmk {
+                        text(lang, "Connect the requested part to the same USB port, select it in Entropy, then resume the guide.", "Подключите нужную часть к тому же USB-порту, выберите её в Entropy и вернитесь к инструкции.")
+                    } else {
+                        text(lang, "Reconnect and select the primary half or Qube USB dongle, then resume the guide.", "Подключите и выберите основную половинку или USB-донгл Qube, затем вернитесь к инструкции.")
+                    });
                     if ui.button(text(lang, "Resume guide", "Вернуться к инструкции")).clicked() {
                         self.firmware_flash.minimized = false;
                     }
@@ -493,7 +531,9 @@ impl EntropyApp {
                     }));
                 }
             }
-            ui.label(text(lang, "Requires Entropy 0.6.0+ and RMK 0.3.0+ using Rynk. Update every component from the same release.", "Требуются Entropy 0.6.0+ и RMK 0.3.0+ с Rynk. Обновите все части прошивкой одного релиза."));
+            if !dialog.profile.qmk {
+                ui.label(text(lang, "Requires Entropy 0.6.0+ and RMK 0.3.0+ using Rynk. Update every component from the same release.", "Требуются Entropy 0.6.0+ и RMK 0.3.0+ с Rynk. Обновите все части прошивкой одного релиза."));
+            }
             if let Some((en, ru)) = dialog.profile.connection_note {
                 ui.label(text(lang, en, ru));
             }
@@ -502,6 +542,8 @@ impl EntropyApp {
                 Phase::Confirm => {
                     ui.label(if !dialog.profile.has_peripherals() {
                         text(lang, "Keep the keyboard connected while Entropy backs up your configuration and verifies the firmware image.", "Оставьте клавиатуру подключённой, пока Entropy сохраняет настройки и проверяет образ прошивки.")
+                    } else if dialog.profile.qmk {
+                        text(lang, "Entropy backs up your configuration and updates the USB-connected half first. When prompted, move the computer’s USB cable to the other half and select it in Entropy.", "Entropy сохранит настройки и сначала обновит половинку, подключённую по USB. Затем переставьте USB-кабель компьютера во вторую половинку и выберите её в Entropy.")
                     } else if dialog.standalone() {
                         text(lang, "The half already connected by USB is the primary half; the other is the secondary half. Keep the primary connected while Entropy backs up your configuration and prepares both images. When prompted, disconnect the primary from USB and connect the secondary. The primary will be updated last. Entropy verifies the version on halves that support USB maintenance.", "Половинка, уже подключённая по USB, — основная; другая — вторая. Оставьте основную подключённой, пока Entropy сохраняет настройки и готовит оба образа. По инструкции отключите основную от USB и подключите вторую. Основная обновится последней. Entropy проверяет версию половинок, поддерживающих обслуживание по USB.")
                     } else {
@@ -510,6 +552,24 @@ impl EntropyApp {
                     if ui.button(text(lang, "Back up and prepare", "Создать копию и подготовить")).clicked() { action = Some(Action::Prepare); }
                 },
                 Phase::Preparing(_) => { ui.spinner(); ui.label(text(lang, "Downloading and verifying firmware…", "Скачиваем и проверяем прошивку…")); },
+                Phase::Ready(_) if dialog.profile.qmk => {
+                    if !session_ready {
+                        ui.label(text(lang, "Connect the requested part to the original USB port and select it in Entropy.", "Подключите нужную часть к исходному USB-порту и выберите её в Entropy."));
+                        if ui.button(text(lang, "Select keyboard", "Выбрать клавиатуру")).clicked() {
+                            action = Some(Action::Select);
+                        }
+                    }
+                    ui.label(text(lang, "Firmware image verified. Unlock with the keys shown by Entropy to enter update mode.", "Образ прошивки проверен. Для перехода в режим прошивки удерживайте клавиши, указанные Entropy."));
+                    ui.add_enabled_ui(session_ready, |ui| {
+                        if self.vial_unlocked != Some(true) {
+                            if ui.button(text(lang, "Unlock keyboard", "Разблокировать клавиатуру")).clicked() {
+                                action = Some(Action::Unlock);
+                            }
+                        } else if ui.button(text(lang, "Flash this target", "Прошить эту часть")).clicked() {
+                            action = Some(Action::Flash);
+                        }
+                    });
+                },
                 Phase::Ready(_) if dialog.moved_target() => {
                     ui.label(text(lang,
                         "Start the transfer and wait for Entropy to ask you to move the cable. Connect only the named half to the original USB port. Entropy will prompt for physical unlock keys if this half supports USB maintenance. Older firmware requires BOOT or Reset.",
@@ -569,6 +629,7 @@ impl EntropyApp {
                         Stage::Unlocking(_) => unreachable!("unlock instructions are shown above"),
                         Stage::WaitingComponent if dialog.part.rp2040() => text(lang, "Disconnect the previous USB component. Connect only the named half to the original USB port. For older firmware, hold BOOT while plugging in and then release it. Check the physical side before using BOOT.", "Отключите предыдущую часть от USB. Подключите только указанную половинку к исходному USB-порту. Для старой прошивки удерживайте BOOT во время подключения, затем отпустите. Перед использованием BOOT проверьте сторону половинки."),
                         Stage::WaitingComponent => text(lang, "Disconnect the previous USB component. Connect only the named half to the original USB port. For older firmware, double-press Reset on that half. Check the physical side before pressing Reset.", "Отключите предыдущую часть от USB. Подключите только указанную половинку к исходному USB-порту. Для старой прошивки дважды нажмите Reset на этой половинке. Перед нажатием Reset проверьте сторону половинки."),
+                        Stage::WaitingBootloader if dialog.profile.qmk => text(lang, "Waiting for the keyboard to enter update mode. Keep the USB cable connected.", "Ждём перехода клавиатуры в режим прошивки. Оставьте USB-кабель подключённым."),
                         Stage::WaitingBootloader if dialog.part.rp2040() => text(lang, "Waiting for update mode on the named target. If needed, hold BOOT while reconnecting it to the original USB port.", "Ждём режим прошивки указанной части. При необходимости удерживайте BOOT при подключении к исходному USB-порту."),
                         Stage::WaitingBootloader => text(lang, "Waiting for update mode. If needed, double-press Reset on this target. Keep the USB cable connected to the same port.", "Ждём режим прошивки. При необходимости дважды нажмите Reset на этой части. Оставьте USB-кабель в том же порту."),
                         Stage::Writing => text(lang, "Writing firmware. Keep the keyboard connected.", "Записываем прошивку. Не отключайте клавиатуру."),
@@ -600,6 +661,14 @@ impl EntropyApp {
                 },
                 Phase::Finished(Err(error)) => {
                     ui.colored_label(ui.visuals().error_fg_color, error);
+                    if dialog.profile.qmk && dialog.retry.is_some() {
+                        if dialog.post_write_check {
+                            ui.label(text(lang, "If this part stays in BOOTSEL, follow the manual firmware guide for your exact model and revision, then check its version here.", "Если эта часть осталась в режиме BOOTSEL, обновите её по инструкции для вашей модели и ревизии, затем проверьте версию здесь."));
+                            ui.hyperlink_to(text(lang, "Manual firmware guide", "Инструкция по ручному обновлению"), "https://docs.eh.works/firmware/");
+                        } else {
+                            ui.label(text(lang, "Reconnect and select the same QMK keyboard part before retrying.", "Подключите и выберите ту же часть клавиатуры с QMK перед повтором."));
+                        }
+                    }
                     if dialog.post_write_check {
                         ui.label(format!("{}: {}", dialog.part_label(lang, dialog.part), text(lang,
                             "To check the version, reconnect only this target to the original USB port without using BOOT or Reset.",
@@ -612,11 +681,13 @@ impl EntropyApp {
                             "Wait for keyboard discovery to finish and leave the target unselected in Entropy.",
                             "Дождитесь завершения поиска клавиатур и не выбирайте эту часть в Entropy.",
                         )).clicked() { action = Some(Action::CheckVersion); }
-                    } else {
+                    } else if !dialog.profile.qmk {
                         ui.label(if dialog.part.rp2040() { text(lang, "No successful update is recorded for this part. Reconnect it before retrying; hold BOOT while reconnecting if it remains in update mode.", "Успешное обновление этой части не подтверждено. Подключите её заново перед повтором; если она осталась в режиме прошивки, удерживайте BOOT при подключении.") } else { text(lang, "No successful update is recorded for this part. Reconnect it before retrying; use physical Reset if it remains in update mode.", "Успешное обновление этой части не подтверждено. Перед повтором подключите её заново; если она осталась в режиме прошивки, используйте Reset.") });
                     }
                     if dialog.retry.is_some() {
                         if ui.button(text(lang, "Retry this target", "Повторить эту часть")).clicked() { action = Some(Action::Retry); }
+                    } else if dialog.profile.qmk {
+                        ui.label(text(lang, "Reconnect and select the keyboard, then open About device → Update firmware to start again.", "Подключите и выберите клавиатуру, затем снова откройте «Об устройстве → Обновить прошивку»."));
                     } else {
                         ui.label(text(lang, "Reconnect and select the primary half or Qube USB dongle, then open About device → Update firmware again to restart the guide.", "Подключите и выберите основную половинку или USB-донгл Qube, затем снова откройте «Об устройстве → Обновить прошивку», чтобы начать инструкцию заново."));
                     }
@@ -729,6 +800,50 @@ mod tests {
     }
 
     #[test]
+    fn firmware_flash_qmk_profiles_include_split_and_single_boards_in_the_existing_guide() {
+        for (pid, asset, parts) in [
+            (0x42, "macropad_v3", 1),
+            (0xb2, "sm62_v1", 2),
+            (0x70, "k03_v3_v4", 2),
+        ] {
+            let _config = ScopedTempConfig::new();
+            let mut app = EntropyApp::new_inert_for_test();
+            let device = crate::device::test_usb_device("usb:qmk-test", 1, pid);
+            let mut target = FirmwareReleaseTarget {
+                family: FirmwareReleaseFamily::Qmk,
+                current_version: "4.1.0".into(),
+                asset_prefix: asset.into(),
+            };
+            let release = FirmwareUpdateCheckResult {
+                latest_version: "4.2.0".into(),
+                release_url: String::new(),
+                asset: UpdateAsset { name: format!("4.2.0_{asset}.uf2"), url: String::new() },
+                relation: VersionRelation::UpdateAvailable,
+            };
+            assert_eq!(update_profile(&device, &target, &release).unwrap().parts.len(), parts);
+            target.family = FirmwareReleaseFamily::QmkMigration;
+            assert!(update_profile(&device, &target, &release).is_none());
+            target.family = FirmwareReleaseFamily::Rynk;
+            assert!(update_profile(&device, &target, &release).is_none());
+            target.family = FirmwareReleaseFamily::Qmk;
+            let (hid, recorder) = crate::hid::HidDevice::test_device();
+            app.hid_device = Some(hid.into());
+            app.device_manager.replace_devices(vec![device]);
+            app.selected_device = Some(0);
+            app.device_about_info = Some(DeviceAboutInfo {
+                firmware_update_target: Some(target),
+                ..Default::default()
+            });
+            app.open_firmware_flash(release);
+            let dialog = app.firmware_flash.dialog.as_ref().unwrap();
+            assert_eq!(dialog.part, dialog.origin_part);
+            assert_eq!(dialog.profile.parts.len(), parts);
+            assert!(app.firmware_flash_session_matches(dialog));
+            assert!(recorder.requests().is_empty());
+        }
+    }
+
+    #[test]
     fn firmware_flash_about_rejects_the_other_topology_at_the_same_pid() {
         let mut device = crate::device::test_usb_device("usb:test", 1, 0xbe);
         device.firmware = crate::firmware::FirmwareProtocol::Rynk;
@@ -820,6 +935,7 @@ mod tests {
                     let dialog = app.firmware_flash.dialog.as_mut().unwrap();
                     dialog.phase = Phase::Ready(Prepared {
                         profile: dialog.profile,
+                        qmk_serial: None,
                         keyboard_uid: [1; 8], bytes: vec![7], version: "0.3.1".into(),
                         part: dialog.part, remaining: vec![],
                         origin: flash::UsbTarget {
@@ -932,6 +1048,7 @@ mod tests {
         dialog.part = PHENOM_CENTRAL;
         dialog.phase = Phase::Ready(Prepared {
             profile: dialog.profile,
+            qmk_serial: None,
             keyboard_uid: [0; 8],
             bytes: vec![],
             version: "0.3.1".into(),
@@ -970,6 +1087,7 @@ mod tests {
         dialog.phase = Phase::Preparing(rx);
         tx.send(Ok(Prepared {
             profile: dialog.profile,
+            qmk_serial: None,
             keyboard_uid: [0; 8],
             bytes: vec![],
             version: "0.3.1".into(),
@@ -1023,6 +1141,7 @@ mod tests {
         dialog.backup = Some(backup.clone());
         let prepared = Prepared {
             profile: dialog.profile,
+            qmk_serial: None,
             keyboard_uid: [1; 8],
             bytes: vec![7],
             version: "0.3.1".into(),
@@ -1211,6 +1330,7 @@ mod tests {
             dialog.origin_part = central;
             dialog.next = Some(Prepared {
                 profile: dialog.profile,
+                qmk_serial: None,
                 keyboard_uid: [0; 8],
                 bytes: vec![],
                 origin: flash::UsbTarget {
@@ -1302,6 +1422,7 @@ mod tests {
             dialog.backup = Some(PathBuf::from("saved.entlayout"));
             dialog.retry = Some(Prepared {
                 profile: dialog.profile,
+                qmk_serial: None,
                 keyboard_uid: [1; 8],
                 bytes: vec![7],
                 version: "0.3.1".into(),
@@ -1412,6 +1533,7 @@ mod tests {
             .push((K04_LEFT_PERIPHERAL, Outcome::TransferredUnverified));
         dialog.retry = Some(Prepared {
             profile: dialog.profile,
+            qmk_serial: None,
             keyboard_uid: [0; 8],
             bytes: vec![7],
             version: "0.3.1".into(),

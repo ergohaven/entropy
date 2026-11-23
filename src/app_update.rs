@@ -269,16 +269,6 @@ pub(crate) fn start_firmware_update_check(
         if let Some(result) = rmk_actions_test_result(&target) {
             return FirmwareUpdateCheckState::Ready { target, result };
         }
-        // A Phenom Rynk target is only used for a pinned local test archive.
-        // If that archive disappears, keep official RMK releases out of the flow.
-        if target.family == FirmwareReleaseFamily::Rynk
-            && crate::firmware_flash::profiles::PROFILES.iter().any(|profile| {
-                profile.archive == target.asset_prefix
-                    && phenom_qmk_asset_prefix(profile.product_id).is_some()
-            })
-        {
-            return FirmwareUpdateCheckState::Unavailable { target };
-        }
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -580,32 +570,26 @@ pub(crate) fn rynk_firmware_release_target(
     board_definition: &serde_json::Value,
     legacy_qube: bool,
 ) -> Option<FirmwareReleaseTarget> {
-    if vendor_id == ERGOHAVEN_VENDOR_ID && phenom_qmk_asset_prefix(product_id).is_some() {
-        let target = firmware_release_target(
-            vendor_id,
-            product_id,
-            firmware_version,
-            board_definition,
-            legacy_qube,
-            true,
-        )?;
-        #[cfg(all(debug_assertions, not(target_arch = "wasm32")))]
-        {
-            use crate::firmware_flash::{actions_test, compatible_version, profiles::PROFILES};
-
-            if let Some(profile) = PROFILES.iter().find(|profile| {
-                profile.product_id == product_id
-                    && compatible_version(&target.current_version)
-                    && actions_test::artifact_for(profile.archive).is_some()
-            }) {
-                return Some(FirmwareReleaseTarget {
-                    family: FirmwareReleaseFamily::Rynk,
-                    asset_prefix: profile.archive.to_owned(),
-                    ..target
-                });
+    if vendor_id == ERGOHAVEN_VENDOR_ID {
+        if let Some(asset) = match product_id {
+            0x0052 => Some("phenom"),
+            0x0053 => Some("phenom-mini"),
+            0x0054 => Some("phenom-micro"),
+            _ => None,
+        } {
+            if let Some(declared) = board_definition.pointer("/entropy/firmwareUpdate/asset") {
+                if normalized_asset_prefix(declared.as_str()?)? != asset {
+                    return None;
+                }
             }
+            let version = firmware_version?.trim();
+            parse_semver(version)?;
+            return Some(FirmwareReleaseTarget {
+                family: FirmwareReleaseFamily::Rynk,
+                current_version: version.to_owned(),
+                asset_prefix: asset.to_owned(),
+            });
         }
-        return Some(target);
     }
     let mut target = rmk_firmware_release_target(
         vendor_id, product_id, firmware_version, board_definition, legacy_qube, true,
@@ -627,6 +611,7 @@ pub(crate) fn rynk_firmware_release_target(
     Some(target)
 }
 
+#[cfg(test)]
 pub(crate) fn firmware_release_target(
     vendor_id: u16,
     product_id: u16,
@@ -635,16 +620,42 @@ pub(crate) fn firmware_release_target(
     legacy_qube: bool,
     native_rmk_marker: bool,
 ) -> Option<FirmwareReleaseTarget> {
+    firmware_release_target_for_usb(
+        vendor_id, product_id, firmware_version, vial_json, legacy_qube, native_rmk_marker, None,
+    )
+}
+
+pub(crate) fn firmware_release_target_for_usb(
+    vendor_id: u16,
+    product_id: u16,
+    firmware_version: Option<&str>,
+    vial_json: &serde_json::Value,
+    legacy_qube: bool,
+    native_rmk_marker: bool,
+    usb_product: Option<&str>,
+) -> Option<FirmwareReleaseTarget> {
     let version = firmware_version?.trim();
     let firmware_name_is_rmk = vial_json
         .pointer("/firmware/name")
         .and_then(serde_json::Value::as_str)
         .is_some_and(|name| name.to_ascii_lowercase().contains("rmk"));
+    let explicit_family = match vial_json.pointer("/entropy/firmwareUpdate/family") {
+        None => None,
+        Some(value) => Some(match value.as_str()? {
+            "rmk" => FirmwareReleaseFamily::Rmk,
+            "qmk" => FirmwareReleaseFamily::Qmk,
+            _ => return None,
+        }),
+    };
     let is_rmk = native_rmk_marker
         || numeric_version_parts(version).first() == Some(&0)
-        || firmware_name_is_rmk;
-    // Official Phenom firmware is QMK/Vial while RMK distribution is paused.
-    // This selects the download, not the installed device's protocol/backend.
+        || firmware_name_is_rmk
+        || explicit_family == Some(FirmwareReleaseFamily::Rmk);
+    if explicit_family == Some(FirmwareReleaseFamily::Qmk) && is_rmk {
+        return None;
+    }
+    // Phenom's Vial session offers either a QMK update or a manual
+    // migration from older RMK/Vial. Native RMK has its own release target.
     if vendor_id == ERGOHAVEN_VENDOR_ID {
         if let Some(asset) = phenom_qmk_asset_prefix(product_id) {
             parse_semver(version)?;
@@ -658,19 +669,6 @@ pub(crate) fn firmware_release_target(
                 asset_prefix: asset.to_owned(),
             });
         }
-    }
-    let explicit_family = match vial_json.pointer("/entropy/firmwareUpdate/family") {
-        None => None,
-        Some(value) => Some(match value.as_str()? {
-            "rmk" => FirmwareReleaseFamily::Rmk,
-            "qmk" => FirmwareReleaseFamily::Qmk,
-            _ => return None,
-        }),
-    };
-    if explicit_family == Some(FirmwareReleaseFamily::Qmk)
-        && (native_rmk_marker || firmware_name_is_rmk)
-    {
-        return None;
     }
     // Asset-only overrides predate QMK checks and belong to RMK. QMK revision
     // overrides declare family = "qmk" alongside the asset to avoid changing that contract.
@@ -695,27 +693,22 @@ pub(crate) fn firmware_release_target(
         return None;
     }
     parse_semver(version)?;
+    let reported_variant = qmk_shared_pid_asset(product_id, usb_product, vial_json);
     let explicit = vial_json.pointer("/entropy/firmwareUpdate/asset");
     let asset_prefix = if let Some(value) = explicit {
-        normalized_asset_prefix(value.as_str()?)?
-    } else {
-        // Verified against ergohaven/vial-qmk keyboard.json USB identities and release assets.
-        // Shared PIDs with ambiguous revisions need explicit definition metadata.
-        match product_id {
-            0x0010 => "remnant_v1",
-            0x0020 => "k02_v1",
-            0x0030 => "planeta_v1",
-            0x0031 => "planeta_v2",
-            0x0040 => "macropad_v1",
-            0x0041 => "macropad_v2",
-            0x0042 => "macropad_v3",
-            0x0050 => "hpd_v1",
-            0x0060 => "velvet_v1",
-            0x00A0 => "k03pro_43mm_v1",
-            0x00B0 => "sm30_v1",
-            _ => return None,
+        let asset = normalized_asset_prefix(value.as_str()?)?;
+        if reported_variant.is_some_and(|reported| reported != asset) {
+            return None;
         }
-        .to_owned()
+        asset
+    } else {
+        let mut variants = QMK_RELEASE_PROFILES.iter().filter(|(pid, _, _)| *pid == product_id);
+        let (_, asset, _) = variants.next()?;
+        if variants.next().is_none() {
+            (*asset).to_owned()
+        } else {
+            reported_variant?.to_owned()
+        }
     };
     Some(FirmwareReleaseTarget {
         family: FirmwareReleaseFamily::Qmk,
@@ -723,6 +716,92 @@ pub(crate) fn firmware_release_target(
         asset_prefix,
     })
 }
+
+/// Match exact product descriptors from the QMK release definitions. Trackball
+/// shares its product string between sensor revisions, which publish distinct
+/// DPI choices in the Vial definition instead.
+fn qmk_shared_pid_asset(
+    product_id: u16,
+    usb_product: Option<&str>,
+    definition: &serde_json::Value,
+) -> Option<&'static str> {
+    if product_id == 0x0090 && usb_product == Some("Trackball") {
+        const TRACKBALL_V1: &[&str] = &[
+            "DPI", "400", "500", "630", "800", "1000", "1250", "1600", "2000",
+            "2500", "3200", "4000", "5000", "6300", "8000", "8200 (max)",
+        ];
+        const TRACKBALL_V2: &[&str] = &[
+            "DPI", "100", "200", "300", "400", "500", "600", "800", "1000",
+            "1200", "1600", "2000", "2500", "3200", "4000", "5000",
+        ];
+        let mut dpi = definition.pointer("/layouts/labels")?.as_array()?.iter()
+            .filter_map(serde_json::Value::as_array)
+            .filter(|values| values.first().and_then(serde_json::Value::as_str) == Some("DPI"));
+        let choices = dpi.next()?;
+        if dpi.next().is_some() {
+            return None;
+        }
+        return [(TRACKBALL_V1, "trackball_v1"), (TRACKBALL_V2, "trackball_v2")].into_iter()
+            .find_map(|(published, asset)| {
+                choices.iter().map(serde_json::Value::as_str)
+                    .eq(published.iter().copied().map(Some)).then_some(asset)
+            });
+    }
+    Some(match (product_id, usb_product?) {
+        (0x0051, "HPD v2") => "hpd_v2",
+        (0x0051, "HPD v2 ball/enc") => "hpd_v2_ball_enc",
+        (0x0051, "HPD v2 enc/ball") => "hpd_v2_enc_ball",
+        (0x0051, "HPD v2 enc/enc") => "hpd_v2_enc_enc",
+        (0x0051, "HPD v2 enc/joy") => "hpd_v2_enc_joy",
+        (0x0051, "HPD v2 enc/touch") => "hpd_v2_enc_touch",
+        (0x0051, "HPD v2 touch/enc") => "hpd_v2_touch_enc",
+        (0x0061, "Velvet v2") => "velvet_v2",
+        (0x0061, "Velvet v3") => "velvet_v3",
+        (0x0070, "K:03 v1/v2") => "k03_v1_v2",
+        (0x0070, "K:03 v3/v4") => "k03_v3_v4",
+        (0x0080, "Imperial44 v1/v2") => "imperial44_v1_v2",
+        (0x0080, "Imperial44 v3/v4") => "imperial44_v3_v4",
+        (0x00a1, "K:03 PRO v1 65mm") => "k03pro_65mm_v1",
+        (0x00a1, "K:03 PRO v2/v3") => "k03pro_v2_v3",
+        _ => return None,
+    })
+}
+
+/// Published RP2040 builds from the Vial-QMK release matrix.
+pub(crate) const QMK_RELEASE_PROFILES: &[(u16, &str, bool)] = &[
+    (0x0010, "remnant_v1", true),
+    (0x0020, "k02_v1", true),
+    (0x0030, "planeta_v1", false),
+    (0x0031, "planeta_v2", false),
+    (0x0040, "macropad_v1", false),
+    (0x0041, "macropad_v2", false),
+    (0x0042, "macropad_v3", false),
+    (0x0050, "hpd_v1", true),
+    (0x0051, "hpd_v2", true),
+    (0x0051, "hpd_v2_ball_enc", true),
+    (0x0051, "hpd_v2_enc_ball", true),
+    (0x0051, "hpd_v2_enc_enc", true),
+    (0x0051, "hpd_v2_enc_joy", true),
+    (0x0051, "hpd_v2_enc_touch", true),
+    (0x0051, "hpd_v2_touch_enc", true),
+    (0x0052, "phenom_v1", true),
+    (0x0053, "phenom_mini_v1", true),
+    (0x0054, "phenom_micro_v1", true),
+    (0x0060, "velvet_v1", true),
+    (0x0061, "velvet_v2", true),
+    (0x0061, "velvet_v3", true),
+    (0x0070, "k03_v1_v2", true),
+    (0x0070, "k03_v3_v4", true),
+    (0x0080, "imperial44_v1_v2", true),
+    (0x0080, "imperial44_v3_v4", true),
+    (0x0090, "trackball_v1", false),
+    (0x0090, "trackball_v2", false),
+    (0x00a0, "k03pro_43mm_v1", true),
+    (0x00a1, "k03pro_65mm_v1", true),
+    (0x00a1, "k03pro_v2_v3", true),
+    (0x00b0, "sm30_v1", false),
+    (0x00b2, "sm62_v1", true),
+];
 
 fn phenom_qmk_asset_prefix(product_id: u16) -> Option<&'static str> {
     match product_id {
@@ -1971,20 +2050,20 @@ mod tests {
     }
 
     #[test]
-    fn installed_rmk_phenoms_offer_qmk_migration_without_comparing_families() {
-        for (pid, asset) in [
-            (0x0052, "phenom_v1"),
-            (0x0053, "phenom_mini_v1"),
-            (0x0054, "phenom_micro_v1"),
+    fn native_phenom_updates_stay_on_rmk_and_legacy_migration_is_manual() {
+        for (pid, asset, archive) in [
+            (0x0052, "phenom_v1", "phenom"),
+            (0x0053, "phenom_mini_v1", "phenom-mini"),
+            (0x0054, "phenom_micro_v1", "phenom-micro"),
         ] {
             let definition = serde_json::json!({
                 "firmware": { "name": "RMK" },
-                "entropy": { "firmwareUpdate": { "asset": "phenom" } }
+                "entropy": { "firmwareUpdate": { "asset": archive } }
             });
             let native = rynk_firmware_release_target(
                 ERGOHAVEN_VENDOR_ID,
                 pid,
-                Some("9.0.0"),
+                Some("0.3.0"),
                 &definition,
                 false,
             )
@@ -1998,13 +2077,20 @@ mod tests {
                 true,
             )
             .unwrap();
-            assert_eq!(native, vial);
-            assert_eq!(native.family, FirmwareReleaseFamily::QmkMigration);
-            assert_eq!(native.current_version, "9.0.0");
-            assert_eq!(native.asset_prefix, asset);
+            assert_eq!(native.family, FirmwareReleaseFamily::Rynk);
+            assert_eq!(native.asset_prefix, archive);
+            let native_asset = format!("{archive}-v0.3.1.zip");
+            let native_result = build_firmware_update_result(
+                &native,
+                vec![release("v0.3.1", false, false, &[&native_asset])],
+            ).unwrap();
+            assert_eq!(native_result.relation, VersionRelation::UpdateAvailable);
+            assert_eq!(vial.family, FirmwareReleaseFamily::QmkMigration);
+            assert_eq!(vial.current_version, "9.0.0");
+            assert_eq!(vial.asset_prefix, asset);
             let expected = format!("4.2.0_{asset}.uf2");
             let result = build_firmware_update_result(
-                &native,
+                &vial,
                 vec![release(
                     "4.2.0",
                     false,
@@ -2050,6 +2136,41 @@ mod tests {
         assert_eq!(result.asset.name, "4.1.0_planeta_v2.uf2");
         assert_eq!(result.relation, VersionRelation::UpdateAvailable);
         assert!(is_trusted_release_url(&result.release_url));
+    }
+
+    #[test]
+    fn qmk_shared_usb_ids_use_exact_usb_product_or_sensor_identity() {
+        let no_override = serde_json::json!({});
+        for (pid, usb_product, asset) in [
+            (0x0070, "K:03 v1/v2", "k03_v1_v2"),
+            (0x0070, "K:03 v3/v4", "k03_v3_v4"),
+            (0x0051, "HPD v2 enc/ball", "hpd_v2_enc_ball"),
+            (0x0061, "Velvet v3", "velvet_v3"),
+            (0x0080, "Imperial44 v1/v2", "imperial44_v1_v2"),
+            (0x00a1, "K:03 PRO v1 65mm", "k03pro_65mm_v1"),
+        ] {
+            let target = firmware_release_target_for_usb(
+                ERGOHAVEN_VENDOR_ID, pid, Some("4.1.0"), &no_override, false, false, Some(usb_product),
+            ).unwrap();
+            assert_eq!(target.family, FirmwareReleaseFamily::Qmk);
+            assert_eq!(target.asset_prefix, asset);
+        }
+        let conflicting = serde_json::json!({
+            "entropy": { "firmwareUpdate": { "family": "qmk", "asset": "k03_v1_v2" } }
+        });
+        assert!(firmware_release_target_for_usb(
+            ERGOHAVEN_VENDOR_ID, 0x0070, Some("4.1.0"), &conflicting, false, false, Some("K:03 v3/v4"),
+        ).is_none());
+
+        let v2 = serde_json::json!({"layouts": {"labels": [
+            ["DPI", "100", "200", "300", "400", "500", "600", "800", "1000",
+                "1200", "1600", "2000", "2500", "3200", "4000", "5000"]
+        ]}});
+        let resolve_trackball = |definition| firmware_release_target_for_usb(
+            ERGOHAVEN_VENDOR_ID, 0x0090, Some("4.1.0"), definition, false, false, Some("Trackball"),
+        );
+        assert_eq!(resolve_trackball(&v2).unwrap().asset_prefix, "trackball_v2");
+        assert!(resolve_trackball(&no_override).is_none());
     }
 
     #[test]

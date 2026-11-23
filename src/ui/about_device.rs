@@ -893,9 +893,13 @@ impl EntropyApp {
                     .is_some_and(|d| d.vendor_id == 0xe126 && crate::firmware_flash::runtime_product(d.product_id))
                 {
                     ui.label(match lang {
-                        crate::i18n::Language::English => "In-app flashing requires Entropy 0.6.0+ and RMK 0.3.0+ with Rynk over USB. For QMK/Vial or older RMK, first migrate the complete keyboard manually; export your layout before migrating.",
-                        crate::i18n::Language::Russian => "Прошивка из приложения требует Entropy 0.6.0+ и RMK 0.3.0+ с Rynk по USB. С QMK/Vial или старой RMK сначала обновите все части вручную; перед переходом экспортируйте раскладку.",
+                        crate::i18n::Language::English => "Entropy can flash compatible QMK or RMK updates over USB. To switch firmware families, export your layout and follow the manual guide.",
+                        crate::i18n::Language::Russian => "Entropy может устанавливать совместимые обновления QMK и RMK по USB. Для перехода между QMK и RMK экспортируйте раскладку и следуйте инструкции по ручной прошивке.",
                     });
+                    ui.hyperlink_to(match lang {
+                        crate::i18n::Language::English => "Manual firmware guide",
+                        crate::i18n::Language::Russian => "Инструкция по ручной прошивке",
+                    }, "https://docs.eh.works/firmware/");
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 if let FirmwareUpdateCheckState::Ready { target, result } = &self.firmware_update_check {

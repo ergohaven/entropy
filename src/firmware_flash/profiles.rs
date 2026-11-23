@@ -1,5 +1,4 @@
-//! Explicitly reviewed release profiles. Rynk compatibility alone never opts a
-//! keyboard into flashing: its package, component order and memory map must agree.
+//! Firmware profiles bind a release asset to a keyboard and its flash layout.
 
 use crate::rynk::client::{FirmwareTarget, RynkBoard};
 
@@ -13,6 +12,7 @@ pub(crate) enum Role {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum FlashLayout {
     Rp2040,
+    Rp2040Sm62,
     Nrf52840Softdevice,
     Nrf52840Dongle,
 }
@@ -22,6 +22,8 @@ impl FlashLayout {
     pub(super) fn limits(self) -> (u32, u32, u32) {
         match self {
             Self::Rp2040 => (0xe48bff56, 0x10000000, 0x10100000),
+            // SM62's linker caps code here, before its resident layout store.
+            Self::Rp2040Sm62 => (0xe48bff56, 0x10000000, 0x101f2000),
             Self::Nrf52840Softdevice => (0xada52840, 0x26000, 0xcc000),
             Self::Nrf52840Dongle => (0xada52840, 0x1000, 0xcc000),
         }
@@ -73,7 +75,7 @@ impl Part {
     }
 
     pub(crate) fn rp2040(self) -> bool {
-        self.layout == FlashLayout::Rp2040
+        matches!(self.layout, FlashLayout::Rp2040 | FlashLayout::Rp2040Sm62)
     }
 
     pub(crate) fn unlock_keys(self, positions: &[(u8, u8)]) -> Option<&'static str> {
@@ -174,6 +176,7 @@ pub(crate) struct Profile {
     pub product_id: u16,
     pub archive: &'static str,
     pub output: &'static str,
+    pub qmk: bool,
     /// Transfer peripherals first, then the runtime USB component. A whole
     /// keyboard can use a single Central image; no split-specific engine needed.
     pub parts: &'static [Part],
@@ -276,6 +279,7 @@ const fn classic(
         product_id,
         archive,
         output,
+        qmk: false,
         parts,
         either_half_primary: false,
         connection_note: None,
@@ -287,6 +291,7 @@ const fn phenom(product_id: u16, archive: &'static str, output: &'static str) ->
         product_id,
         archive,
         output,
+        qmk: false,
         parts: &[PHENOM_PERIPHERAL, PHENOM_CENTRAL],
         either_half_primary: true,
         connection_note: Some((
@@ -301,6 +306,7 @@ const fn k04(product_id: u16, archive: &'static str, output: &'static str, qube:
         product_id,
         archive,
         output,
+        qmk: false,
         parts: if qube {
             QUBE_PARTS
         } else {
@@ -309,6 +315,50 @@ const fn k04(product_id: u16, archive: &'static str, output: &'static str, qube:
         either_half_primary: false,
         connection_note: None,
     }
+}
+
+const QMK_KEYBOARD: Part = Part {
+    role: Role::Central,
+    target: FirmwareTarget::Standalone,
+    layout: FlashLayout::Rp2040,
+    label: ("Keyboard", "Клавиатура"),
+    suffix: "keyboard",
+    unlock: None,
+};
+const QMK_FIRST_HALF: Part = Part {
+    label: ("USB-connected half", "Подключённая по USB половинка"),
+    suffix: "first",
+    ..QMK_KEYBOARD
+};
+const QMK_OTHER_HALF: Part = Part {
+    role: Role::Peripheral,
+    label: ("Other half", "Вторая половинка"),
+    suffix: "other",
+    ..QMK_FIRST_HALF
+};
+
+const QMK_SM62_PARTS: &[Part] = &[
+    Part { layout: FlashLayout::Rp2040Sm62, ..QMK_FIRST_HALF },
+    Part { layout: FlashLayout::Rp2040Sm62, ..QMK_OTHER_HALF },
+];
+
+pub(crate) fn qmk_profile(pid: u16, asset: &str) -> Option<Profile> {
+    let &(_, archive, split) = crate::app::QMK_RELEASE_PROFILES
+        .iter()
+        .find(|(product, prefix, _)| *product == pid && *prefix == asset)?;
+    Some(Profile {
+        product_id: pid,
+        archive,
+        output: archive,
+        qmk: true,
+        parts: match (archive, split) {
+            ("sm62_v1", _) => QMK_SM62_PARTS,
+            (_, true) => &[QMK_FIRST_HALF, QMK_OTHER_HALF],
+            (_, false) => &[QMK_KEYBOARD],
+        },
+        either_half_primary: split,
+        connection_note: None,
+    })
 }
 
 pub(crate) fn profile_for_archive(pid: u16, archive: &str) -> Option<Profile> {
@@ -334,6 +384,7 @@ pub(crate) mod fixtures {
         product_id: 0xffff,
         archive: "future-board",
         output: "future_board",
+        qmk: false,
         parts: &[Part {
             role: Role::Central,
             target: FirmwareTarget::Standalone,
