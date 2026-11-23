@@ -766,6 +766,10 @@ impl EntropyApp {
             self.rgb_settings = RgbSettingsState::default();
             self.display_settings = DisplaySettingsState::default();
             self.layout_options_value = None;
+            #[cfg(not(target_arch = "wasm32"))]
+            {
+                self.layout_options_import_unconfirmed = false;
+            }
             self.encoder_visibility.clear();
             self.keycode_picker.reset_macro_editor();
             self.keycode_picker.macro_count = 0;

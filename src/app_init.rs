@@ -403,6 +403,8 @@ impl EntropyApp {
             rgb_settings: RgbSettingsState::default(),
             display_settings: DisplaySettingsState::default(),
             layout_options_value: None,
+            #[cfg(not(target_arch = "wasm32"))]
+            layout_options_import_unconfirmed: false,
             encoder_visibility: vec![],
             combo_term_dirty: false,
             combo_visible_count: 1,

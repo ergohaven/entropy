@@ -288,6 +288,10 @@ impl EntropyApp {
         self.rgb_settings = RgbSettingsState::default();
         self.display_settings = DisplaySettingsState::default();
         self.layout_options_value = None;
+        #[cfg(not(target_arch = "wasm32"))]
+        {
+            self.layout_options_import_unconfirmed = false;
+        }
         self.sticky_layout_prev_pressed.clear();
         self.sticky_layout_pressed_key_layers.clear();
         self.sticky_layout_toggled_layers.clear();

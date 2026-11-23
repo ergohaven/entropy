@@ -1410,6 +1410,7 @@ impl EntropyApp {
                 self.rgb_settings = r.rgb_settings;
                 self.display_settings = r.display_settings;
                 self.layout_options_value = r.layout_options_value;
+                self.layout_options_import_unconfirmed = false;
                 let highest_used_combo = self
                     .combo_entries
                     .iter()

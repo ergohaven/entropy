@@ -11,6 +11,10 @@ use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
 
 #[cfg(not(target_arch = "wasm32"))]
+#[path = "entlayout_vial.rs"]
+mod vial_backup;
+
+#[cfg(not(target_arch = "wasm32"))]
 #[path = "entlayout_backup.rs"]
 pub(super) mod backup_durability;
 
@@ -236,6 +240,13 @@ pub(super) fn write_application_entlayout(
         },
         language,
     )
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn is_vial_backup_path(path: &Path) -> bool {
+    path.extension()
+        .and_then(|extension| extension.to_str())
+        .is_some_and(|extension| extension.eq_ignore_ascii_case("vil"))
 }
 
 fn validate_application_entlayout_extension(path: &Path) -> Result<()> {
@@ -1536,7 +1547,7 @@ impl EntropyApp {
     /// resident reads run on the UI thread; Busy retains the captured request.
     #[cfg(not(target_arch = "wasm32"))]
     pub(super) fn prepare_pending_entlayout_import_backup(&mut self, ctx: &egui::Context, path: &Path) -> Result<bool> {
-        if !self.selected_device.and_then(|i| self.device_manager.devices().get(i))
+        if is_vial_backup_path(path) || !self.selected_device.and_then(|i| self.device_manager.devices().get(i))
             .is_some_and(|d| d.application_layout_protocol_version() == Some(8)) {
             return Ok(true);
         }
@@ -1750,7 +1761,7 @@ impl EntropyApp {
         }
         self.spawn_file_dialog(
             crate::app::file_dialog::FileDialogAction::ImportEntlayout,
-            rfd::FileDialog::new().add_filter("Entropy layout", &["entlayout"]),
+            rfd::FileDialog::new().add_filter("Keyboard layouts", &["entlayout", "vil"]),
             false,
         );
     }
@@ -1807,6 +1818,11 @@ impl EntropyApp {
 
     #[cfg(not(target_arch = "wasm32"))]
     fn import_entlayout_from_path_prepared(&mut self, path: &Path) -> Result<String> {
+        anyhow::ensure!(!self.layout_options_import_unconfirmed,
+            "Reconnect the keyboard to confirm its layout options before importing");
+        if is_vial_backup_path(path) {
+            return self.import_vial_backup(path);
+        }
         let lang = self.app_settings.language;
         // Consent covers one try of the file it was given for.
         let losses_accepted = self
@@ -2091,6 +2107,7 @@ impl EntropyApp {
         // not serialize a last-known cache as confirmed after a failed SET/GET.
         #[cfg(not(target_arch = "wasm32"))]
         if !self.entlayout_lighting_complete()
+            || self.layout_options_import_unconfirmed
             || self.selected_layer_names_uncertain()
             || self.deferred_device_load.has_unconfirmed_import_data()
             || (self.keycode_picker.macro_count > 0
@@ -2448,19 +2465,24 @@ impl EntropyApp {
         anyhow::ensure!(std::time::Instant::now() < request.deadline, "Import backup preparation expired");
         let bundle = request.document.take().context("Import backup preparation incomplete")?;
         self.validate_entlayout_file(&bundle)?;
+        let path = self.publish_entlayout_import_backup(&bundle)?;
+        anyhow::ensure!(self.gui_entlayout_owner_matches(&request), "Keyboard owner changed before import SET");
+        anyhow::ensure!(std::time::Instant::now() < request.deadline, "Import backup preparation expired before SET");
+        Ok(path)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn publish_entlayout_import_backup(&self, bundle: &EntLayoutFile) -> Result<backup_durability::PublishedBackup> {
         let config_root = storage_config_dir().context("No backup storage directory")?;
         let namespace = self.import_backup_namespace.as_ref()
             .map_err(|error| anyhow::anyhow!("Prepare import backup namespace: {error}"))?;
         anyhow::ensure!(namespace.matches_config_root(&config_root),
             "Backup storage changed after initialization; restart before importing");
-        let path = backup_durability::publish_backup(
+        backup_durability::publish_backup(
             namespace,
             &device_id_slug(&bundle.keyboard.name),
-            |file| serde_json::to_writer_pretty(file, &bundle).map_err(std::io::Error::other),
-        ).context("Create and durably publish import backup")?;
-        anyhow::ensure!(self.gui_entlayout_owner_matches(&request), "Keyboard owner changed before import SET");
-        anyhow::ensure!(std::time::Instant::now() < request.deadline, "Import backup preparation expired before SET");
-        Ok(path)
+            |file| serde_json::to_writer_pretty(file, bundle).map_err(std::io::Error::other),
+        ).context("Create and durably publish import backup")
     }
 
     #[cfg(not(target_arch = "wasm32"))]
@@ -4190,6 +4212,17 @@ impl EntropyApp {
         bundle: &EntLayoutFile,
         mapping: &EntLayoutImportMapping,
     ) -> Result<(EntFirmwareFailures, EntPortableSettingsImportReport)> {
+        self.apply_entlayout_firmware_state_for_import(bundle, mapping, false)
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    fn apply_entlayout_firmware_state_for_import(
+        &mut self,
+        bundle: &EntLayoutFile,
+        mapping: &EntLayoutImportMapping,
+        vial_backup: bool,
+    ) -> Result<(EntFirmwareFailures, EntPortableSettingsImportReport)> {
+        let confirmed_import = vial_backup || complete_entlayout_document(bundle);
         let lang = self.app_settings.language;
         let macro_write_in_flight = self.hid_write_task_active();
         let Some(hid) = &self.hid_device else {
@@ -4291,7 +4324,7 @@ impl EntropyApp {
                         continue;
                     }
                     let key = &layout.keys[target_key_idx];
-                    if complete_entlayout_document(&bundle) {
+                    if confirmed_import {
                         self.deferred_device_load.mark_import_layer_unconfirmed(target_layer_idx);
                     }
                     hid.set_key_binding(target_layer_idx as u8, key.row, key.col, binding)?;
@@ -4339,7 +4372,7 @@ impl EntropyApp {
                         continue;
                     }
                     let encoder = &layout.encoders[target_encoder_idx];
-                    if complete_entlayout_document(&bundle) {
+                    if confirmed_import {
                         self.deferred_device_load.mark_import_layer_unconfirmed(target_layer_idx);
                     }
                     hid.set_encoder(
@@ -4348,6 +4381,12 @@ impl EntropyApp {
                         encoder.direction,
                         keycode,
                     )?;
+                    if vial_backup {
+                        let (clockwise, counter_clockwise) =
+                            hid.require_vial()?.get_encoder(target_layer_idx as u8, encoder.encoder_idx)?;
+                        let confirmed = if encoder.direction == 0 { clockwise } else { counter_clockwise };
+                        anyhow::ensure!(confirmed == keycode, "Encoder readback mismatch on layer {target_layer_idx}, encoder {}", encoder.encoder_idx);
+                    }
                 }
             }
             Ok(())
@@ -4369,7 +4408,17 @@ impl EntropyApp {
             if let Some(options) = bundle.data.layout_options {
                 if self.layout_options_value.is_some() && self.layout_options_value != Some(options)
                 {
-                    if let Err(err) = hid.set_layout_options(options) {
+                    if vial_backup {
+                        self.layout_options_import_unconfirmed = true;
+                    }
+                    let result = hid.set_layout_options(options).and_then(|()| {
+                        if vial_backup {
+                            anyhow::ensure!(hid.require_vial()?.get_layout_options()? == options,
+                                "Layout options readback mismatch");
+                        }
+                        Ok(())
+                    });
+                    if let Err(err) = result {
                         failures.push(crate::i18n::tr_catalog_format(
                             lang,
                             "entlayout.firmware_failure",
@@ -4381,13 +4430,17 @@ impl EntropyApp {
                                 ("error", &err.to_string()),
                             ],
                         ));
+                    } else if vial_backup {
+                        // Another section may fail after layout options landed.
+                        self.layout_options_value = Some(options);
+                        self.layout_options_import_unconfirmed = false;
                     }
                 }
             }
         }
 
         for setting in portable_settings {
-            if complete_entlayout_document(&bundle) && !setting.is_layer_led_color() {
+            if confirmed_import && !setting.is_layer_led_color() {
                 // The peer may accept SET even when its acknowledgement or GET
                 // fails. Preserve drafts, but revoke their snapshot authority
                 // before touching hardware (also blocks stale equality skips).
@@ -4510,7 +4563,7 @@ impl EntropyApp {
                     DeferredLoadSection::Macros,
                     DeferredLoadStatus::Failed("Macro write has not been confirmed".into()),
                 );
-                if complete_entlayout_document(&bundle) {
+                if confirmed_import {
                     self.deferred_device_load.mark_import_section_unconfirmed(DeferredLoadSection::Macros);
                 }
                 hid.set_macro_buffer(&buf)?;
@@ -4554,7 +4607,7 @@ impl EntropyApp {
                     bail!("target firmware does not support layer-specific Combos");
                 }
                 let current = &self.combo_entries[idx];
-                if complete_entlayout_document(bundle)
+                if confirmed_import
                     && (current.keys != combo.keys || current.output != output
                         || (supports_rmk_combo_layers && current.layer != combo.layer))
                 {
@@ -4568,7 +4621,7 @@ impl EntropyApp {
                         layer: combo.layer,
                     },
                     current.keys != combo.keys || current.output != output,
-                    supports_rmk_combo_layers && current.layer != combo.layer,
+                    !vial_backup && supports_rmk_combo_layers && current.layer != combo.layer,
                 )?;
             }
             Ok(())
@@ -4577,7 +4630,16 @@ impl EntropyApp {
         }
         if let Some(term) = bundle.data.combos.term {
             if self.combo_term.is_some() && self.combo_term != Some(term) {
-                if let Err(err) = hid.set_qmk_setting_u16(2, term) {
+                if vial_backup {
+                    self.deferred_device_load.mark_import_section_unconfirmed(DeferredLoadSection::Combos);
+                }
+                let result = hid.set_qmk_setting_u16(2, term).and_then(|()| {
+                    if vial_backup {
+                        anyhow::ensure!(hid.get_qmk_setting_u16(2)? == term, "Combo term readback mismatch");
+                    }
+                    Ok(())
+                });
+                if let Err(err) = result {
                     failures.push_section("entlayout.combos", format!("combo term ({err})"));
                 }
             }
@@ -4628,7 +4690,7 @@ impl EntropyApp {
                 {
                     continue;
                 }
-                if complete_entlayout_document(&bundle) {
+                if confirmed_import {
                     self.deferred_device_load.mark_import_section_unconfirmed(DeferredLoadSection::TapDance);
                 }
                 hid.set_tap_dance_bindings(idx as u8, actions, td.tapping_term)?;
@@ -4661,7 +4723,7 @@ impl EntropyApp {
                 {
                     continue;
                 }
-                if complete_entlayout_document(&bundle) {
+                if confirmed_import {
                     self.deferred_device_load.mark_import_section_unconfirmed(DeferredLoadSection::KeyOverrides);
                 }
                 hid.set_key_override(
@@ -4674,7 +4736,7 @@ impl EntropyApp {
                     ko.suppressed_mods,
                     ko.options,
                 )?;
-                if complete_entlayout_document(&bundle)
+                if confirmed_import
                     && hid.get_key_override(idx as u8)? != (ko.trigger,ko.replacement,ko.layers,ko.trigger_mods,ko.negative_mod_mask,ko.suppressed_mods,ko.options) {
                     bail!("Key Override readback mismatch");
                 }
@@ -4704,7 +4766,7 @@ impl EntropyApp {
                 {
                     continue;
                 }
-                if complete_entlayout_document(&bundle) {
+                if confirmed_import {
                     self.deferred_device_load.mark_import_section_unconfirmed(DeferredLoadSection::AltRepeat);
                 }
                 hid.set_alt_repeat_key(
@@ -4714,7 +4776,7 @@ impl EntropyApp {
                     ar.allowed_mods,
                     ar.options,
                 )?;
-                if complete_entlayout_document(&bundle)
+                if confirmed_import
                     && hid.get_alt_repeat_key(idx as u8)? != (ar.keycode,ar.alt_keycode,ar.allowed_mods,ar.options) {
                     bail!("Alt Repeat readback mismatch");
                 }
@@ -4739,6 +4801,16 @@ impl EntropyApp {
         bundle: &EntLayoutFile,
         mapping: &EntLayoutImportMapping,
         apply_macros: bool,
+    ) -> Result<()> {
+        self.apply_entlayout_local_state_for_import(bundle, mapping, apply_macros, false)
+    }
+
+    fn apply_entlayout_local_state_for_import(
+        &mut self,
+        bundle: &EntLayoutFile,
+        mapping: &EntLayoutImportMapping,
+        apply_macros: bool,
+        vial_backup: bool,
     ) -> Result<()> {
         let limits = self.entlayout_keycode_import_limits();
         let rynk_target = self.entlayout_target_is_rynk();
@@ -4825,160 +4897,168 @@ impl EntropyApp {
                 }
             }
         }
-        let mut encoder_visibility = self.encoder_visibility.clone();
-        encoder_visibility.resize(
-            self.layout
-                .as_ref()
-                .map(|layout| layout.encoder_count())
-                .unwrap_or(0),
-            true,
-        );
-        for (source_idx, visible) in bundle.data.encoder_visibility.iter().copied().enumerate() {
-            let Some(target_idx) = mapping.encoder_mapping.get(source_idx).copied().flatten()
-            else {
-                continue;
-            };
-            if let Some(slot) = encoder_visibility.get_mut(target_idx) {
-                *slot = visible;
-            }
-        }
-        self.encoder_visibility = encoder_visibility;
-        if !self.current_encoder_visibility_id.is_empty() {
-            save_encoder_visibility(
-                &self.encoder_visibility,
-                &self.current_encoder_visibility_id,
+        if !vial_backup {
+            let mut encoder_visibility = self.encoder_visibility.clone();
+            encoder_visibility.resize(
+                self.layout
+                    .as_ref()
+                    .map(|layout| layout.encoder_count())
+                    .unwrap_or(0),
+                true,
             );
-        }
-
-        if mapping.exact_layout && self.layout_options_value.is_some() {
-            self.layout_options_value = bundle.data.layout_options;
-        }
-        for (idx, name) in bundle
-            .data
-            .layer_names
-            .iter()
-            .take(self.layer_names.len().min(self.layer_count))
-            .enumerate()
-        {
-            self.layer_names[idx] = name.clone();
-        }
-        self.layer_names.truncate(self.layer_count);
-        if !self.current_device_name.is_empty() {
-            save_layer_names(&self.layer_names, &self.current_device_name);
-        }
-
-        if let (Some(source), Some(layout), Some(device_key)) = (
-            bundle.data.layout_element_visibility.as_ref(),
-            self.layout.as_ref(),
-            self.layout_element_visibility_device_key(),
-        ) {
-            let current = self
-                .app_settings
-                .layout_element_visibility
-                .get(&device_key)
-                .cloned()
-                .unwrap_or_default();
-            let mapped = map_entlayout_element_visibility(
-                source,
-                bundle.data.source_layout.as_ref(),
-                mapping,
-                layout,
-                &current,
-            );
-            if mapped == LayoutElementVisibility::default() {
-                self.app_settings
-                    .layout_element_visibility
-                    .remove(&device_key);
-            } else {
-                self.app_settings
-                    .layout_element_visibility
-                    .insert(device_key, mapped);
+            for (source_idx, visible) in bundle.data.encoder_visibility.iter().copied().enumerate() {
+                let Some(target_idx) = mapping.encoder_mapping.get(source_idx).copied().flatten()
+                else {
+                    continue;
+                };
+                if let Some(slot) = encoder_visibility.get_mut(target_idx) {
+                    *slot = visible;
+                }
             }
-        }
+            self.encoder_visibility = encoder_visibility;
+            if !self.current_encoder_visibility_id.is_empty() {
+                save_encoder_visibility(
+                    &self.encoder_visibility,
+                    &self.current_encoder_visibility_id,
+                );
+            }
 
-        // Macropad renders Default from host profile storage, not self.layout.
-        // Update only imported positions in that profile; other applications,
-        // encoder stacks and unmapped controls must remain untouched.
-        if let (Some(layout), Some(device_key), true) = (
-            self.layout.as_ref(),
-            self.selected_device
-                .and_then(|_| self.application_layout_device_key()),
-            bundle.application_layouts.is_none(),
-        ) {
-            if let Some(profile) = self
-                .app_settings
-                .application_layouts
-                .get_mut(&device_key)
-                .and_then(|settings| {
-                    settings
-                        .layouts
-                        .get_mut(crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID)
-                })
+            if mapping.exact_layout && self.layout_options_value.is_some() {
+                self.layout_options_value = bundle.data.layout_options;
+            }
+
+            for (idx, name) in bundle
+                .data
+                .layer_names
+                .iter()
+                .take(self.layer_names.len().min(self.layer_count))
+                .enumerate()
             {
-                for source_layer in 0..bundle.data.keymap.len() {
-                    let Some(layer) = map_layer_index(source_layer, self.layer_count) else {
-                        continue;
-                    };
-                    for target in mapping.key_mapping.iter().flatten().copied() {
-                        if let Some(control) = Self::application_control_for_key(layout, target) {
-                            profile.set_keycode(layer, control, layout.get_keycode(layer, target));
-                        }
-                    }
+                self.layer_names[idx] = name.clone();
+            }
+            self.layer_names.truncate(self.layer_count);
+            if !self.current_device_name.is_empty() {
+                save_layer_names(&self.layer_names, &self.current_device_name);
+            }
+
+            if let (Some(source), Some(layout), Some(device_key)) = (
+                bundle.data.layout_element_visibility.as_ref(),
+                self.layout.as_ref(),
+                self.layout_element_visibility_device_key(),
+            ) {
+                let current = self
+                    .app_settings
+                    .layout_element_visibility
+                    .get(&device_key)
+                    .cloned()
+                    .unwrap_or_default();
+                let mapped = map_entlayout_element_visibility(
+                    source,
+                    bundle.data.source_layout.as_ref(),
+                    mapping,
+                    layout,
+                    &current,
+                );
+                if mapped == LayoutElementVisibility::default() {
+                    self.app_settings
+                        .layout_element_visibility
+                        .remove(&device_key);
+                } else {
+                    self.app_settings
+                        .layout_element_visibility
+                        .insert(device_key, mapped);
                 }
-                for source_layer in 0..bundle.data.encoder_keymap.len() {
-                    let Some(layer) = map_layer_index(source_layer, self.layer_count) else {
-                        continue;
-                    };
-                    for target in mapping.encoder_mapping.iter().flatten().copied() {
-                        if let Some(control) = Self::application_control_for_encoder(layout, target)
-                        {
-                            profile.set_keycode(
-                                layer,
-                                control,
-                                layout.get_encoder_keycode(layer, target),
-                            );
-                        }
-                    }
-                }
-                for (layer, name) in bundle
-                    .data
-                    .layer_names
-                    .iter()
-                    .take(self.layer_count)
-                    .enumerate()
+            }
+
+            // Macropad renders Default from host profile storage, not self.layout.
+            // Update only imported positions in that profile; other applications,
+            // encoder stacks and unmapped controls must remain untouched.
+            if let (Some(layout), Some(device_key), true) = (
+                self.layout.as_ref(),
+                self.selected_device
+                    .and_then(|_| self.application_layout_device_key()),
+                bundle.application_layouts.is_none(),
+            ) {
+                if let Some(profile) = self
+                    .app_settings
+                    .application_layouts
+                    .get_mut(&device_key)
+                    .and_then(|settings| {
+                        settings
+                            .layouts
+                            .get_mut(crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID)
+                    })
                 {
-                    profile.set_layer_name(layer, name.clone());
-                }
-            }
-        }
-
-        if bundle.application_layouts.is_none() && !self.entlayout_target_is_sm62() {
-            self.app_settings.text_expander_enabled = bundle.data.text_expander.enabled;
-            self.app_settings.text_expander_app_blacklist =
-                bundle.data.text_expander.app_blacklist.clone();
-            self.app_settings.text_expander_rule_files =
-                normalize_text_expander_rule_files(&bundle.data.text_expander.rule_files);
-            self.app_settings.text_expansion_rules =
-                bundle.data.text_expander.primary_rules.clone();
-            save_app_settings(&self.app_settings);
-            save_text_expansion_rules(&self.app_settings.text_expansion_rules);
-            for file in &bundle.data.text_expander.extra_files {
-                if let Some(file_name) = normalize_text_expander_rules_file_name(&file.file_name) {
-                    let path = text_expander_extra_rules_path(&file_name);
-                    if let Ok(json) = serde_json::to_string_pretty(&file.rules) {
-                        std::fs::write(path, json)?;
+                    for source_layer in 0..bundle.data.keymap.len() {
+                        let Some(layer) = map_layer_index(source_layer, self.layer_count) else {
+                            continue;
+                        };
+                        for target in mapping.key_mapping.iter().flatten().copied() {
+                            if let Some(control) = Self::application_control_for_key(layout, target) {
+                                profile.set_keycode(layer, control, layout.get_keycode(layer, target));
+                            }
+                        }
+                    }
+                    for source_layer in 0..bundle.data.encoder_keymap.len() {
+                        let Some(layer) = map_layer_index(source_layer, self.layer_count) else {
+                            continue;
+                        };
+                        for target in mapping.encoder_mapping.iter().flatten().copied() {
+                            if let Some(control) = Self::application_control_for_encoder(layout, target)
+                            {
+                                profile.set_keycode(
+                                    layer,
+                                    control,
+                                    layout.get_encoder_keycode(layer, target),
+                                );
+                            }
+                        }
+                    }
+                    for (layer, name) in bundle
+                        .data
+                        .layer_names
+                        .iter()
+                        .take(self.layer_count)
+                        .enumerate()
+                    {
+                        profile.set_layer_name(layer, name.clone());
                     }
                 }
             }
-            self.text_expander_rules_signature =
-                text_expander_rules_signature(&self.app_settings.text_expander_rule_files);
-            self.sync_text_expander_runtime();
-        } else if bundle.application_layouts.is_none() {
-            // Persist this device's Default/visibility changes, not bundled
-            // global Text Expander state from a historical layout document.
-            save_app_settings(&self.app_settings);
-        }
 
+            if bundle.application_layouts.is_none() && !self.entlayout_target_is_sm62() {
+                self.app_settings.text_expander_enabled = bundle.data.text_expander.enabled;
+                self.app_settings.text_expander_app_blacklist =
+                    bundle.data.text_expander.app_blacklist.clone();
+                self.app_settings.text_expander_rule_files =
+                    normalize_text_expander_rule_files(&bundle.data.text_expander.rule_files);
+                self.app_settings.text_expansion_rules =
+                    bundle.data.text_expander.primary_rules.clone();
+                save_app_settings(&self.app_settings);
+                save_text_expansion_rules(&self.app_settings.text_expansion_rules);
+                for file in &bundle.data.text_expander.extra_files {
+                    if let Some(file_name) = normalize_text_expander_rules_file_name(&file.file_name) {
+                        let path = text_expander_extra_rules_path(&file_name);
+                        if let Ok(json) = serde_json::to_string_pretty(&file.rules) {
+                            std::fs::write(path, json)?;
+                        }
+                    }
+                }
+                self.text_expander_rules_signature =
+                    text_expander_rules_signature(&self.app_settings.text_expander_rule_files);
+                self.sync_text_expander_runtime();
+            } else if bundle.application_layouts.is_none() {
+                // Persist this device's Default/visibility changes, not bundled
+                // global Text Expander state from a historical layout document.
+                save_app_settings(&self.app_settings);
+            }
+
+        }
+        if vial_backup && mapping.exact_layout {
+            if let Some(options) = bundle.data.layout_options {
+                self.layout_options_value = Some(options);
+            }
+        }
         if self.current_device_is_likely_rmk() {
             return Ok(());
         }
@@ -4995,32 +5075,34 @@ impl EntropyApp {
             self.keycode_picker
                 .macro_texts
                 .truncate(self.keycode_picker.macro_count);
-            self.keycode_picker.macro_names = normalized_strings(
-                &bundle.data.macros.names,
-                self.keycode_picker
-                    .macro_count
-                    .max(bundle.data.macros.names.len()),
-            );
-            self.keycode_picker
-                .macro_names
-                .truncate(self.keycode_picker.macro_count);
-            self.keycode_picker.macro_descriptions = normalized_strings(
-                &bundle.data.macros.descriptions,
-                self.keycode_picker
-                    .macro_count
-                    .max(bundle.data.macros.descriptions.len()),
-            );
-            self.keycode_picker
-                .macro_descriptions
-                .truncate(self.keycode_picker.macro_count);
-            if bundle.application_layouts.is_none() {
-                save_macro_metadata(
-                    &self.keycode_picker.macro_names,
-                    &self.keycode_picker.macro_descriptions,
-                    &self.current_device_name,
+            if !vial_backup {
+                self.keycode_picker.macro_names = normalized_strings(
+                    &bundle.data.macros.names,
+                    self.keycode_picker
+                        .macro_count
+                        .max(bundle.data.macros.names.len()),
                 );
+                self.keycode_picker
+                    .macro_names
+                    .truncate(self.keycode_picker.macro_count);
+                self.keycode_picker.macro_descriptions = normalized_strings(
+                    &bundle.data.macros.descriptions,
+                    self.keycode_picker
+                        .macro_count
+                        .max(bundle.data.macros.descriptions.len()),
+                );
+                self.keycode_picker
+                    .macro_descriptions
+                    .truncate(self.keycode_picker.macro_count);
+                if bundle.application_layouts.is_none() {
+                    save_macro_metadata(
+                        &self.keycode_picker.macro_names,
+                        &self.keycode_picker.macro_descriptions,
+                        &self.current_device_name,
+                    );
+                }
+                self.keycode_picker.macro_metadata_dirty = false;
             }
-            self.keycode_picker.macro_metadata_dirty = false;
             self.keycode_picker.mark_macros_clean();
             #[cfg(not(target_arch = "wasm32"))]
             self.deferred_device_load
@@ -5038,7 +5120,7 @@ impl EntropyApp {
                 .enumerate()
             {
                 if let Some(entry) = remap_entcombo_entry(entry, bundle, layout, limits) {
-                    let layer = if self.supports_rmk_combo_layers || rynk_target {
+                    let layer = if !vial_backup && (self.supports_rmk_combo_layers || rynk_target) {
                         entry.layer
                     } else {
                         combo_entries[idx].layer
@@ -5122,7 +5204,9 @@ impl EntropyApp {
                         suppressed_mods: entry.suppressed_mods,
                         options: KeyOverrideOptionsState::from_bits(entry.options),
                     };
-                    Self::normalize_key_override_entry(&mut mapped);
+                    if !vial_backup {
+                        Self::normalize_key_override_entry(&mut mapped);
+                    }
                     key_override_entries[idx] = mapped;
                 }
             }
@@ -5144,56 +5228,63 @@ impl EntropyApp {
                         allowed_mods: entry.allowed_mods,
                         options: AltRepeatKeyOptionsState::from_bits(entry.options),
                     };
-                    Self::normalize_alt_repeat_entry(&mut mapped);
+                    if !vial_backup {
+                        Self::normalize_alt_repeat_entry(&mut mapped);
+                    }
                     alt_repeat_entries[idx] = mapped;
                 }
             }
             self.alt_repeat_entries = alt_repeat_entries;
         }
 
-        self.combo_names = normalized_strings(&bundle.data.combos.names, self.combo_entries.len());
-        self.combo_colors = bundle.data.combos.colors.clone();
-        migrate_legacy_combo_default_colors(&mut self.combo_colors);
-        normalize_combo_colors(&mut self.combo_colors, self.combo_entries.len());
-        self.combo_term = bundle.data.combos.term.or(self.combo_term);
-        if bundle.application_layouts.is_none() {
-            save_combo_names(&self.combo_names, &self.current_device_name);
-            save_combo_colors(&self.combo_colors, &self.current_device_name);
+        if !vial_backup {
+            self.combo_names = normalized_strings(&bundle.data.combos.names, self.combo_entries.len());
+            self.combo_colors = bundle.data.combos.colors.clone();
+            migrate_legacy_combo_default_colors(&mut self.combo_colors);
+            normalize_combo_colors(&mut self.combo_colors, self.combo_entries.len());
+            if bundle.application_layouts.is_none() {
+                save_combo_names(&self.combo_names, &self.current_device_name);
+                save_combo_colors(&self.combo_colors, &self.current_device_name);
+            }
         }
+        self.combo_term = bundle.data.combos.term.or(self.combo_term);
         self.combo_synced_entries = self.combo_entries.clone();
         self.combo_dirty = false;
         self.combo_edit_revision = self.combo_edit_revision.wrapping_add(1);
         self.combo_attempted_revision = None;
-        self.combo_names_dirty = false;
-        self.combo_colors_dirty = false;
+        if !vial_backup {
+            self.combo_names_dirty = false;
+            self.combo_colors_dirty = false;
+        }
         self.combo_term_dirty = false;
 
-        self.keycode_picker.tap_dance_names = normalized_strings(
-            &bundle.data.tap_dance.names,
-            self.keycode_picker.tap_dance_entries.len(),
-        );
-        if bundle.application_layouts.is_none() {
-            save_tap_dance_names(
-                &self.keycode_picker.tap_dance_names,
-                &self.current_device_name,
-            );
-        }
         self.keycode_picker.tap_dance_dirty = false;
+        if !vial_backup {
+            self.keycode_picker.tap_dance_names = normalized_strings(
+                &bundle.data.tap_dance.names,
+                self.keycode_picker.tap_dance_entries.len(),
+            );
+            if bundle.application_layouts.is_none() {
+                save_tap_dance_names(
+                    &self.keycode_picker.tap_dance_names,
+                    &self.current_device_name,
+                );
+            }
+            self.key_override_names = normalized_strings(
+                &bundle.data.key_overrides.names,
+                self.key_override_entries.len(),
+            );
+            if bundle.application_layouts.is_none() {
+                save_key_override_names(&self.key_override_names, &self.current_device_name);
+            }
 
-        self.key_override_names = normalized_strings(
-            &bundle.data.key_overrides.names,
-            self.key_override_entries.len(),
-        );
-        if bundle.application_layouts.is_none() {
-            save_key_override_names(&self.key_override_names, &self.current_device_name);
+            self.alt_repeat_names =
+                normalized_strings(&bundle.data.alt_repeat.names, self.alt_repeat_entries.len());
+            if bundle.application_layouts.is_none() {
+                save_alt_repeat_names(&self.alt_repeat_names, &self.current_device_name);
+            }
+
         }
-
-        self.alt_repeat_names =
-            normalized_strings(&bundle.data.alt_repeat.names, self.alt_repeat_entries.len());
-        if bundle.application_layouts.is_none() {
-            save_alt_repeat_names(&self.alt_repeat_names, &self.current_device_name);
-        }
-
         #[cfg(not(target_arch = "wasm32"))]
         if self.deferred_device_load.is_staged() {
             for section in [

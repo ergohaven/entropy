@@ -5929,6 +5929,8 @@ pub struct EntropyApp {
     pub(crate) rgb_settings: RgbSettingsState,
     pub(crate) display_settings: DisplaySettingsState,
     pub(crate) layout_options_value: Option<u32>,
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(super) layout_options_import_unconfirmed: bool,
     pub(crate) encoder_visibility: Vec<bool>,
     pub(crate) combo_term_dirty: bool,
     pub(crate) combo_visible_count: usize,
