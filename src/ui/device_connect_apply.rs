@@ -177,6 +177,7 @@ mod tests {
             supports_universal_numero: false,
             supports_universal_symbols: Default::default(),
             supports_universal_russian_letters: Default::default(),
+            supports_extended_russian_letters: false,
             supports_rmk_native_combo_output: Default::default(),
             supports_rmk_native_tap_dance_actions: Default::default(),
             magic_keycodes: crate::keycode::QMK_MAGIC_KEYCODE_ALL_MASK,
@@ -1446,6 +1447,7 @@ impl EntropyApp {
                 self.keycode_picker.supports_universal_symbols = r.supports_universal_symbols;
                 self.keycode_picker.supports_universal_russian_letters =
                     r.supports_universal_russian_letters;
+                self.keycode_picker.supports_extended_russian_letters = r.supports_extended_russian_letters;
                 self.keycode_picker.supports_rmk_native_combo_output =
                     r.supports_rmk_native_combo_output;
                 self.keycode_picker.supports_rmk_native_tap_dance_actions =
@@ -1785,6 +1787,7 @@ mod qa_followup_reconnect {
             supports_universal_numero: false,
             supports_universal_symbols: Default::default(),
             supports_universal_russian_letters: Default::default(),
+            supports_extended_russian_letters: false,
             supports_rmk_native_combo_output: Default::default(),
             supports_rmk_native_tap_dance_actions: Default::default(),
             magic_keycodes: crate::keycode::QMK_MAGIC_KEYCODE_ALL_MASK,
@@ -1905,6 +1908,7 @@ mod qa_followup_reconnect {
             supports_universal_numero: false,
             supports_universal_symbols: false,
             supports_universal_russian_letters: false,
+            supports_extended_russian_letters: false,
             supports_rmk_native_combo_output: false,
             supports_rmk_native_tap_dance_actions: false,
             supports_rmk_combo_layers: false,

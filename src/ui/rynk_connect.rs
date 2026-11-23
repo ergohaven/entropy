@@ -20,6 +20,7 @@ use rmk_types_rynk::protocol::rynk::ergohaven::caps;
 // Additive Ergohaven capability, not yet named by the pinned rmk-types-rynk.
 // It extends the existing caps bitfield without changing wire revision 2.
 const UNIVERSAL_NUMERO_CAP: u32 = 1 << 8;
+const EXTENDED_RUSSIAN_LETTERS_CAP: u32 = 1 << 9;
 
 impl EntropyApp {
     pub(super) fn connect_rynk(
@@ -351,6 +352,7 @@ impl EntropyApp {
                 && takes(UNIVERSAL_NUMERO_CAP),
             supports_universal_symbols: info.caps & caps::UNIVERSAL_SYMBOLS != 0,
             supports_universal_russian_letters: info.caps & caps::RUSSIAN_LETTERS != 0,
+            supports_extended_russian_letters: info.caps & EXTENDED_RUSSIAN_LETTERS_CAP != 0,
             supports_rmk_native_combo_output: true,
             supports_rmk_native_tap_dance_actions: true,
             magic_keycodes,

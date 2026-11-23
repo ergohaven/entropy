@@ -176,11 +176,11 @@ fn firmware_update_rows(
             },
             FirmwareUpdateCheckState::Ready { result, .. } => match result.relation {
                 VersionRelation::UpdateAvailable
-                    if target.family == crate::app::FirmwareReleaseFamily::RynkMigration =>
+                    if target.family == crate::app::FirmwareReleaseFamily::QmkMigration =>
                 {
                     let migration = match lang {
-                        crate::i18n::Language::Russian => "доступен переход на RMK/Rynk",
-                        crate::i18n::Language::English => "RMK/Rynk migration available",
+                        crate::i18n::Language::Russian => "доступен переход на QMK/Vial",
+                        crate::i18n::Language::English => "QMK/Vial migration available",
                     };
                     format!("{migration}. {}", backup_before_update(lang))
                 }

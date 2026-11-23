@@ -33,7 +33,12 @@ class ManualWorkflow(unittest.TestCase):
         self.assertIn('      macos_signing_test:\n', self.workflow)
         self.assertIn('        type: boolean\n        default: false', self.workflow)
         self.assertNotIn('pull_request', self.workflow)
-        self.assertEqual(set(self.jobs), {'build', 'macos-signing-test', 'release'})
+        self.assertEqual(set(self.jobs), {'validate', 'nix', 'build', 'macos-signing-test', 'release'})
+        self.assertIn('    needs: [build, validate, nix]\n', self.jobs['release'])
+        for name, path in [('validate', 'release-validation.yml'), ('nix', 'nix.yml')]:
+            self.assertEqual(self.gate(name), self.gate('build'))
+            self.assertIn(f'    uses: ./.github/workflows/{path}\n', self.jobs[name])
+            self.assertNotIn('secrets:', self.jobs[name])
         self.assertEqual(self.gate('build'),
                          "${{ github.repository == 'ergohaven/entropy' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.') }}")
         self.assertEqual(self.gate('release'),
@@ -95,10 +100,17 @@ class ManualWorkflow(unittest.TestCase):
         self.assertIn('          files: artifacts/**/*\n', release)
 
     def test_release_staging_preserves_the_remaining_workflow_payload(self):
+        # Reverse only the new release-only validation wiring before comparing
+        # the original signing and publication payload with its immutable hash.
+        workflow = self.workflow
+        for name in ('validate', 'nix'):
+            workflow = workflow.replace(f'  {name}:\n{self.jobs[name]}', '', 1)
+        workflow = workflow.replace('    needs: [build, validate, nix]\n',
+                                    '    needs: build\n', 1)
         unchanged = re.sub(
             r'      - name: Verify signed release DMG and collect public evidence\n.*?'
             r'(?=      - name: Collect signed macOS DMG\n)',
-            '', self.workflow, count=1, flags=re.S)
+            '', workflow, count=1, flags=re.S)
         unchanged = unchanged.replace('          pattern: release-assets-*\n', '', 1)
         unchanged = unchanged.replace('          draft: true\n', '          draft: false\n', 1)
         # Frozen workflow after routing Linux through the existing pinned

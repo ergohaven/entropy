@@ -13,6 +13,21 @@ pub(crate) fn binding_contains_numero(binding: crate::keyboard::KeyBinding) -> b
     }
 }
 
+pub(crate) fn binding_contains_extended_russian_letter(
+    binding: crate::keyboard::KeyBinding,
+) -> bool {
+    use crate::keyboard::KeyBinding;
+    let extended = |a| matches!(a, Action::User(0xB5..=0xB7));
+    match binding {
+        KeyBinding::Rmk(KeyAction::Single(a) | KeyAction::Tap(a)) => extended(a),
+        KeyBinding::Rmk(KeyAction::TapHold(a, b, _))
+        | KeyBinding::VialTapHold {
+            tap: a, hold: b, ..
+        } => extended(a) || extended(b),
+        _ => false,
+    }
+}
+
 pub(crate) const USER_TOGGLE: u8 = 0x80;
 pub(crate) const USER_SYNC: u8 = 0x81;
 pub(crate) const USER_SET_ENGLISH: u8 = 0x82;
@@ -113,6 +128,10 @@ pub(crate) const RUSSIAN_LETTERS: &[UniversalRussianLetter] = &[
     russian_letter(1, 'б'),
     russian_letter(2, 'ю'),
     russian_letter(3, 'ъ'),
+    // 0xB4 is the existing Numero action.
+    russian_letter(5, 'ж'),
+    russian_letter(6, 'э'),
+    russian_letter(7, 'ё'),
 ];
 
 const fn symbol(offset: u8, symbol: char, _name: &'static str) -> UniversalSymbol {
@@ -270,7 +289,7 @@ mod tests {
             assert_eq!(printable_output(decoded, layout), Some(('№', None)));
         }
         assert!(tooltip(decoded).unwrap().contains('№'));
-        assert!(label(KeyAction::Single(Action::User(0xB5))).is_none());
+        assert!(label(KeyAction::Single(Action::User(0xB8))).is_none());
         let mut ids = CONTROLS
             .iter()
             .map(|entry| entry.user_id)
@@ -300,13 +319,21 @@ mod tests {
 
     #[test]
     fn russian_letter_table_has_stable_ids() {
-        assert_eq!(RUSSIAN_LETTERS.len(), 4);
+        assert_eq!(RUSSIAN_LETTERS.len(), 7);
         assert_eq!(
             RUSSIAN_LETTERS
                 .iter()
                 .map(|entry| (entry.user_id, entry.letter))
                 .collect::<Vec<_>>(),
-            vec![(0xB0, 'х'), (0xB1, 'б'), (0xB2, 'ю'), (0xB3, 'ъ')]
+            vec![
+                (0xB0, 'х'),
+                (0xB1, 'б'),
+                (0xB2, 'ю'),
+                (0xB3, 'ъ'),
+                (0xB5, 'ж'),
+                (0xB6, 'э'),
+                (0xB7, 'ё')
+            ]
         );
     }
 

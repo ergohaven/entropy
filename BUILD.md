@@ -7,6 +7,26 @@ they do and when to reach for each one.
 Windows and macOS builds are still the plain `cargo` invocations described in
 [README > Development](README.md#development).
 
+## GitHub test builds and releases
+
+For test artifacts, run **Actions → Build → Run workflow** on the branch to test.
+This builds Linux AppImage, Windows executable, and macOS application ZIPs for
+Apple Silicon and Intel in parallel. It uses the existing native packagers,
+without Nix, Docker, distribution-package builds or full test suites. The files
+appear in that run's Artifacts; this does not create a tag or a GitHub release.
+These are native test builds, not the pinned Linux or stable-signed macOS release
+distributions.
+
+Pushes to `main` and pull requests to `main` or `rynk` run only the inexpensive
+workflow-contract checks. Artifact compilation remains a manual action.
+
+The full validation is reserved for `v0.*` release tags. The Release workflow
+calls `release-validation.yml` for the existing native tests, reproducible Linux
+container builds and clean-distribution installation checks, and calls `nix.yml`
+for both supported Nix systems. Release assets can be staged only after those
+checks and the release builds succeed. The existing signing and manual signing
+validation controls are unchanged.
+
 ## Two ways to build
 
 - **native** — build on the host, with the prerequisites installed there.
@@ -15,8 +35,8 @@ Windows and macOS builds are still the plain `cargo` invocations described in
   with Docker and nothing else installed. Entry point: `task docker:linux`.
 
 Both run the same tasks and produce the same files in `dist/linux/`. The
-container is the canonical path: it is the only one with a fully pinned
-toolchain, and it is what CI publishes. A native build is for development — its
+container is the canonical release path: it is the only one with a fully pinned
+toolchain. A native build is for development and test artifacts — its
 compiler and system libraries are whatever the host happens to have.
 
 ## Quick start
@@ -119,8 +139,8 @@ The dependency-layer regression tests run with the other cheap CI contracts:
 
 Same tree in, same bytes out — `task linux:repro` (or `task docker:repro`) is
 what makes that a checked claim rather than a hope: it builds everything twice
-and compares SHA-256 sums. CI runs the container variant on every pull request
-and publishes the build it verified.
+and compares SHA-256 sums. Release validation runs the container variant and
+retains the build it verified; ordinary test builds do not repeat this work.
 
 Three things make it hold. Timestamps come from the commit rather than the clock:
 `SOURCE_DATE_EPOCH` is derived from `git log -1 --pretty=%ct` and honoured by
@@ -150,7 +170,7 @@ The AppImage ships the same desktop entry, metainfo and icons, so an app
 installed from a package and one launched from the AppImage describe themselves
 identically.
 
-Two levels of checks cover this, both run by CI on every pull request:
+Two levels of checks cover this, both run during release validation:
 
 - `scripts/test_linux_packages.sh` (`task linux:test`) reads the built artifacts
   and asserts every path, its mode (`0755` for the binary, `0644` for everything

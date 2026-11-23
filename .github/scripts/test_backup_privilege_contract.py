@@ -17,7 +17,7 @@ class BackupPrivilegeContract(unittest.TestCase):
         self.assertNotIn('run_helper_if_requested', main)
 
     def test_native_backup_policy_is_exercised_on_windows_and_macos(self):
-        workflow = (ROOT / '.github/workflows/build.yml').read_text()
+        workflow = (ROOT / '.github/workflows/release-validation.yml').read_text()
         match = re.search(
             r'      - name: Test native resident backup publication\n(.*?)(?=      - name:|\Z)',
             workflow, re.S)

@@ -242,6 +242,7 @@ impl KeycodePicker {
             self.supports_universal_symbols,
             self.supports_universal_numero,
             self.supports_universal_russian_letters,
+            self.supports_extended_russian_letters,
             self.rmk_native_key_actions_allowed_for_target,
         ]
         .hash(&mut hasher);
@@ -380,6 +381,11 @@ impl KeycodePicker {
                 self.assign_keycode_value(value);
             }
             PickerAction::Assign(binding) => {
+                if crate::universal_symbols::binding_contains_extended_russian_letter(binding)
+                    && !self.supports_extended_russian_letters
+                {
+                    return;
+                }
                 if crate::universal_symbols::binding_contains_numero(binding)
                     && !self.supports_universal_numero
                 {
@@ -492,6 +498,7 @@ mod tests {
             supports_universal_numero: false,
             supports_universal_symbols: true,
             supports_universal_russian_letters: true,
+            supports_extended_russian_letters: false,
             rmk_native_key_actions_allowed_for_target: true,
             custom_keycodes: vec![
                 (

@@ -3450,7 +3450,15 @@ impl EntropyApp {
                     NativeTarget::AsWritten,
                 )? {
                     Some(binding) => binding,
-                    None => map_entlayout_keycode(keycode, bundle, layout, limits).into(),
+                    None => map_entlayout_key_binding(
+                        keycode,
+                        bundle,
+                        source_key_idx,
+                        layout,
+                        limits,
+                        NativeTarget::AsWritten,
+                        true,
+                    ),
                 };
                 if let Some(slot) = layers
                     .get_mut(target_layer_idx)
@@ -4279,7 +4287,15 @@ impl EntropyApp {
                             }
                             binding
                         }
-                        None => map_entlayout_keycode(keycode, bundle, &layout, limits).into(),
+                        None => map_entlayout_key_binding(
+                            keycode,
+                            bundle,
+                            source_key_idx,
+                            &layout,
+                            limits,
+                            target,
+                            supports_rmk_native_key_actions,
+                        ),
                     };
                     if !unconfirmed_layers[target_layer_idx] && layout
                         .layers
@@ -4773,8 +4789,15 @@ impl EntropyApp {
                             }
                             Some(_) => {}
                             None => {
-                                *slot =
-                                    map_entlayout_keycode(keycode, bundle, layout, limits).into();
+                                *slot = map_entlayout_key_binding(
+                                    keycode,
+                                    bundle,
+                                    source_key_idx,
+                                    layout,
+                                    limits,
+                                    target,
+                                    supports_rmk_native_key_actions,
+                                );
                             }
                         }
                     }
@@ -5485,6 +5508,70 @@ fn point_distance_squared(a: (f32, f32), b: (f32, f32)) -> f32 {
     let dx = a.0 - b.0;
     let dy = a.1 - b.1;
     dx * dx + dy * dy
+}
+
+fn map_entlayout_key_binding(
+    keycode: u16,
+    bundle: &EntLayoutFile,
+    source_key: usize,
+    layout: &KeyboardLayout,
+    limits: EntLayoutKeycodeImportLimits,
+    target: NativeTarget,
+    native_actions: bool,
+) -> crate::keyboard::KeyBinding {
+    use rmk_types::action::{Action, KeyAction};
+    use rmk_types::keycode::HidKeyCode as Hid;
+    use rmk_types::modifier::ModifierCombination as Mod;
+
+    let translate = || {
+        if !native_actions || bundle.keyboard.firmware != FirmwareProtocol::Vial {
+            return None;
+        }
+        let source = bundle.data.source_layout.as_ref()?;
+        let index = usize::from(keycode.checked_sub(0x7e00)?);
+        let custom = source
+            .custom_keycodes
+            .iter()
+            .find(|custom| custom.index == index)?;
+        let shifted = |key| Action::KeyWithModifier(key, Mod::LSHIFT);
+        let (tap, hold) = match custom.name.as_str() {
+            "HRM_GUI_SCR" => {
+                let scroll = layout
+                    .custom_keycodes
+                    .iter()
+                    .position(|custom| custom.name == "EH_SCR")?;
+                let scroll = u8::try_from(scroll).ok()?;
+                let row = source.keys.iter().find(|key| key.index == source_key)?.row;
+                if bundle.keyboard.rows < 2 || usize::from(row) >= bundle.keyboard.rows {
+                    return None;
+                }
+                (
+                    Action::User(scroll),
+                    if usize::from(row) < bundle.keyboard.rows / 2 {
+                        Mod::LGUI
+                    } else {
+                        Mod::RGUI
+                    },
+                )
+            }
+            "HRM_RGUI_EXLM" => (shifted(Hid::Kc1), Mod::RGUI),
+            "HRM_LALT_LPRN" => (shifted(Hid::Kc9), Mod::LALT),
+            "HRM_LCTL_RPRN" => (shifted(Hid::Kc0), Mod::LCTRL),
+            "HRM_RCTL_LCBR" => (shifted(Hid::LeftBracket), Mod::RCTRL),
+            "HRM_RALT_RCBR" => (shifted(Hid::RightBracket), Mod::RALT),
+            _ => return None,
+        };
+        // The Phenom Micro factory RMK layout uses the target's default MT
+        // profile for these actions; carry the tap and hold into that profile.
+        let action = KeyAction::TapHold(tap, Action::Modifier(hold), Default::default());
+        Some(match target {
+            NativeTarget::Rynk => crate::keyboard::KeyBinding::Rynk(
+                crate::rynk::native_v1::upgrade_native_v1_key_action(action).action,
+            ),
+            _ => crate::keyboard::KeyBinding::Rmk(action),
+        })
+    };
+    translate().unwrap_or_else(|| map_entlayout_keycode(keycode, bundle, layout, limits).into())
 }
 
 fn map_entlayout_keycode(

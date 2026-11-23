@@ -321,7 +321,7 @@ Repeat"
 
         let international = crate::i18n::tr_catalog(lang, "key_picker_text.international");
         if self.universal_russian_letters_available() {
-            rows.extend(universal_russian_letter_rows(lang, tab, international));
+            rows.extend(universal_russian_letter_rows(lang, tab, international, self.supports_extended_russian_letters));
         }
         for (top, bottom, value, tip) in INTERNATIONAL_KEYS {
             if !self.picker_value_supported(*value) {
