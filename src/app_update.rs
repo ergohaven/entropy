@@ -1,9 +1,8 @@
 const ENTROPY_LATEST_RELEASE_API: &str =
     "https://api.github.com/repos/ergohaven/entropy/releases/latest";
 const ENTROPY_LATEST_RELEASE_PAGE: &str = "https://github.com/ergohaven/entropy/releases/latest";
-const RMK_RELEASES_API: &str = "https://api.github.com/repos/ergohaven/rmk/releases?per_page=30";
-const QMK_RELEASES_API: &str =
-    "https://api.github.com/repos/ergohaven/vial-qmk/releases?per_page=30";
+const RMK_RELEASES_API: &str = "https://api.github.com/repos/ergohaven/rmk/releases";
+const QMK_RELEASES_API: &str = "https://api.github.com/repos/ergohaven/vial-qmk/releases";
 const ERGOHAVEN_VENDOR_ID: u16 = 0xE126;
 
 #[path = "development_updates.rs"]
@@ -148,6 +147,8 @@ struct GitHubRelease {
     #[serde(default)]
     prerelease: bool,
     #[serde(default)]
+    published_at: Option<String>,
+    #[serde(default)]
     assets: Vec<GitHubAsset>,
 }
 
@@ -269,7 +270,7 @@ pub(crate) fn start_firmware_update_check(
         let worker_target = target.clone();
         let (sender, receiver) = std::sync::mpsc::channel();
         std::thread::spawn(move || {
-            let outcome = match fetch_github_json(match worker_target.family {
+            let outcome = match fetch_firmware_releases(match worker_target.family {
                 FirmwareReleaseFamily::Rmk | FirmwareReleaseFamily::Rynk => RMK_RELEASES_API,
                 FirmwareReleaseFamily::Qmk | FirmwareReleaseFamily::QmkMigration => {
                     QMK_RELEASES_API
@@ -518,7 +519,7 @@ pub(crate) fn firmware_release_target(
     // This selects the download, not the installed device's protocol/backend.
     if vendor_id == ERGOHAVEN_VENDOR_ID {
         if let Some(asset) = phenom_qmk_asset_prefix(product_id) {
-            parse_semver(version)?;
+            parse_firmware_version(version)?;
             return Some(FirmwareReleaseTarget {
                 family: if is_rmk {
                     FirmwareReleaseFamily::QmkMigration
@@ -565,7 +566,7 @@ pub(crate) fn firmware_release_target(
     if vendor_id != ERGOHAVEN_VENDOR_ID {
         return None;
     }
-    parse_semver(version)?;
+    parse_firmware_version(version)?;
     let explicit = vial_json.pointer("/entropy/firmwareUpdate/asset");
     let asset_prefix = if let Some(value) = explicit {
         normalized_asset_prefix(value.as_str()?)?
@@ -846,6 +847,29 @@ fn fetch_github_json<T: serde::de::DeserializeOwned>(url: &str) -> Result<T, Str
         .map_err(|error| format!("GitHub response parse failed: {error}"))
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+fn fetch_firmware_releases(api: &str) -> Result<Vec<GitHubRelease>, String> {
+    // Include the installed historical release even after it leaves the first
+    // page: release chronology, not a larger legacy version, orders a reset series.
+    let mut releases = Vec::new();
+    let mut seen = std::collections::HashSet::new();
+    for page in 1.. {
+        let batch: Vec<GitHubRelease> =
+            fetch_github_json(&format!("{api}?per_page=100&page={page}"))?;
+        let complete = batch.len() < 100;
+        for release in batch {
+            if !seen.insert(release.html_url.clone()) {
+                return Err("GitHub returned duplicate firmware release pages".to_owned());
+            }
+            releases.push(release);
+        }
+        if complete {
+            return Ok(releases);
+        }
+    }
+    unreachable!()
+}
+
 fn build_update_result(latest: LatestEntropyRelease) -> UpdateCheckResult {
     let LatestEntropyRelease {
         tag_name,
@@ -884,17 +908,23 @@ fn build_firmware_update_result(
     target: &FirmwareReleaseTarget,
     releases: Vec<GitHubRelease>,
 ) -> Option<FirmwareUpdateCheckResult> {
+    let current = parse_firmware_version(&target.current_version);
+    let installed_date = releases
+        .iter()
+        .filter(|release| !release.draft && !release.prerelease)
+        .filter(|release| current.is_some() && parse_firmware_version(&release.tag_name) == current)
+        .filter_map(firmware_release_date)
+        .max();
     let (_, release, asset) = releases
         .into_iter()
         .filter(|release| !release.draft && !release.prerelease)
         .filter_map(|mut release| {
+            let version = parse_firmware_version(&release.tag_name)?;
+            if !version.pre.is_empty() || !version.build.is_empty() {
+                return None;
+            }
             let expected_asset = match target.family {
                 FirmwareReleaseFamily::Rynk => {
-                    let version =
-                        semver::Version::parse(release.tag_name.trim_start_matches('v')).ok()?;
-                    if !version.pre.is_empty() || !version.build.is_empty() {
-                        return None;
-                    }
                     let variant = if version >= semver::Version::new(0, 3, 0) {
                         ""
                     } else {
@@ -903,9 +933,7 @@ fn build_firmware_update_result(
                     format!("{}{variant}-{}.zip", target.asset_prefix, release.tag_name)
                 }
                 FirmwareReleaseFamily::Rmk => {
-                    let native_default =
-                        semver::Version::parse(release.tag_name.trim_start_matches('v'))
-                            .is_ok_and(|version| version >= semver::Version::new(0, 3, 0));
+                    let native_default = version >= semver::Version::new(0, 3, 0);
                     let variant = if native_default { "-vial" } else { "" };
                     format!("{}{variant}-{}.zip", target.asset_prefix, release.tag_name)
                 }
@@ -917,12 +945,22 @@ fn build_firmware_update_result(
                 .assets
                 .drain(..)
                 .find(|asset| asset.name == expected_asset)?;
-            Some((numeric_version_parts(&release.tag_name), release, asset))
+            Some(((firmware_release_date(&release), version), release, asset))
         })
         .max_by(|left, right| left.0.cmp(&right.0))?;
     let relation = if target.family == FirmwareReleaseFamily::QmkMigration {
         // Installed RMK and target QMK versions belong to independent series.
         VersionRelation::UpdateAvailable
+    } else if current == parse_firmware_version(&release.tag_name) {
+        VersionRelation::UpToDate
+    } else if let (Some(installed), Some(latest)) =
+        (installed_date, firmware_release_date(&release))
+    {
+        match installed.cmp(&latest) {
+            std::cmp::Ordering::Less => VersionRelation::UpdateAvailable,
+            std::cmp::Ordering::Equal => VersionRelation::Unknown,
+            std::cmp::Ordering::Greater => VersionRelation::DevelopmentBuild,
+        }
     } else {
         compare_firmware_versions(&target.current_version, &release.tag_name)
     };
@@ -1025,8 +1063,52 @@ fn stable_source_relation(
     }
 }
 
+fn firmware_release_date(release: &GitHubRelease) -> Option<chrono::DateTime<chrono::FixedOffset>> {
+    chrono::DateTime::parse_from_rfc3339(release.published_at.as_deref()?).ok()
+}
+
+fn parse_firmware_version(version: &str) -> Option<semver::Version> {
+    let version = version.trim().strip_prefix('v').unwrap_or(version.trim());
+    // Normalization is internal only; retain the exact tag/label for display and assets.
+    if version.split('.').count() == 2 {
+        semver::Version::parse(&format!("{version}.0")).ok()
+    } else {
+        semver::Version::parse(version).ok()
+    }
+}
+
+pub(crate) fn format_firmware_version(major: u32, minor: u32, patch: u32) -> String {
+    if patch == 0 {
+        format!("{major}.{minor}")
+    } else {
+        format!("{major}.{minor}.{patch}")
+    }
+}
+
+pub(crate) fn firmware_version_label(
+    runtime: Option<&str>,
+    definition: Option<&str>,
+) -> Option<String> {
+    match (runtime, definition) {
+        (Some(runtime), Some(label))
+            if parse_firmware_version(runtime).is_some()
+                && parse_firmware_version(runtime) == parse_firmware_version(label) =>
+        {
+            Some(label.to_owned())
+        }
+        (Some(runtime), _) => Some(runtime.to_owned()),
+        (None, definition) => definition.map(str::to_owned),
+    }
+}
+
 fn compare_firmware_versions(current: &str, latest: &str) -> VersionRelation {
-    match numeric_version_parts(current).cmp(&numeric_version_parts(latest)) {
+    let (Some(current), Some(latest)) = (
+        parse_firmware_version(current),
+        parse_firmware_version(latest),
+    ) else {
+        return VersionRelation::Unknown;
+    };
+    match current.cmp_precedence(&latest) {
         std::cmp::Ordering::Less => VersionRelation::UpdateAvailable,
         std::cmp::Ordering::Equal => VersionRelation::UpToDate,
         std::cmp::Ordering::Greater => VersionRelation::DevelopmentBuild,
@@ -1077,6 +1159,7 @@ mod tests {
             html_url: format!("https://github.com/ergohaven/entropy/releases/tag/{tag}"),
             draft: false,
             prerelease: false,
+            published_at: None,
             assets: assets
                 .iter()
                 .map(|name| GitHubAsset {
@@ -1105,6 +1188,7 @@ mod tests {
             html_url: format!("https://github.com/ergohaven/rmk/releases/tag/{tag}"),
             draft,
             prerelease,
+            published_at: None,
             assets: assets
                 .iter()
                 .map(|name| GitHubAsset {
@@ -1571,6 +1655,151 @@ mod tests {
             false,
         )
         .is_none());
+    }
+
+    #[test]
+    fn firmware_labels_accept_two_components_without_changing_app_semver() {
+        for (label, expected) in [
+            ("1.0", (1, 0, 0)),
+            ("v1.10", (1, 10, 0)),
+            ("2.0", (2, 0, 0)),
+            ("4.2.0", (4, 2, 0)),
+            ("1.1.2", (1, 1, 2)),
+        ] {
+            let version = parse_firmware_version(label).unwrap();
+            assert_eq!((version.major, version.minor, version.patch), expected);
+        }
+        for invalid in ["1", "1.0.0.0", "01.0", "1.-1", "unknown"] {
+            assert!(parse_firmware_version(invalid).is_none(), "{invalid}");
+        }
+        assert!(
+            parse_semver("1.0").is_none(),
+            "application SemVer is unchanged"
+        );
+        assert_eq!(
+            compare_firmware_versions("1.0", "1.0.0"),
+            VersionRelation::UpToDate
+        );
+        assert_eq!(
+            compare_firmware_versions("1.9", "1.10"),
+            VersionRelation::UpdateAvailable
+        );
+        assert_eq!(format_firmware_version(1, 0, 0), "1.0");
+        assert_eq!(format_firmware_version(2, 0, 3), "2.0.3");
+        assert_eq!(
+            firmware_version_label(Some("1.0"), Some("1.0")),
+            Some("1.0".into())
+        );
+        assert_eq!(
+            firmware_version_label(Some("1.0"), Some("1.0.0")),
+            Some("1.0.0".into())
+        );
+        assert_eq!(
+            firmware_version_label(Some("4.2"), Some("4.2.0")),
+            Some("4.2.0".into())
+        );
+        assert_eq!(
+            firmware_version_label(Some("1.1"), Some("4.2.0")),
+            Some("1.1".into())
+        );
+        assert_eq!(
+            firmware_version_label(None, Some("1.0")),
+            Some("1.0".into())
+        );
+    }
+
+    #[test]
+    fn qmk_numbering_reset_follows_published_history_not_the_larger_old_number() {
+        let target = FirmwareReleaseTarget {
+            family: FirmwareReleaseFamily::Qmk,
+            current_version: "4.2.0".into(),
+            asset_prefix: "phenom_v1".into(),
+        };
+        let dated = |tag: &str, date: &str, asset: &str| {
+            let mut release = release(tag, false, false, &[asset]);
+            release.published_at = Some(date.into());
+            release
+        };
+        let old = || dated("4.2.0", "2026-11-14T22:03:19Z", "4.2.0_phenom_v1.uf2");
+        let new = || dated("1.0", "2026-12-01T12:00:00Z", "1.0_phenom_v1.uf2");
+        let result = build_firmware_update_result(&target, vec![new(), old()]).unwrap();
+        assert_eq!(result.latest_version, "1.0");
+        assert_eq!(result.asset.name, "1.0_phenom_v1.uf2");
+        assert_eq!(result.relation, VersionRelation::UpdateAvailable);
+        let installed = FirmwareReleaseTarget {
+            current_version: "1.0.0".into(),
+            ..target.clone()
+        };
+        assert_eq!(
+            build_firmware_update_result(&installed, vec![old(), new()])
+                .unwrap()
+                .relation,
+            VersionRelation::UpToDate
+        );
+        let explicit_patch = || dated("1.0.1", "2026-12-02T12:00:00Z", "1.0.1_phenom_v1.uf2");
+        assert_eq!(
+            build_firmware_update_result(&installed, vec![old(), explicit_patch(), new()])
+                .unwrap()
+                .latest_version,
+            "1.0.1"
+        );
+        // Before the real 1.0 publication, draft/prerelease candidates cannot replace 4.2.0.
+        for draft in [false, true] {
+            let mut unpublished = new();
+            unpublished.draft = draft;
+            unpublished.prerelease = !draft;
+            assert_eq!(
+                build_firmware_update_result(&target, vec![old(), unpublished])
+                    .unwrap()
+                    .latest_version,
+                "4.2.0"
+            );
+        }
+        let future = FirmwareReleaseTarget {
+            current_version: "2.0".into(),
+            ..target
+        };
+        assert_eq!(
+            build_firmware_update_result(&future, vec![old(), new()])
+                .unwrap()
+                .relation,
+            VersionRelation::DevelopmentBuild
+        );
+    }
+
+    #[test]
+    fn two_component_firmware_targets_keep_framework_and_package_names() {
+        let qmk = firmware_release_target(
+            ERGOHAVEN_VENDOR_ID,
+            0x0052,
+            Some("1.0"),
+            &serde_json::json!({}),
+            false,
+            false,
+        )
+        .unwrap();
+        assert_eq!(qmk.family, FirmwareReleaseFamily::Qmk);
+        let rynk = rynk_firmware_release_target(
+            ERGOHAVEN_VENDOR_ID,
+            0x0074,
+            Some("1.0"),
+            &serde_json::json!({}),
+            false,
+        )
+        .unwrap();
+        let result = build_firmware_update_result(
+            &rynk,
+            vec![release(
+                "v1.1",
+                false,
+                false,
+                &["k04-v1.1.zip", "k04-vial-v1.1.zip"],
+            )],
+        )
+        .unwrap();
+        assert_eq!(result.latest_version, "v1.1");
+        assert_eq!(result.asset.name, "k04-v1.1.zip");
+        assert_eq!(result.relation, VersionRelation::UpdateAvailable);
     }
 
     #[test]

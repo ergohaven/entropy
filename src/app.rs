@@ -52,6 +52,7 @@ pub(crate) use app_storage::test_config_root;
 #[path = "app_update.rs"]
 mod app_update;
 use app_update::*;
+pub(crate) use app_update::format_firmware_version;
 #[path = "app_repaint.rs"]
 mod app_repaint;
 #[cfg(not(target_arch = "wasm32"))]
