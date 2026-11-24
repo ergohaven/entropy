@@ -57,6 +57,14 @@ class EntropyCIContract(unittest.TestCase):
         for command in ('cargo ', 'nix ', 'docker:', 'ci_policy.py'):
             self.assertNotIn(command, owner)
 
+    def test_source_contract_checkout_keeps_full_history_without_credentials(self):
+        owner = job(workflow('build.yml'), 'contracts')
+        checkout = re.search(r'      - uses: actions/checkout@[^\n]+\n(.*?)(?=      - |\Z)', owner, re.S)
+        if checkout is None:
+            self.fail('Missing source-contract checkout')
+        self.assertIn('          fetch-depth: 0\n', checkout.group(1))
+        self.assertIn('          persist-credentials: false\n', checkout.group(1))
+
     def test_full_validation_and_nix_are_release_only_reusable_workflows(self):
         gate = "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.')"
         for filename in ('release-validation.yml', 'nix.yml'):
