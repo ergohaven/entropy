@@ -108,7 +108,8 @@ impl EntropyApp {
         &self,
         layout: &KeyboardLayout,
     ) -> bool {
-        separate_encoder_visibility_settings_available(layout)
+        (self.global_encoder_settings_group().is_some() && layout.encoder_count() > 0)
+            || separate_encoder_visibility_settings_available(layout)
     }
 
     pub(super) fn encoder_visibility_allows(
@@ -138,7 +139,12 @@ impl EntropyApp {
 
     pub(super) fn encoder_settings_rows(&self, layout: &KeyboardLayout) -> Vec<EncoderSettingsRow> {
         let mut rows = Vec::new();
-        if self.encoder_only_module_settings(layout) {
+        if let Some(group_idx) = self.global_encoder_settings_group() {
+            rows.extend(
+                (0..self.module_settings.groups[group_idx].fields.len())
+                    .map(|field_idx| EncoderSettingsRow::Field(group_idx, field_idx)),
+            );
+        } else if self.encoder_only_module_settings(layout) {
             // One pair of controls applies to every physical encoder, independently
             // of which encoder visibility switches are enabled in the layout.
             if let Some((group_idx, group)) = self
