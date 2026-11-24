@@ -203,6 +203,57 @@ pub(crate) fn label_for_user_id(user_id: u8) -> Option<String> {
         })
 }
 
+/// Presentation only: the binding still uses its original QMK descriptor slot.
+pub(crate) struct QmkPresentation {
+    pub(crate) label: String,
+    pub(crate) russian_letter: bool,
+    pub(crate) display_order: u16,
+}
+
+pub(crate) fn qmk_presentation(name: &str, label: &str) -> Option<QmkPresentation> {
+    if !name.starts_with("LG_") {
+        return None;
+    }
+    let suffix = label
+        .strip_prefix("RuEn\n")
+        .or_else(|| label.strip_prefix("Universal\n"))?;
+    let control = match name {
+        "LG_TOGGLE" => Some(USER_TOGGLE),
+        "LG_SYNC" => Some(USER_SYNC),
+        "LG_SET_EN" => Some(USER_SET_ENGLISH),
+        "LG_SET_RU" => Some(USER_SET_RUSSIAN),
+        "LG_TG_MAC" => Some(USER_TOGGLE_MACOS),
+        _ => None,
+    };
+    let user_id = control
+        .or_else(|| {
+            SYMBOLS
+                .iter()
+                .find(|entry| entry.symbol.to_string() == suffix)
+                .map(|entry| entry.user_id)
+        })
+        .or_else(|| {
+            RUSSIAN_LETTERS
+                .iter()
+                .find(|entry| entry.letter.to_string() == suffix.to_lowercase())
+                .map(|entry| entry.user_id)
+        });
+    Some(QmkPresentation {
+        label: user_id
+            .and_then(label_for_user_id)
+            .unwrap_or_else(|| format!("Universal\n{suffix}")),
+        russian_letter: name.starts_with("LG_RU_"),
+        display_order: user_id.map(u16::from).unwrap_or(u16::MAX),
+    })
+}
+
+/// Present legacy QMK language keys without changing descriptor slots/actions.
+pub(crate) fn qmk_label(name: &str, label: &str) -> String {
+    qmk_presentation(name, label)
+        .map(|presentation| presentation.label)
+        .unwrap_or_else(|| label.to_owned())
+}
+
 pub(crate) fn label(action: KeyAction) -> Option<String> {
     label_for_user_id(user_id(action)?)
 }
@@ -265,6 +316,47 @@ pub(crate) fn tooltip(action: KeyAction) -> Option<String> {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn qmk_universal_labels_match_native_labels_without_changing_other_custom_keys() {
+        for (name, legacy, user_id) in [
+            ("LG_TOGGLE", "Toggle", USER_TOGGLE),
+            ("LG_SYNC", "Sync", USER_SYNC),
+            ("LG_SET_EN", "En", USER_SET_ENGLISH),
+            ("LG_SET_RU", "Ru", USER_SET_RUSSIAN),
+            ("LG_TG_MAC", "Mac Tg", USER_TOGGLE_MACOS),
+        ] {
+            assert_eq!(
+                qmk_label(name, &format!("RuEn\n{legacy}")),
+                label_for_user_id(user_id).unwrap()
+            );
+        }
+        for entry in SYMBOLS {
+            assert_eq!(
+                qmk_label("LG_SYMBOL", &format!("RuEn\n{}", entry.symbol)),
+                label_for_user_id(entry.user_id).unwrap()
+            );
+        }
+        for entry in RUSSIAN_LETTERS {
+            assert_eq!(
+                qmk_label(
+                    "LG_LETTER",
+                    &format!("RuEn\n{}", entry.letter.to_uppercase())
+                ),
+                label_for_user_id(entry.user_id).unwrap()
+            );
+        }
+        assert_eq!(qmk_label("LG_WORD", "RuEn\nword"), "Universal\nword");
+        assert_eq!(qmk_label("LG_SET_M0", "RuEn\nM0"), "Universal\nM0");
+        for (name, label) in [
+            ("OTHER", "RuEn\nSync"),
+            ("LG_SYNC", ""),
+            ("LG_SYNC", "My label"),
+            ("LG_SYNC", "Universal\nSync"),
+        ] {
+            assert_eq!(qmk_label(name, label), label);
+        }
+    }
 
     #[test]
     fn numero_catalog_entry_round_trips_native_action_without_shifting_legacy_ids() {

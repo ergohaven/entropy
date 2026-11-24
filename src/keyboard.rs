@@ -849,6 +849,7 @@ impl KeyboardLayout {
                         } else {
                             title
                         };
+                        let label = crate::universal_symbols::qmk_label(&name, &label);
                         CustomKeycode { name, label, title }
                     })
                     .collect()
@@ -1076,6 +1077,60 @@ mod tests {
         assert!(!layout.live_features.layout);
         assert!(!layout.live_features.volume);
         assert!(layout.live_features.media);
+    }
+}
+
+#[cfg(test)]
+mod qmk_universal_label_tests {
+    use super::*;
+
+    #[test]
+    fn parsed_qmk_labels_reach_keycaps_without_changing_custom_slots_or_definition() {
+        let json = serde_json::json!({
+            "matrix": {"rows": 1, "cols": 1},
+            "layouts": {"keymap": [["0,0"]]},
+            "customKeycodes": [
+                {"name": "EH_RSRV", "shortName": "", "title": "Reserved"},
+                {"name": "LG_SYNC", "shortName": "RuEn\nSync", "title": "Sync language"},
+                {"name": "LG_DOT", "shortName": "RuEn\n.", "title": "Send ."},
+                {"name": "LG_SET_EN", "shortName": "RuEn\nEn", "title": "Set English language"},
+                {"name": "LG_RU_BE", "shortName": "RuEn\nБ", "title": "Send Б"},
+                {"name": "OTHER", "shortName": "RuEn\nSync", "title": "Another action"}
+            ]
+        });
+        let original = json.clone();
+        let layout = KeyboardLayout::from_vial_json(&json).unwrap();
+        assert_eq!(json, original);
+        let expected = [
+            "",
+            "Universal\nSync",
+            "Universal\n.",
+            "Universal\nEN",
+            "Universal\nб",
+            "RuEn\nSync",
+        ];
+        assert_eq!(layout.custom_keycodes.len(), expected.len());
+        for (index, (custom, label)) in layout.custom_keycodes.iter().zip(expected).enumerate() {
+            assert_eq!(
+                custom.name,
+                json["customKeycodes"][index]["name"].as_str().unwrap()
+            );
+            assert_eq!(
+                custom.title,
+                json["customKeycodes"][index]["title"].as_str().unwrap()
+            );
+            assert_eq!(custom.label, label);
+            if !label.is_empty() {
+                assert_eq!(
+                    crate::keycode::keycode_label_with_names(
+                        0x7E00 + index as u16,
+                        &layout.custom_keycodes,
+                        &[]
+                    ),
+                    label
+                );
+            }
+        }
     }
 }
 

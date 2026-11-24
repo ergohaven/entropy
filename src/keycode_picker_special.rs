@@ -323,6 +323,7 @@ Repeat"
         if self.universal_russian_letters_available() {
             rows.extend(universal_russian_letter_rows(lang, tab, international, self.supports_extended_russian_letters));
         }
+        rows.extend(self.device_keycode_rows(tab, international));
         for (top, bottom, value, tip) in INTERNATIONAL_KEYS {
             if !self.picker_value_supported(*value) {
                 continue;

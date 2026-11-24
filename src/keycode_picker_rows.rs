@@ -182,7 +182,13 @@ impl KeycodePicker {
                 .collect(),
             KeycodeTab::Symbols | KeycodeTab::Media => self.keycode_table_rows(tab),
             KeycodeTab::UniversalSymbols => {
-                universal_symbol_rows(self.language, self.supports_universal_numero)
+                let mut rows = if self.native_universal_symbols_available() {
+                    universal_symbol_rows(self.language, self.supports_universal_numero)
+                } else {
+                    Vec::new()
+                };
+                rows.extend(self.device_keycode_rows(KeycodeTab::UniversalSymbols, ""));
+                rows
             }
             KeycodeTab::Layers => self.layer_rows(KeycodeTab::Layers),
             KeycodeTab::Modifiers => self.modifier_rows(),
