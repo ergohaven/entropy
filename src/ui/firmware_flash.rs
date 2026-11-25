@@ -74,8 +74,8 @@ pub(super) fn update_profile(
                 .then_some(profile)
         }
         (crate::firmware::FirmwareProtocol::Rynk, FirmwareReleaseFamily::Rynk)
-            if flash::compatible_version(&target.current_version)
-                && flash::compatible_version(&release.latest_version) =>
+            if flash::compatible_version(&release.latest_version)
+                && flash::require_newer_version(Some(&target.current_version), &release.latest_version).is_ok() =>
         {
             let profile = flash::profiles::profile_for_archive(device.product_id, &target.asset_prefix)?;
             (release.asset.name == format!("{}-{}.zip", profile.archive, release.latest_version))
@@ -846,6 +846,7 @@ mod tests {
     fn firmware_flash_qmk_profiles_include_split_and_single_boards_in_the_existing_guide() {
         for (pid, asset, parts) in [
             (0x42, "macropad_v3", 1),
+            (0x52, "phenom_v1", 2),
             (0xb2, "sm62_v1", 2),
             (0x70, "k03_v3_v4", 2),
         ] {
@@ -854,7 +855,7 @@ mod tests {
             let device = crate::device::test_usb_device("usb:qmk-test", 1, pid);
             let mut target = FirmwareReleaseTarget {
                 family: FirmwareReleaseFamily::Qmk,
-                current_version: "4.1.0".into(),
+                current_version: "4.1".into(),
                 asset_prefix: asset.into(),
             };
             let release = FirmwareUpdateCheckResult {

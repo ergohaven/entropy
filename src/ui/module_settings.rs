@@ -202,8 +202,28 @@ pub(super) fn fixed_encoder_field_number(title: &str, side_size: usize) -> Optio
 }
 
 impl EntropyApp {
+    pub(super) fn global_encoder_settings_group(&self) -> Option<usize> {
+        if !self.module_settings.supported {
+            return None;
+        }
+        self.module_settings.groups.iter().position(|group| {
+            group.kind == ModuleSettingsGroupKind::Other
+                && group.title.eq_ignore_ascii_case("Encoders")
+                && group.fields.len() == 2
+                && ["Encoder interval", "Encoder steps"].iter().all(|title| {
+                    group.fields.iter().any(|field| {
+                        field.title.eq_ignore_ascii_case(title)
+                            && field.kind == ModuleSettingKind::Select
+                    })
+                })
+        })
+    }
+
     // Never move a real module selector (K:04) or a mixed module page.
     pub(super) fn encoder_only_module_settings(&self, layout: &KeyboardLayout) -> bool {
+        if self.global_encoder_settings_group().is_some() {
+            return self.module_settings.groups.len() == 1 && layout.encoder_count() > 0;
+        }
         let Some(side_size) = fixed_encoder_side_size(layout) else {
             return false;
         };
@@ -245,7 +265,7 @@ impl EntropyApp {
         let Some(layout) = self.layout.as_ref() else {
             return false;
         };
-        if !self.encoder_only_module_settings(layout) {
+        if self.global_encoder_settings_group().is_some() || !self.encoder_only_module_settings(layout) {
             return false;
         }
         let count = fixed_encoder_side_size(layout).unwrap_or(0) * 2;
@@ -347,7 +367,9 @@ impl EntropyApp {
         // K:03 and Imperial44 expose per-encoder QSIDs in firmware. One UI
         // control must update every encoder, including hidden ones on both halves.
         if let Some(layout) = self.layout.as_ref() {
-            if self.encoder_only_module_settings(layout) {
+            if self.global_encoder_settings_group().is_none()
+                && self.encoder_only_module_settings(layout)
+            {
                 let side_size = fixed_encoder_side_size(layout).expect("fixed encoder model");
                 let selected_title = self
                     .module_settings
@@ -609,6 +631,9 @@ impl EntropyApp {
             rows.extend(self.module_settings_field_rows(group_idx, selected_module, selected_mode));
         }
         for (group_idx, group) in self.module_settings.groups.iter().enumerate() {
+            if Some(group_idx) == self.global_encoder_settings_group() {
+                continue;
+            }
             if matches!(
                 group.kind,
                 ModuleSettingsGroupKind::Left | ModuleSettingsGroupKind::Right

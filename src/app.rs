@@ -52,8 +52,12 @@ pub(crate) use app_storage::test_config_root;
 #[path = "app_update.rs"]
 mod app_update;
 use app_update::*;
+pub(crate) use app_update::format_firmware_version;
 #[cfg(not(target_arch = "wasm32"))]
-pub(crate) use app_update::{firmware_release_target_for_usb, FirmwareReleaseFamily, QMK_RELEASE_PROFILES};
+pub(crate) use app_update::{
+    firmware_release_target_for_usb, parse_firmware_version, FirmwareReleaseFamily,
+    QMK_RELEASE_PROFILES,
+};
 #[path = "app_repaint.rs"]
 mod app_repaint;
 #[cfg(not(target_arch = "wasm32"))]

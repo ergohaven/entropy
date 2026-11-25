@@ -445,7 +445,7 @@ fn json_path_string(json: &serde_json::Value, path: &[&str]) -> Option<String> {
     json_string_value(value)
 }
 
-fn firmware_version_from_vial_json(json: &serde_json::Value) -> Option<String> {
+pub(super) fn firmware_version_from_vial_json(json: &serde_json::Value) -> Option<String> {
     [
         &["firmware", "version"][..],
         &["firmware", "firmware_version"][..],
@@ -964,9 +964,10 @@ impl EntropyApp {
                     }
                     json
                 };
-                let firmware_version = runtime_firmware_version
-                    .clone()
-                    .or_else(|| firmware_version_from_vial_json(&json));
+                let firmware_version = crate::app::firmware_version_label(
+                    runtime_firmware_version.as_deref(),
+                    firmware_version_from_vial_json(&json).as_deref(),
+                );
                 let manufacturer = manufacturer_for_about(&dev.manufacturer, &json);
                 let supports_battery_halves = supports_battery_halves_from_vial_json(&json);
                 let battery_halves = if supports_battery_halves && !staged_initial_load {

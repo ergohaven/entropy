@@ -1,6 +1,6 @@
 //! Guided UF2 updates for supported QMK and RMK release profiles.
 use anyhow::{bail, ensure, Context, Result};
-use crate::app::{firmware_release_target_for_usb, FirmwareReleaseFamily};
+use crate::app::{firmware_release_target_for_usb, parse_firmware_version, FirmwareReleaseFamily};
 use crate::device_session::DeviceSession;
 use crate::hid::HidDevice;
 use crate::rynk::{
@@ -126,14 +126,13 @@ fn rynk_product(pid: u16) -> bool {
 }
 
 pub(crate) fn qmk_version(version: &str) -> Option<semver::Version> {
-    semver::Version::parse(version.strip_prefix('v').unwrap_or(version))
-        .ok()
+    parse_firmware_version(version)
         .filter(|v| v.major > 0 && v.pre.is_empty() && v.build.is_empty())
 }
 
 pub(crate) fn compatible_version(version: &str) -> bool {
-    semver::Version::parse(version.strip_prefix('v').unwrap_or(version))
-        .is_ok_and(|v| v >= semver::Version::new(0, 3, 0) && v.pre.is_empty() && v.build.is_empty())
+    parse_firmware_version(version)
+        .is_some_and(|v| v >= semver::Version::new(0, 3, 0) && v.pre.is_empty() && v.build.is_empty())
 }
 
 #[cfg(test)]
@@ -226,14 +225,14 @@ fn validate_checksum(bytes: &[u8], size: usize, digest: &str) -> Result<()> {
     Ok(())
 }
 
-fn require_newer_version(current: Option<&str>, expected: &str) -> Result<()> {
+pub(crate) fn require_newer_version(current: Option<&str>, expected: &str) -> Result<()> {
     let current = current.context("Keyboard does not report a firmware version")?;
     ensure!(
         compatible_version(current),
         "Firmware updates require RMK 0.3.0 or later"
     );
-    let current = semver::Version::parse(current).context("Invalid installed firmware version")?;
-    let expected = semver::Version::parse(expected).context("Invalid proposed firmware version")?;
+    let current = parse_firmware_version(current).context("Invalid installed firmware version")?;
+    let expected = parse_firmware_version(expected).context("Invalid proposed firmware version")?;
     ensure!(
         current < expected,
         "This target already has this firmware or a newer version"
@@ -869,7 +868,8 @@ fn verify_returned_info(
     );
     let version = info_version(info);
     ensure!(
-        version == expected,
+        parse_firmware_version(&version)
+            .is_some_and(|reported| parse_firmware_version(expected) == Some(reported)),
         "Keyboard returned with firmware {version}, expected {expected}"
     );
     Ok(())
@@ -1101,8 +1101,10 @@ mod tests {
         let uid = returned.keyboard_uid;
         assert!(verify_returned_info(&returned, uid, "2.3.1").is_ok());
         assert!(verify_returned_info(&returned, uid, "2.3.2").is_err());
+        returned.firmware.patch = 0;
+        assert!(verify_returned_info(&returned, uid, "2.3").is_ok());
         returned.keyboard_uid[0] ^= 1;
-        assert!(verify_returned_info(&returned, uid, "2.3.1").is_err());
+        assert!(verify_returned_info(&returned, uid, "2.3").is_err());
         for old in ["0.2.0", "0.3.0-beta.1", "0.3.0+build", "unknown", ""] {
             assert!(!compatible_version(old));
             assert!(require_newer_version(Some(old), "0.3.1").is_err());
@@ -1201,7 +1203,8 @@ mod tests {
     #[test]
     fn firmware_flash_same_version_cannot_mask_a_failed_transfer() {
         assert!(require_newer_version(Some("4.0.5"), "4.1.0").is_ok());
-        for current in [Some("4.1.0"), Some("4.2.0"), Some("unknown"), None] {
+        assert!(require_newer_version(Some("0.3"), "0.3.1").is_ok());
+        for current in [Some("4.1"), Some("4.1.0"), Some("4.2.0"), Some("unknown"), None] {
             assert!(require_newer_version(current, "4.1.0").is_err());
         }
     }

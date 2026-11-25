@@ -231,9 +231,28 @@ impl KeycodePicker {
             .collect()
     }
 
+    /// Share routing between tabs, search, reopening and embedded choosers.
+    pub(super) fn custom_keycode_tab(&self, name: &str, label: &str, title: &str) -> KeycodeTab {
+        if !self.supports_rmk_native_key_actions {
+            if let Some(presentation) = crate::universal_symbols::qmk_presentation(name, label) {
+                return if presentation.russian_letter {
+                    KeycodeTab::Special
+                } else {
+                    KeycodeTab::UniversalSymbols
+                };
+            }
+        }
+        if is_bluetooth_custom_keycode(name, label, title) {
+            KeycodeTab::Bluetooth
+        } else {
+            KeycodeTab::Custom
+        }
+    }
+
     pub(super) fn has_visible_custom_keycodes(&self) -> bool {
         self.custom_keycodes.iter().any(|(name, label, title, _)| {
-            !label.trim().is_empty() && !is_bluetooth_custom_keycode(name, label, title)
+            !label.trim().is_empty()
+                && self.custom_keycode_tab(name, label, title) == KeycodeTab::Custom
         })
     }
 
@@ -243,20 +262,38 @@ impl KeycodePicker {
         })
     }
 
-    /// Device-defined keycodes: Bluetooth controls on their own tab, the
-    /// rest on the Custom tab.
+    /// Device-defined keycodes, retaining their original Vial binding values.
     pub(super) fn custom_keycode_rows(&self, bluetooth: bool) -> Vec<PickerRow> {
         let tab = if bluetooth {
             KeycodeTab::Bluetooth
         } else {
             KeycodeTab::Custom
         };
-        self.custom_keycodes
+        self.device_keycode_rows(tab, "")
+    }
+
+    pub(super) fn device_keycode_rows(
+        &self,
+        tab: KeycodeTab,
+        section: &'static str,
+    ) -> Vec<PickerRow> {
+        let mut entries: Vec<_> = self
+            .custom_keycodes
             .iter()
             .filter(|(name, label, title, _)| {
-                !label.trim().is_empty()
-                    && is_bluetooth_custom_keycode(name, label, title) == bluetooth
+                !label.trim().is_empty() && self.custom_keycode_tab(name, label, title) == tab
             })
+            .collect();
+        if matches!(tab, KeycodeTab::UniversalSymbols | KeycodeTab::Special) {
+            // Match RMK display order, never descriptor/firmware slot order.
+            entries.sort_by_key(|(name, label, _, _)| {
+                crate::universal_symbols::qmk_presentation(name, label)
+                    .map(|presentation| presentation.display_order)
+                    .unwrap_or(u16::MAX)
+            });
+        }
+        entries
+            .into_iter()
             .map(|(name, label, title, value)| {
                 let tip = if title.trim().is_empty() {
                     name.as_str()
@@ -265,7 +302,7 @@ impl KeycodePicker {
                 };
                 PickerRow::new(
                     tab,
-                    "",
+                    section,
                     label.clone(),
                     crate::i18n::tr_text(self.language, tip),
                     PickerAction::Assign(crate::keyboard::KeyBinding::Vial(*value)),
@@ -278,7 +315,25 @@ impl KeycodePicker {
     /// Custom keycodes as a section inside another chooser (e.g. the Tap
     /// Dance key picker). Returns the picked keycode.
     pub(super) fn show_custom_keycode_choice_section(&self, ui: &mut egui::Ui) -> Option<u16> {
-        self.show_device_keycode_choice_section(ui, false)
+        for (tab, heading) in [
+            (
+                KeycodeTab::Custom,
+                tr_picker(self.language, "key_picker.section_custom_keycodes"),
+            ),
+            (
+                KeycodeTab::UniversalSymbols,
+                tr_picker(self.language, "key_picker.section_universal_symbols"),
+            ),
+            (
+                KeycodeTab::Special,
+                crate::i18n::tr_catalog(self.language, "key_picker_text.international"),
+            ),
+        ] {
+            if let Some(value) = self.show_device_keycode_tab_choice_section(ui, tab, heading) {
+                return Some(value);
+            }
+        }
+        None
     }
 
     pub(super) fn show_device_keycode_choice_section(
@@ -286,13 +341,13 @@ impl KeycodePicker {
         ui: &mut egui::Ui,
         bluetooth: bool,
     ) -> Option<u16> {
-        let rows = self.custom_keycode_rows(bluetooth);
-        if rows.is_empty() {
-            return None;
-        }
-        ui.add_space(2.0);
-        show_section_heading(
+        self.show_device_keycode_tab_choice_section(
             ui,
+            if bluetooth {
+                KeycodeTab::Bluetooth
+            } else {
+                KeycodeTab::Custom
+            },
             tr_picker(
                 self.language,
                 if bluetooth {
@@ -301,7 +356,21 @@ impl KeycodePicker {
                     "key_picker.section_custom_keycodes"
                 },
             ),
-        );
+        )
+    }
+
+    fn show_device_keycode_tab_choice_section(
+        &self,
+        ui: &mut egui::Ui,
+        tab: KeycodeTab,
+        heading: &'static str,
+    ) -> Option<u16> {
+        let rows = self.device_keycode_rows(tab, "");
+        if rows.is_empty() {
+            return None;
+        }
+        ui.add_space(2.0);
+        show_section_heading(ui, heading);
         let picked = show_row_grid(ui, &rows);
         ui.add_space(8.0);
         match picked {

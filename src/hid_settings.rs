@@ -96,7 +96,7 @@ fn format_via_firmware_version(value: u32) -> Option<String> {
     let major = value >> 16;
     let minor = (value >> 8) & 0xFF;
     let patch = value & 0xFF;
-    Some(format!("{major}.{minor}.{patch}"))
+    Some(crate::app::format_firmware_version(major, minor, patch))
 }
 
 fn battery_level_from_response(flags: u8, valid_bit: u8, value: u8) -> Option<u8> {
@@ -612,6 +612,14 @@ mod tests {
         assert_eq!(
             format_via_firmware_version(0x0004_0005).as_deref(),
             Some("4.0.5")
+        );
+        assert_eq!(
+            format_via_firmware_version(0x0001_0000).as_deref(),
+            Some("1.0")
+        );
+        assert_eq!(
+            format_via_firmware_version(0x0002_0000).as_deref(),
+            Some("2.0")
         );
     }
 

@@ -7,7 +7,8 @@
 //! the editors hold them. A USB board loads in full here; nothing is deferred.
 
 use super::device_connect_task::{
-    layer_name_sync_updates, normalize_reported_layer_count, use_device_name_for_unnamed_layout,
+    firmware_version_from_vial_json, layer_name_sync_updates, normalize_reported_layer_count,
+    use_device_name_for_unnamed_layout,
 };
 use super::*;
 use crate::rynk::client::{fnv1a, RynkClientError};
@@ -289,7 +290,16 @@ impl EntropyApp {
         };
         let keyboard_id = u64::from_le_bytes(info.keyboard_uid);
         let firmware = info.firmware;
-        let firmware_version = format!("{}.{}.{}", firmware.major, firmware.minor, firmware.patch);
+        let runtime_version = crate::app::format_firmware_version(
+            firmware.major.into(),
+            firmware.minor.into(),
+            firmware.patch.into(),
+        );
+        let firmware_version = crate::app::firmware_version_label(
+            Some(&runtime_version),
+            firmware_version_from_vial_json(&json).as_deref(),
+        )
+        .expect("a reported Rynk firmware version is present");
         // The board's release, as over Vial, but its Rynk package: the
         // definition names the asset, and a dongle shows host time and media.
         let host_screen = caps::HOST_TIME | caps::HOST_MEDIA;

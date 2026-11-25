@@ -1601,6 +1601,13 @@ impl KeycodePicker {
     }
 
     fn universal_symbols_available(&self) -> bool {
+        self.native_universal_symbols_available()
+            || self.custom_keycodes.iter().any(|(name, label, title, _)| {
+                self.custom_keycode_tab(name, label, title) == KeycodeTab::UniversalSymbols
+            })
+    }
+
+    fn native_universal_symbols_available(&self) -> bool {
         self.supports_universal_symbols
             && self.supports_rmk_native_key_actions
             && self.rmk_native_key_actions_allowed_for_target
@@ -1941,9 +1948,7 @@ impl KeycodePicker {
             .iter()
             .find(|(_, _, _, custom_value)| *custom_value == value);
         let preferred_tab = match custom_keycode {
-            Some((name, label, title, _)) if is_bluetooth_custom_keycode(name, label, title) => {
-                KeycodeTab::Bluetooth
-            }
+            Some((name, label, title, _)) => self.custom_keycode_tab(name, label, title),
             _ => KeycodeTab::preferred_for_vial_keycode(value, custom_keycode.is_some()),
         };
         self.selected_tab = if self.vial_tab_supported(preferred_tab) {
