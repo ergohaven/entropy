@@ -118,6 +118,26 @@ impl Dialog {
     fn part_label(&self, language: crate::i18n::Language, part: Part) -> &'static str {
         text(language, part.label.0, part.label.1)
     }
+
+    fn next_connection_instruction(
+        &self,
+        language: crate::i18n::Language,
+        next: Part,
+    ) -> &'static str {
+        if !self.profile.qmk && next != self.origin_part {
+            text(
+                language,
+                "Continue and start the next transfer. When prompted, move the USB cable to the part named above. Use the same port on the computer.",
+                "Продолжите и запустите передачу. По подсказке переставьте USB-кабель в указанную выше часть. Используйте тот же порт компьютера.",
+            )
+        } else {
+            text(
+                language,
+                "Move the USB cable to the part named above. Use the same port on the computer. Continue, then select the connected device in Entropy.",
+                "Переставьте USB-кабель в указанную выше часть, оставив его в том же порту компьютера. Продолжите и выберите подключённое устройство в Entropy.",
+            )
+        }
+    }
 }
 
 impl EntropyApp {
@@ -515,15 +535,24 @@ impl EntropyApp {
         let mut close = false;
         egui::Modal::new(egui::Id::unique("firmware_update")).show(ctx, |ui| {
             ui.set_width(440.0_f32.min((ctx.content_rect().width() - 48.0).max(180.0)));
-            egui::ScrollArea::vertical()
-                .max_height((ctx.content_rect().height() - 96.0).max(100.0))
-                .show(ui, |ui| {
+            // A later step can be taller than the previous modal contents.
+            ui.set_max_height((ctx.content_rect().height() - 96.0).max(100.0));
+            egui::ScrollArea::vertical().show(ui, |ui| {
             ui.heading(text(lang, "Update firmware", "Обновить прошивку"));
-            ui.label(&dialog.device.name);
-            ui.label(format!("{} → {}", dialog.current_version, dialog.release.latest_version));
+            ui.label(format!("{} · {} → {}", dialog.device.name, dialog.current_version, dialog.release.latest_version));
+            ui.add_space(6.0);
+            let total = dialog.profile.parts.len();
+            if total > 1 {
+                let done = dialog.steps.len();
+                ui.add(egui::ProgressBar::new(done as f32 / total as f32).text(match lang {
+                    crate::i18n::Language::English => format!("Components processed: {done} of {total}"),
+                    crate::i18n::Language::Russian => format!("Обработано компонентов: {done} из {total}"),
+                }));
+            }
             {
-                let profile = dialog.profile;
-                ui.label(format!("{} · {}: {}", profile.archive, text(lang, "Update target", "Обновляем"), dialog.part_label(lang, dialog.part)));
+                if !matches!(dialog.phase, Phase::Finished(Ok(_))) {
+                    ui.label(format!("{} · {}: {}", dialog.profile.archive, text(lang, "Update target", "Обновляем"), dialog.part_label(lang, dialog.part)));
+                }
                 for (part, outcome) in &dialog.steps {
                     ui.label(format!("{}: {}", dialog.part_label(lang, *part), match outcome {
                         Outcome::Verified => text(lang, "version verified", "версия проверена"),
@@ -531,10 +560,13 @@ impl EntropyApp {
                     }));
                 }
             }
-            if !dialog.profile.qmk {
+            ui.separator();
+            if !dialog.profile.qmk && matches!(dialog.phase, Phase::Confirm) {
                 ui.label(text(lang, "Requires Entropy 0.6.0+ and RMK 0.3.0+ using Rynk. Update every component from the same release.", "Требуются Entropy 0.6.0+ и RMK 0.3.0+ с Rynk. Обновите все части прошивкой одного релиза."));
             }
-            if let Some((en, ru)) = dialog.profile.connection_note {
+            if let Some((en, ru)) = dialog.profile.connection_note.filter(|_| {
+                !matches!(dialog.phase, Phase::Finished(Ok(_))) || dialog.next.is_some()
+            }) {
                 ui.label(text(lang, en, ru));
             }
             ui.add_space(8.0);
@@ -650,6 +682,9 @@ impl EntropyApp {
                         Outcome::TransferredUnverified => text(lang, "Transfer complete, version unverified. Entropy cannot read this target's installed firmware version over USB.", "Передача завершена, версия не проверена. Entropy не может прочитать установленную версию прошивки этой половинки через USB."),
                     });
                     if let Some(next) = &dialog.next {
+                        ui.add_space(6.0);
+                        ui.strong(format!("{}: {}", text(lang, "Next", "Далее"), dialog.part_label(lang, next.part)));
+                        ui.label(dialog.next_connection_instruction(lang, next.part));
                         if ui.button(format!("{}: {}", text(lang, "Continue", "Продолжить"), dialog.part_label(lang, next.part))).clicked() { action = Some(Action::Next); }
                     } else {
                         ui.label(if !dialog.profile.has_peripherals() {
@@ -657,6 +692,14 @@ impl EntropyApp {
                         } else {
                             text(lang, "All guided steps are finished. Restore your normal keyboard connection and check both halves. Import the saved layout if needed.", "Все этапы инструкции завершены. Верните обычное подключение и проверьте обе половинки. При необходимости импортируйте сохранённую раскладку.")
                         });
+                        if dialog.profile.host_bluetooth {
+                            ui.add_space(6.0);
+                            ui.strong(text(lang, "Bluetooth connection", "Подключение по Bluetooth"));
+                            ui.label(text(lang,
+                                "If the keyboard no longer connects over Bluetooth, forget it in your system’s Bluetooth settings and pair it again.",
+                                "Если клавиатура перестала подключаться по Bluetooth, удалите её из списка устройств в настройках системы и выполните сопряжение заново.",
+                            ));
+                        }
                     }
                 },
                 Phase::Finished(Err(error)) => {
@@ -908,7 +951,7 @@ mod tests {
             harness.get_by_label(update_label).click();
             harness.run();
             harness.get_by_label(prepare_label);
-            harness.get_by_label("0.3.0 → v0.3.1");
+            harness.get_by_label("USB identity fixture · 0.3.0 → v0.3.1");
             assert!(matches!(
                 harness
                     .state()
@@ -1373,6 +1416,9 @@ mod tests {
                 );
             harness.run();
             harness.get_by_label("Transfer complete, version unverified. Entropy cannot read this target's installed firmware version over USB.");
+            harness.get_by_label(format!("Next: {}", central.label.0).as_str());
+            harness.get_by_label("Move the USB cable to the part named above. Use the same port on the computer. Continue, then select the connected device in Entropy.");
+            assert!(harness.query_by_label("Bluetooth connection").is_none());
             harness.get_by_label(continue_label).click();
             harness.run();
             assert_eq!(
@@ -1396,6 +1442,45 @@ mod tests {
                 .to_string()
                 .contains("Reconnect and select"));
             assert!(recorder.sent().iter().all(|h| h.cmd != Cmd::BootloaderJump));
+        }
+    }
+
+    #[test]
+    fn firmware_flash_pairing_help_is_only_shown_at_completion_for_host_bluetooth() {
+        use egui_kittest::kittest::Queryable;
+        let _config = ScopedTempConfig::new();
+        for (pid, bluetooth) in [(0x74, true), (0x71, false), (0x52, false)] {
+            let (mut app, _) = fixture();
+            let dialog = app.firmware_flash.dialog.as_mut().unwrap();
+            dialog.profile = flash::profile(pid).unwrap();
+            dialog.part = *dialog.profile.parts.last().unwrap();
+            dialog.steps = dialog
+                .profile
+                .parts
+                .iter()
+                .copied()
+                .map(|part| {
+                    let outcome = if part.peripheral() {
+                        Outcome::TransferredUnverified
+                    } else {
+                        Outcome::Verified
+                    };
+                    (part, outcome)
+                })
+                .collect();
+            dialog.phase = Phase::Finished(Ok(Outcome::Verified));
+            let mut harness = egui_kittest::Harness::builder()
+                .with_size(egui::vec2(640.0, 700.0))
+                .with_context_setup(crate::keycode_picker::setup_picker_test_fonts)
+                .build_ui_state(
+                    |ui, app: &mut EntropyApp| app.draw_firmware_flash(ui.ctx()),
+                    app,
+                );
+            harness.run_steps(2);
+            assert_eq!(harness.query_by_label("Bluetooth connection").is_some(), bluetooth);
+            if bluetooth {
+                harness.get_by_label("If the keyboard no longer connects over Bluetooth, forget it in your system’s Bluetooth settings and pair it again.");
+            }
         }
     }
 

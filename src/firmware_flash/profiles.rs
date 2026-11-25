@@ -181,6 +181,8 @@ pub(crate) struct Profile {
     /// keyboard can use a single Central image; no split-specific engine needed.
     pub parts: &'static [Part],
     pub either_half_primary: bool,
+    /// Whether the computer pairs with the keyboard directly, rather than using a USB dongle.
+    pub host_bluetooth: bool,
     pub connection_note: Option<(&'static str, &'static str)>,
 }
 
@@ -230,28 +232,31 @@ pub(crate) const PROFILES: &[Profile] = &[
     k04(0x74, "k04", "k04_series_k04", false),
     k04(0x75, "k04-mini", "k04_series_mini", false),
     k04(0x76, "k04-micro", "k04_series_micro", false),
-    classic(0x36, "op36", "op36", CLASSIC_STANDALONE_PARTS),
-    classic(0x36, "op36-qube", "op36_qube", CLASSIC_QUBE_PARTS),
-    classic(0x44, "imperial44", "imperial44", CLASSIC_STANDALONE_PARTS),
+    classic(0x36, "op36", "op36", CLASSIC_STANDALONE_PARTS, true),
+    classic(0x36, "op36-qube", "op36_qube", CLASSIC_QUBE_PARTS, false),
+    classic(0x44, "imperial44", "imperial44", CLASSIC_STANDALONE_PARTS, true),
     classic(
         0x44,
         "imperial44-qube",
         "imperial44_qube",
         CLASSIC_QUBE_PARTS,
+        false,
     ),
-    classic(0x70, "k03", "k03", &[RIGHT_PERIPHERAL, LEFT_CENTRAL]),
-    classic(0x70, "k03-qube", "k03_qube", QUBE_PARTS),
+    classic(0x70, "k03", "k03", &[RIGHT_PERIPHERAL, LEFT_CENTRAL], true),
+    classic(0x70, "k03-qube", "k03_qube", QUBE_PARTS, false),
     classic(
         0xbe,
         "velvet",
         "velvet_standalone",
         &[VELVET_LEFT_PERIPHERAL, VELVET_RIGHT_CENTRAL],
+        true,
     ),
     classic(
         0xbe,
         "velvet-qube",
         "velvet_qube",
         &[VELVET_QUBE_LEFT, CLASSIC_RIGHT_PERIPHERAL, K04_DONGLE],
+        false,
     ),
 ];
 
@@ -274,6 +279,7 @@ const fn classic(
     archive: &'static str,
     output: &'static str,
     parts: &'static [Part],
+    host_bluetooth: bool,
 ) -> Profile {
     Profile {
         product_id,
@@ -282,6 +288,7 @@ const fn classic(
         qmk: false,
         parts,
         either_half_primary: false,
+        host_bluetooth,
         connection_note: None,
     }
 }
@@ -294,6 +301,7 @@ const fn phenom(product_id: u16, archive: &'static str, output: &'static str) ->
         qmk: false,
         parts: &[PHENOM_PERIPHERAL, PHENOM_CENTRAL],
         either_half_primary: true,
+        host_bluetooth: false,
         connection_note: Some((
             "Keep the Phenom halves linked. Move only the computer's USB cable when the guide asks.",
             "Оставьте половинки Phenom соединёнными. По инструкции переставляйте только USB-кабель компьютера.",
@@ -313,6 +321,7 @@ const fn k04(product_id: u16, archive: &'static str, output: &'static str, qube:
             &[K04_SECONDARY, K04_LEFT_CENTRAL]
         },
         either_half_primary: false,
+        host_bluetooth: !qube,
         connection_note: None,
     }
 }
@@ -357,6 +366,7 @@ pub(crate) fn qmk_profile(pid: u16, asset: &str) -> Option<Profile> {
             (_, false) => &[QMK_KEYBOARD],
         },
         either_half_primary: split,
+        host_bluetooth: false,
         connection_note: None,
     })
 }
@@ -394,6 +404,7 @@ pub(crate) mod fixtures {
             unlock: None,
         }],
         either_half_primary: false,
+        host_bluetooth: false,
         connection_note: None,
     };
     pub(crate) const SINGLE_NRF52840: Profile = Profile {
