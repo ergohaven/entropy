@@ -312,16 +312,18 @@ mod tests {
             .split(',')
             .map(|pid| pid.parse().unwrap())
             .collect();
-        assert!(products.contains(&0x42)); // QMK Macropad v3
-        assert!(products.contains(&0x74)); // RMK K:04
-        assert_eq!(products.iter().filter(|&&pid| pid == 0x52).count(), 1); // shared Phenom
-        assert!(!products.contains(&0xffff));
+        let expected: std::collections::BTreeSet<_> = super::super::profiles::PROFILES
+            .iter()
+            .map(|profile| profile.product_id)
+            .chain(crate::app::QMK_RELEASE_PROFILES.iter().map(|&(pid, _, _)| pid))
+            .collect();
+        assert_eq!(products, expected.into_iter().collect::<Vec<_>>());
     }
 
     #[cfg(any(target_os = "windows", target_os = "macos"))]
     #[cfg_attr(target_os = "macos", ignore = "requires PowerShell (pwsh) on PATH")]
     #[test]
-    fn firmware_flash_windows_qmk_macropad_reaches_preparation_without_a_mount() {
+    fn firmware_flash_windows_finds_unmounted_qmk_macropad_as_origin() {
         // Exercise the actual PowerShell filter and JSON shape without hardware.
         let fake_pnp = r"
 function Get-CimInstance { @() }
