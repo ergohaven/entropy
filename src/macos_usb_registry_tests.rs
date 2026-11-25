@@ -13,8 +13,9 @@ struct State {
     arena: Vec<Box<RefCell<Value>>>,
     properties: CF,
     parent: CF,
+    non_vial: CF,
     case: u8,
-    next: bool,
+    next: usize,
     valid_filter: bool,
     inspected: Vec<u32>,
 }
@@ -24,8 +25,9 @@ impl Default for State {
             arena: vec![],
             properties: ptr::null(),
             parent: ptr::null(),
+            non_vial: ptr::null(),
             case: 0,
-            next: false,
+            next: 0,
             valid_filter: false,
             inspected: vec![],
         }
@@ -212,12 +214,16 @@ unsafe extern "C" fn IOServiceGetMatchingServices(_: u32, m: CF, i: *mut u32) ->
 extern "C" fn IOIteratorNext(_: u32) -> u32 {
     OS.with(|s| {
         let mut s = s.borrow_mut();
-        if s.next || s.case == 9 {
-            0
-        } else {
-            s.next = true;
-            10
+        let entries: &[u32] = match s.case {
+            9 => &[],
+            13 => &[12, 10],
+            _ => &[10],
+        };
+        let entry = entries.get(s.next).copied().unwrap_or(0);
+        if entry != 0 {
+            s.next += 1;
         }
+        entry
     })
 }
 #[no_mangle]
@@ -247,7 +253,11 @@ unsafe extern "C" fn IORegistryEntryCreateCFProperties(o: u32, p: *mut CF, _: CF
         if s.case == 4 {
             return -1;
         }
-        *p = if o == 10 { s.properties } else { s.parent };
+        *p = match o {
+            10 => s.properties,
+            12 => s.non_vial,
+            _ => s.parent,
+        };
         0
     })
 }
@@ -257,9 +267,9 @@ unsafe extern "C" fn IORegistryEntryGetRegistryEntryID(_: u32, id: *mut u64) -> 
     0
 }
 #[no_mangle]
-unsafe extern "C" fn IORegistryEntryGetParentEntry(_: u32, _: *const c_char, p: *mut u32) -> i32 {
+unsafe extern "C" fn IORegistryEntryGetParentEntry(o: u32, _: *const c_char, p: *mut u32) -> i32 {
     OS.with(|s| {
-        if s.borrow().case == 5 {
+        if o == 12 || s.borrow().case == 5 {
             -1
         } else {
             *p = 11;
@@ -296,10 +306,20 @@ pub(crate) fn snapshot(case: u8) -> Result<Vec<Device>, String> {
     }
     let p = dict(items);
     let parent = dict(vec![]);
+    // Apple service observed ahead of the Phenom on macOS: USB by its
+    // Transport property, non-Vial, and without a valid USB ancestry chain.
+    let non_vial = dict(vec![
+        ("Transport", txt("USB")),
+        ("PrimaryUsagePage", num(0xff00)),
+        ("PrimaryUsage", num(0x0f)),
+        ("VendorID", num(0x05ac)),
+        ("ProductID", num(0)),
+    ]);
     OS.with(|s| {
         let mut s = s.borrow_mut();
         s.properties = p;
         s.parent = parent;
+        s.non_vial = non_vial;
         s.case = case;
     });
     let result = super::scan();
@@ -307,7 +327,7 @@ pub(crate) fn snapshot(case: u8) -> Result<Vec<Device>, String> {
         let s = s.borrow();
         assert!(s.valid_filter, "kernel-side USB property filter required");
         assert!(
-            s.inspected.iter().all(|n| [10, 11].contains(n)),
+            s.inspected.iter().all(|n| [10, 11].contains(n) || (case == 13 && *n == 12)),
             "must not inspect any BT service"
         );
     });
@@ -323,4 +343,13 @@ fn macos_registry_production_boundary_uses_usb_filter_and_complete_metadata() {
     }
     assert_eq!(snapshot(7).unwrap()[0].serial_number, "");
     assert!(snapshot(8).is_err());
+}
+
+#[test]
+fn macos_registry_skips_non_vial_service_with_broken_usb_ancestry() {
+    let devices = snapshot(13).unwrap();
+    assert_eq!(devices.len(), 1);
+    assert_eq!(devices[0].path, "DevSrvsID:4294968123");
+    // A Vial candidate with an ancestry failure must still fail closed.
+    assert!(snapshot(5).unwrap_err().contains("USB ancestry"));
 }

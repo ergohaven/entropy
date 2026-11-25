@@ -735,9 +735,9 @@ fn qmk_identity(hid: &HidDevice, prepared: &Prepared, device: &crate::device::De
 }
 
 fn scan_qmk_usb(prepared: &Prepared) -> Result<Option<crate::device::Device>> {
-    let Ok(devices) = crate::device::DeviceManager::scan_usb_devices() else {
-        return Ok(None);
-    };
+    let devices = crate::device::DeviceManager::scan_usb_devices()
+        .map_err(anyhow::Error::msg)
+        .context("Could not scan USB devices for the active QMK keyboard")?;
     let mut matches = devices.into_iter().filter(|device| {
         device.vendor_id == prepared.origin.vendor && device.product_id == prepared.origin.product
             && device.firmware == crate::firmware::FirmwareProtocol::Vial
