@@ -221,7 +221,7 @@ impl Profile {
     }
 }
 
-// This registry is also the runtime USB allowlist, including topology checks.
+// RMK entries for the shared runtime USB catalog and topology checks.
 pub(crate) const PROFILES: &[Profile] = &[
     phenom(0x52, "phenom", "phenom"),
     phenom(0x53, "phenom-mini", "phenom_mini"),

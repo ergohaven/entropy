@@ -117,8 +117,14 @@ pub(crate) fn supported(device: &crate::device::Device) -> bool {
 }
 
 pub(crate) fn runtime_product(pid: u16) -> bool {
-    rynk_product(pid)
-        || crate::app::QMK_RELEASE_PROFILES.iter().any(|(product, _, _)| *product == pid)
+    runtime_products().any(|product| product == pid)
+}
+
+fn runtime_products() -> impl Iterator<Item = u16> {
+    profiles::PROFILES
+        .iter()
+        .map(|profile| profile.product_id)
+        .chain(crate::app::QMK_RELEASE_PROFILES.iter().map(|&(pid, _, _)| pid))
 }
 
 fn rynk_product(pid: u16) -> bool {

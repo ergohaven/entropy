@@ -248,12 +248,10 @@ fn unescape_mount(field: &str) -> Result<PathBuf> {
 }
 
 #[cfg(any(target_os = "windows", test))]
-fn windows_topology_script(profiles: &[super::profiles::Profile]) -> String {
+fn windows_topology_script() -> String {
     // Only compile-time u16 product IDs enter this script; no device-provided
-    // strings or shell quoting. Keep Windows admission on the same registry.
-    let products = profiles
-        .iter()
-        .map(|profile| profile.product_id)
+    // strings or shell quoting. Use the same catalog as Linux and macOS.
+    let products = super::runtime_products()
         .collect::<std::collections::BTreeSet<_>>()
         .into_iter()
         .map(|product| product.to_string())
@@ -267,13 +265,13 @@ fn windows_topology_script(profiles: &[super::profiles::Profile]) -> String {
 
 #[cfg(target_os = "windows")]
 pub(super) fn snapshot() -> Result<Vec<UsbTarget>> {
-    let script = windows_topology_script(super::profiles::PROFILES);
-    let bytes = output(Command::new("powershell.exe").args([
-        "-NoProfile",
-        "-NonInteractive",
-        "-Command",
-        &script,
-    ]))?;
+    run_windows_topology("powershell.exe", &windows_topology_script())
+}
+
+#[cfg(any(target_os = "windows", all(test, target_os = "macos")))]
+fn run_windows_topology(shell: &str, script: &str) -> Result<Vec<UsbTarget>> {
+    let bytes =
+        output(Command::new(shell).args(["-NoProfile", "-NonInteractive", "-Command", script]))?;
     let text = String::from_utf8(bytes)?;
     Ok(serde_json::from_str(
         text.trim_start_matches('\u{feff}').trim(),
@@ -301,10 +299,63 @@ mod tests {
     }
 
     #[test]
-    fn firmware_flash_windows_topology_accepts_a_new_profile_without_script_allowlist_edits() {
-        let script = windows_topology_script(&[super::super::profiles::fixtures::SINGLE_RP2040]);
-        assert!(script.starts_with("$EntropyRuntimeProducts = @(65535)\n"));
-        assert!(script.contains("$EntropyRuntimeProducts -contains $product"));
+    fn firmware_flash_windows_topology_uses_both_release_catalogs() {
+        let script = windows_topology_script();
+        let products: Vec<u16> = script
+            .lines()
+            .next()
+            .unwrap()
+            .strip_prefix("$EntropyRuntimeProducts = @(")
+            .unwrap()
+            .strip_suffix(')')
+            .unwrap()
+            .split(',')
+            .map(|pid| pid.parse().unwrap())
+            .collect();
+        assert!(products.contains(&0x42)); // QMK Macropad v3
+        assert!(products.contains(&0x74)); // RMK K:04
+        assert_eq!(products.iter().filter(|&&pid| pid == 0x52).count(), 1); // shared Phenom
+        assert!(!products.contains(&0xffff));
+    }
+
+    #[cfg(any(target_os = "windows", target_os = "macos"))]
+    #[cfg_attr(target_os = "macos", ignore = "requires PowerShell (pwsh) on PATH")]
+    #[test]
+    fn firmware_flash_windows_qmk_macropad_reaches_preparation_without_a_mount() {
+        // Exercise the actual PowerShell filter and JSON shape without hardware.
+        let fake_pnp = r"
+function Get-CimInstance { @() }
+function Get-PnpDevice {
+    param([switch]$PresentOnly)
+    @(
+        @{InstanceId='USB\VID_E126&PID_0042\MACROPAD'}
+        @{InstanceId='USB\VID_E126&PID_FFFF\UNSUPPORTED'}
+        @{InstanceId='USB\VID_2E8A&PID_0003\BOOT'}
+    )
+}
+function Get-PnpDeviceProperty {
+    param($InstanceId, $KeyName)
+    if ($KeyName -ne 'DEVPKEY_Device_LocationPaths') { throw 'Unexpected PnP property' }
+    switch ($InstanceId) {
+        'USB\VID_E126&PID_0042\MACROPAD' { @{Data=@('PCIROOT(0)#USB(3)')} }
+        'USB\VID_2E8A&PID_0003\BOOT' { @{Data=@('PCIROOT(0)#USB(4)')} }
+        default { throw 'Unsupported USB device should not reach the port lookup' }
+    }
+}
+";
+        let shell = if cfg!(target_os = "windows") {
+            "powershell.exe"
+        } else {
+            "pwsh"
+        };
+        let script = windows_topology_script();
+        let targets = run_windows_topology(shell, &format!("{fake_pnp}\n{script}")).unwrap();
+        let profile = super::super::profiles::qmk_profile(0x0042, "macropad_v3").unwrap();
+        let origin = super::super::find_origin(&targets, profile.product_id).unwrap();
+        assert_eq!(origin.port, "windows:PCIROOT(0)#USB(3)");
+        assert!(origin.mounts.is_empty());
+        assert_eq!(targets.len(), 2);
+        assert!(targets.iter().any(|d| (d.vendor, d.product) == (0x2e8a, 3)));
     }
 
     #[test]
