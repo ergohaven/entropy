@@ -206,17 +206,10 @@ impl EntropyApp {
         if !self.module_settings.supported {
             return None;
         }
-        self.module_settings.groups.iter().position(|group| {
-            group.kind == ModuleSettingsGroupKind::Other
-                && group.title.eq_ignore_ascii_case("Encoders")
-                && group.fields.len() == 2
-                && ["Encoder interval", "Encoder steps"].iter().all(|title| {
-                    group.fields.iter().any(|field| {
-                        field.title.eq_ignore_ascii_case(title)
-                            && field.kind == ModuleSettingKind::Select
-                    })
-                })
-        })
+        self.module_settings
+            .groups
+            .iter()
+            .position(ModuleSettingsGroup::is_global_encoder_settings)
     }
 
     // Never move a real module selector (K:04) or a mixed module page.
@@ -284,6 +277,8 @@ impl EntropyApp {
     pub(super) fn module_settings_title_key(&self) -> &'static str {
         if self.module_settings.is_trackball_page() {
             "modules_settings.trackball_title"
+        } else if self.module_settings.is_touchpad_page() {
+            "modules_settings.touchpad_title"
         } else {
             "modules_settings.title"
         }
@@ -292,6 +287,8 @@ impl EntropyApp {
     fn module_settings_description_key(&self) -> &'static str {
         if self.module_settings.is_trackball_page() {
             "modules_settings.trackball_description"
+        } else if self.module_settings.is_touchpad_page() {
+            "modules_settings.touchpad_description"
         } else {
             "modules_settings.description"
         }
@@ -966,6 +963,108 @@ impl EntropyApp {
 mod tests {
     use super::*;
     include!("module_scope_regression.inc");
+
+    #[test]
+    fn hpd_touchpad_groups_keep_dynamic_fields_and_own_the_touchpad_route() {
+        let mut definition = serde_json::json!({
+            "matrix": {"rows": 12, "cols": 7},
+            "layouts": {"keymap": [["0,0", "0,0\n\n\n\n\n\n\n\n\ne", "0,1\n\n\n\n\n\n\n\n\ne"]]},
+            "settings": [
+                {"name": "Encoders", "fields": [
+                    {"type": "select", "title": "Encoder interval", "qsid": 325, "variants": ["0 ms", "5 ms"]},
+                    {"type": "select", "title": "Encoder steps", "qsid": 332, "variants": ["1", "2"]}
+                ]},
+                {"name": "Touchpad settings", "fields": [
+                    {"type": "select", "title": "DPI", "qsid": 120, "variants": ["100", "200"]},
+                    {"type": "integer", "title": "Sniper sens", "qsid": 121, "min": 1, "max": 255},
+                    {"type": "integer", "title": "Scroll sens", "qsid": 122, "min": 1, "max": 255},
+                    {"type": "integer", "title": "Text sens", "qsid": 123, "min": 1, "max": 255},
+                    {"type": "boolean", "title": "Touch gestures", "qsid": 327, "bit": 0},
+                    {"type": "boolean", "title": "Invert scroll vertical", "qsid": 124, "bit": 0},
+                    {"type": "boolean", "title": "Invert scroll horizontal", "qsid": 124, "bit": 4},
+                    {"type": "boolean", "title": "Invert text vertical", "qsid": 124, "bit": 3},
+                    {"type": "boolean", "title": "Invert text horizontal", "qsid": 124, "bit": 5},
+                    {"type": "boolean", "title": "Acceleration", "qsid": 124, "bit": 1},
+                    {"type": "boolean", "title": "Sticky mode", "qsid": 124, "bit": 2},
+                    {"type": "boolean", "title": "Auto layer enable", "qsid": 142, "bit": 0},
+                    {"type": "select", "title": "Auto layer", "qsid": 143, "variants": ["0", "1"]},
+                    {"type": "select", "title": "Auto layer timeout", "qsid": 324, "variants": ["250 ms", "500 ms"]}
+                ]}
+            ]
+        });
+        let supported = [120, 121, 122, 123, 124, 142, 143, 324, 325, 327, 332];
+        for name in ["HPD v2 enc/touch", "HPD v2 touch/enc"] {
+            definition["name"] = name.into();
+            let layout = KeyboardLayout::from_vial_json(&definition).unwrap();
+            let mut app = test_app();
+            app.module_settings =
+                EntropyApp::module_settings_from_definition(&definition, &supported);
+            assert!(!EntropyApp::layout_json_has_touchpad_settings(&definition));
+            assert!(app.module_settings.is_touchpad_page());
+            assert!(!app.encoder_only_module_settings(&layout));
+            assert!(app.global_encoder_settings_group().is_some());
+            assert_eq!(
+                app.module_settings_title_key(),
+                "modules_settings.touchpad_title"
+            );
+            assert_eq!(
+                crate::i18n::tr_catalog(
+                    crate::i18n::Language::English,
+                    app.module_settings_title_key()
+                ),
+                "Touchpad Settings"
+            );
+            let fields = app
+                .module_settings_rows()
+                .into_iter()
+                .filter_map(|row| {
+                    if let ModuleSettingsRow::Field {
+                        group_idx,
+                        field_idx,
+                    } = row
+                    {
+                        Some(&app.module_settings.groups[group_idx].fields[field_idx])
+                    } else {
+                        None
+                    }
+                })
+                .collect::<Vec<_>>();
+            assert_eq!(
+                fields.len(),
+                definition["settings"][1]["fields"]
+                    .as_array()
+                    .unwrap()
+                    .len()
+            );
+            assert_eq!(fields.iter().filter(|field| field.qsid == 124).count(), 6);
+            assert!(fields.iter().any(|field| field.qsid == 327));
+            assert!(fields.iter().any(|field| field.qsid == 324));
+            assert!(!fields.iter().any(|field| matches!(field.qsid, 325 | 332)));
+        }
+        let partial = EntropyApp::module_settings_from_definition(&definition, &[120, 325, 332]);
+        assert!(partial.is_touchpad_page());
+        assert!(!partial.fields.iter().any(|field| field.qsid == 327));
+        let encoders_only = EntropyApp::module_settings_from_definition(&definition, &[325, 332]);
+        assert!(!encoders_only.is_touchpad_page());
+    }
+
+    #[test]
+    fn mixed_module_groups_do_not_claim_a_touchpad_only_title() {
+        let mut app = test_app();
+        app.module_settings = EntropyApp::module_settings_from_definition(
+            &serde_json::json!({"settings": [
+                {"name": "Touchpad settings", "fields": [
+                    {"type": "select", "title": "DPI", "qsid": 120, "variants": ["100"]}
+                ]},
+                {"name": "Left module", "fields": [
+                    {"type": "select", "title": "Module", "qsid": 140, "variants": ["None", "Encoder", "Trackball", "Touchpad"]}
+                ]}
+            ]}),
+            &[120, 140],
+        );
+        assert!(!app.module_settings.is_touchpad_page());
+        assert_eq!(app.module_settings_title_key(), "modules_settings.title");
+    }
 
     fn qube_display_definition() -> serde_json::Value {
         serde_json::from_str(include_str!(

@@ -60,7 +60,8 @@ impl EntropyApp {
         let layout = application_layout.as_ref().unwrap_or(layout);
         let viewport = ui.max_rect();
         let avail = viewport.size();
-        // Settings keep their vertical origin while the Layout-tab selector is hidden.
+        // This reserve belongs only to the Layout tab's application selector.
+        // Config/Advanced use their own shared navigation-to-content spacing.
         let application_layout_settings_reserve_h = if self.application_layout_editor_active {
             58.0
         } else {
@@ -121,7 +122,6 @@ impl EntropyApp {
         let layout_h = geometry.layout_h;
         let main_tabs_h = 32.0_f32;
         let layer_bar_h = 68.0_f32;
-        let top_reserved_h = LAYOUT_TOP_RESERVED_H + application_layout_settings_reserve_h;
         let top_base_y = viewport.top() + 6.0;
         self.last_layout_geometry = Some((offset_x, offset_y, unit, padding));
 
@@ -132,7 +132,6 @@ impl EntropyApp {
             top_base_y,
             main_tabs_h,
             layer_bar_h,
-            top_reserved_h,
             viewport,
         ) {
             return;

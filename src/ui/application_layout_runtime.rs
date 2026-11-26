@@ -94,7 +94,38 @@ pub(super) fn device_supports_application_layouts(device: &crate::device::Device
     device.application_layout_protocol_version().is_some()
 }
 
+fn is_macropad_profile_device_name(name: &str) -> bool {
+    matches!(name.trim().to_ascii_lowercase().as_str(),
+        "macropad v2" | "macropad v3" | "m4cr0pad v2" | "m4cr0pad v3" | "macropad")
+}
+
 impl EntropyApp {
+    pub(super) fn application_layout_target_geometry(&self) -> Option<crate::application_layouts::ApplicationLayoutGeometry> {
+        use crate::application_layouts::ApplicationLayoutGeometry as Geometry;
+        if let Some(device) = self.selected_device.and_then(|i| self.device_manager.devices().get(i)) {
+            let info = self.device_about_info.as_ref().filter(|info| info.supports_application_layouts
+                && info.path == device.path && info.vendor_id == device.vendor_id && info.product_id == device.product_id)?;
+            let geometry = info.application_layout_geometry.or_else(|| device.application_layout_protocol_version().and_then(Geometry::legacy))?;
+            return (geometry.valid() && Some(geometry.version()) == device.application_layout_protocol_version()
+                && (!geometry.matrix() || self.layout.as_ref().and_then(Geometry::for_layout) == Some(geometry))).then_some(geometry);
+        }
+        let key = self.app_settings.last_application_layout_device_key.as_ref()?;
+        let saved = self.app_settings.application_layouts.get(key)?.geometry;
+        if let Some(g) = saved.filter(|g| g.valid()) {
+            let namespace_matches = match g.version() {
+                9 => ["-phenom-0052", "-phenom-0053", "-phenom-0054"].iter().any(|s| key.ends_with(s)),
+                8 => key.ends_with("-sm62") || key.contains("-sm62-owner-"),
+                7 => self.app_settings.last_application_layout_device_name.as_deref().is_some_and(is_macropad_profile_device_name),
+                _ => false,
+            };
+            return namespace_matches.then_some(g);
+        }
+        if key.ends_with("-sm62") || key.rsplit_once("-sm62-owner-").is_some_and(|(_, owner)| owner.len() == 40 && owner.bytes().all(|b| b.is_ascii_hexdigit())) {
+            return Geometry::legacy(8);
+        }
+        self.app_settings.last_application_layout_device_name.as_deref().filter(|n| is_macropad_profile_device_name(n)).and_then(|_| Geometry::legacy(7))
+    }
+
     fn connected_application_layout_device_key(&self) -> Option<String> {
         let device = self
             .selected_device
@@ -107,6 +138,7 @@ impl EntropyApp {
                             && info.product_id == device.product_id
                             && info.path == device.path
                     })
+                    && (!device.is_ergohaven_phenom() || self.application_layout_target_geometry().is_some())
             })?;
         // v2 and v3 currently advertise the same Vial UID, but their
         // application profiles must not overwrite one another. Keep the
@@ -301,7 +333,7 @@ impl EntropyApp {
     fn application_layer_seed(&self, layout: &KeyboardLayout) -> [Vec<u16>; crate::application_layouts::APPLICATION_LAYOUT_LAYER_COUNT] {
         let mut seed=Self::base_application_layers(layout);
         #[cfg(not(target_arch = "wasm32"))]
-        if seed[0].len()==62 {
+        if crate::application_layouts::ApplicationLayoutGeometry::for_layout(layout).is_some_and(|g| g.version() >= 8) {
             for (layer,codes) in seed.iter_mut().enumerate() {
                 if !self.deferred_device_load.layer_status(layer).ready() {
                     codes.fill(crate::application_layouts::APPLICATION_LAYOUT_UNSET_KEYCODE);
@@ -318,7 +350,8 @@ impl EntropyApp {
         // Capture the owner context before a caller can change an edit counter.
         #[cfg(not(target_arch = "wasm32"))]
         self.refresh_application_layout_edit_owners(&key);
-        let seed = self.layout.as_ref().filter(|layout| layout.keys.len() == 62 && layout.rows == 10 && layout.cols == 7)
+        let geometry = self.application_layout_target_geometry();
+        let seed = self.layout.as_ref()
             .map(|layout| self.application_layer_seed(layout));
         let settings = self.app_settings.application_layouts.entry(key).or_insert_with(|| {
             let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
@@ -327,6 +360,7 @@ impl EntropyApp {
             }
             settings
         });
+        if let Some(geometry) = geometry { settings.geometry = Some(geometry); }
         Some(settings)
     }
 
@@ -561,15 +595,7 @@ impl EntropyApp {
         key_index: usize,
     ) -> Option<usize> {
         let key = layout.keys.get(key_index)?;
-        if layout.rows == 10 && layout.cols == 7 && layout.keys.len() == 62 {
-            return crate::application_layouts::SM62_APPLICATION_POSITIONS
-                .iter().position(|&position| position == (key.row, key.col));
-        }
-        match (key.row, key.col) {
-            (0, 2) => Some(12),
-            (1..=4, 0..=2) => Some((usize::from(key.row) - 1) * 3 + usize::from(key.col)),
-            _ => None,
-        }
+        crate::application_layouts::ApplicationLayoutGeometry::for_layout(layout)?.key(key.row, key.col)
     }
 
     pub(super) fn application_control_for_encoder(
@@ -577,21 +603,17 @@ impl EntropyApp {
         visual_index: usize,
     ) -> Option<usize> {
         let encoder = layout.encoders.get(visual_index)?;
-        if encoder.encoder_idx != 0 || encoder.direction > 1 {
-            return None;
-        }
-        Some(13 + usize::from(encoder.direction))
+        crate::application_layouts::ApplicationLayoutGeometry::for_layout(layout)?.encoder(encoder.encoder_idx, encoder.direction)
     }
 
     pub(super) fn base_application_layers(
         layout: &KeyboardLayout,
     ) -> [Vec<u16>;
            crate::application_layouts::APPLICATION_LAYOUT_LAYER_COUNT] {
-        let controls = if layout.rows == 10 && layout.cols == 7 && layout.keys.len() == 62 {
-            62
-        } else { crate::application_layouts::APPLICATION_LAYOUT_CONTROL_COUNT };
+        let geometry = crate::application_layouts::ApplicationLayoutGeometry::for_layout(layout);
+        let controls = geometry.map_or(crate::application_layouts::APPLICATION_LAYOUT_CONTROL_COUNT, |g| g.controls());
         let mut layers: [Vec<u16>; crate::application_layouts::APPLICATION_LAYOUT_LAYER_COUNT] =
-            std::array::from_fn(|_| vec![0; controls]);
+            std::array::from_fn(|_| vec![if geometry.is_some_and(|g| g.matrix()) { crate::application_layouts::APPLICATION_LAYOUT_UNSET_KEYCODE } else { 0 }; controls]);
         for layer in 0..crate::application_layouts::APPLICATION_LAYOUT_LAYER_COUNT {
             for (key_index, _) in layout.keys.iter().enumerate() {
                 if let Some(control) = Self::application_control_for_key(layout, key_index) {
@@ -616,16 +638,13 @@ impl EntropyApp {
         let Some(profile) = profile else {
             return rendered;
         };
-        let controls = if layout.rows == 10 && layout.cols == 7 && layout.keys.len() == 62 {
-            62
-        } else {
-            crate::application_layouts::APPLICATION_LAYOUT_CONTROL_COUNT
-        };
+        let Some(geometry) = crate::application_layouts::ApplicationLayoutGeometry::for_layout(layout) else { return rendered; };
+        let controls = geometry.controls();
         // Old persisted profiles may predate the import geometry fence. Refuse
         // the whole incompatible overlay rather than panic or partially map it.
         if profile.layers.len() != crate::application_layouts::APPLICATION_LAYOUT_LAYER_COUNT
             || profile.layers.iter().any(|layer| layer.len() != controls)
-            || (controls == 62 && profile.encoder_stacks.iter().any(|stack| !stack.is_empty()))
+            || (!geometry.presets() && profile.encoder_stacks.iter().any(|stack| !stack.is_empty()))
         {
             return rendered;
         }
@@ -1097,78 +1116,22 @@ impl EntropyApp {
                 }
             }
         }
-        for bridge in self.qmk_hid_hosts.values() {
-            for record in bridge.resident_recoveries() {
-                let value=serde_json::json!({"version":1,"device_library":bridge.application_layout_device_key(),"owner_path":bridge.device().path,"owner_serial":bridge.device().serial_number,"record":record});
-                if let Err(e)=super::app_storage::preserve_resident_recovery(&value){self.status_msg=format!("Resident100 raw recovery persistence failed: {e:#}");}
-            }
-        }
-        let recovered_profiles: Vec<_>=self.qmk_hid_hosts.values().filter_map(|bridge| {
-            let generation=bridge.application_layout_publication_generation()?;
-            let key=bridge.application_layout_device_key()?.to_owned();
-            Some((bridge.device().path.clone(),key,generation,self.sm62_rule_owner_key(bridge),bridge.resident_recoveries()))
+        let mut unconfirmed_archives = std::collections::BTreeSet::new();
+        let archives: Vec<_> = self.qmk_hid_hosts.values().filter(|b| b.device().is_ergohaven_sm62()).filter_map(|b| {
+            let generation = b.application_layout_publication_generation()?;
+            let key = b.application_layout_device_key()?.to_owned();
+            Some((b.device().clone(), key, generation, self.sm62_rule_owner_key(b), b.completed_legacy_archive()))
         }).collect();
-        for (path,key,generation,rule_key,records) in recovered_profiles {
-            if self.qmk_hid_hosts.get(&path).and_then(|b|b.application_layout_publication_generation())!=Some(generation) {continue;}
-            let archived_rules = rule_key.as_ref().and_then(|k| self.app_settings.sm62_host_rules.get(k)).cloned().unwrap_or_default();
-            let explicit_ids = self.qmk_hid_hosts.get(&path).and_then(|b|
-                self.application_layout_owner_intents.get(&(path.clone(), b.application_layout_owner_incarnation(), generation))).cloned().unwrap_or_default();
-            // Stage readback in memory; the normalized whole library is persisted
-            // once below, before any owner publication. Saving an intermediate
-            // mapping-version-zero library would retrigger the migration backup.
-            if let Some(settings)=self.app_settings.application_layouts.get_mut(&key) {
-                for record in records {
-                    // A cached readback is not permission to undo a pending
-                    // user deletion, including records adopted under a host ID.
-                    if settings.resident_deleted.iter().any(|(id, (_, deleted))| {
-                        crate::qmk_hid_host::application_layout_identity_matches(id, &record.identity_crc[..20])
-                            || settings.snapshot_for_layout(deleted).device_identity.as_ref()
-                                .is_some_and(|identity| identity.as_slice() == &record.identity_crc[..20])
-                    }) {
-                        continue;
-                    }
-                    let Ok(mut layout)=crate::qmk_hid_host::decode_device_profile(&record) else {continue;};
-                    let recovered_id=layout.id.clone();
-                    // Resolve a known host ID by its forward digest, never invent
-                    // matching metadata by reversing an unknown device identity.
-                    let previous = settings.layouts.values().find(|p|
-                        crate::qmk_hid_host::application_layout_identity_matches(&p.id,&record.identity_crc[..20]))
-                        .or_else(|| settings.layouts.get(&recovered_id)).cloned();
-                    let matches: Vec<_> = archived_rules.values().filter(|rule|
-                        rule.identity.as_slice() == &record.identity_crc[..20] && rule.host_id != "default").collect();
-                    // A live explicit edit wins over archived matching metadata.
-                    // Otherwise restore only a unique rule for this half AND an
-                    // actual currently validated device FULL. No absent profile
-                    // or cached Default is copied into the new attachment.
-                    if matches.len() == 1 && !previous.as_ref().is_some_and(|p| explicit_ids.contains(&p.id)) {
-                        matches[0].restore(settings, &mut layout);
-                    } else if let Some(previous)=previous.as_ref() {
-                        layout.id=previous.id.clone();layout.executable=previous.executable.clone();
-                        layout.application_identities=previous.application_identities.clone();
-                        layout.title_contains=previous.title_contains.clone();layout.category=previous.category;
-                        layout.custom_category_id=previous.custom_category_id.clone();
-                        layout.automatic_switching=previous.automatic_switching;
-                    }
-                    if let Some(previous)=previous.as_ref().filter(|p| p.id == layout.id) {
-                        // Readback changes device data, not the history of
-                        // explicit host edits observed by the current owner.
-                        layout.user_edit_revision=previous.user_edit_revision;
-                    }
-                    if recovered_id!=layout.id && settings.layouts.get(&recovered_id)
-                        .is_some_and(|p|settings.snapshot_for_layout(p).device_raw.is_some()) {
-                        // Retire only the generated duplicate host entry, never
-                        // queue DELETE for the underlying device record.
-                        settings.layouts.remove(&recovered_id);
-                        settings.device_raw_profiles.remove(&recovered_id);
-                        settings.resident_slots.remove(&recovered_id);
-                        if settings.editor_layout_id==recovered_id {settings.editor_layout_id=layout.id.clone();}
-                        if settings.active_layout_id==recovered_id {settings.active_layout_id=layout.id.clone();}
-                    }
-                    if settings.device_raw_profiles.get(&layout.id)==Some(&record.raw) {continue;}
-                    settings.resident_slots.retain(|id,slot|*slot!=record.slot || id==&layout.id);
-                    settings.resident_slots.insert(layout.id.clone(),record.slot);
-                    settings.device_raw_profiles.insert(layout.id.clone(),record.raw);
-                    settings.layouts.insert(layout.id.clone(),layout);
+        for (device, key, generation, rule_key, records) in archives {
+            if !self.device_manager.devices().iter().any(|d| d.permits_hid_target(&device)) { continue; }
+            let Some(records) = records else { unconfirmed_archives.insert(device.path.clone()); continue; };
+            if self.qmk_hid_hosts.get(&device.path).and_then(|b| b.application_layout_publication_generation()) != Some(generation) { continue; }
+            match super::app_storage::migrate_legacy_archive(&mut self.app_settings, &key, &device, &records, rule_key.as_deref()) {
+                Ok(Some(backup)) => self.status_msg = format!("Application profiles migrated ({} legacy records); backup: {}", records.len(), backup.display()),
+                Ok(None) => {},
+                Err(error) => {
+                    unconfirmed_archives.insert(device.path.clone());
+                    self.status_msg = format!("Legacy profile migration unconfirmed; device archive preserved: {error:#}");
                 }
             }
         }
@@ -1216,17 +1179,11 @@ impl EntropyApp {
             self.application_layout_manual_override = None;
         }
         for device_key in device_keys {
-            let confirmed_deletions:Vec<_>=self.app_settings.application_layouts.get(&device_key).into_iter()
-                .flat_map(|s|s.resident_deleted.keys()).filter(|id|self.qmk_hid_hosts.values().any(|b|
-                    b.application_layout_device_key()==Some(device_key.as_str()) && b.resident_deletion_confirmed(id)))
-                .cloned().collect();
-            if !confirmed_deletions.is_empty() {
-                let before=self.app_settings.clone();
-                let s=self.app_settings.application_layouts.get_mut(&device_key).unwrap();
-                for id in confirmed_deletions {s.resident_deleted.remove(&id);}s.normalize();
-                if let Err(e)=super::app_storage::try_save_app_settings(&self.app_settings) {self.app_settings=before;self.status_msg=format!("Resident100 delete persistence failed: {e:#}");continue;}
-            }
             let selected = selected_key.as_ref() == Some(&device_key);
+            let geometry = if selected { self.application_layout_target_geometry() } else {
+                self.qmk_hid_hosts.values().find(|b| b.application_layout_device_key() == Some(device_key.as_str()))
+                    .and_then(|b| b.application_layout_geometry())
+            };
             let seed = selected
                 .then(|| self.layout.as_ref().map(|layout| self.application_layer_seed(layout)))
                 .flatten();
@@ -1243,33 +1200,6 @@ impl EntropyApp {
                 });
 
             let installed_presets = crate::app_discovery::installed_builtin_presets();
-            let is_sm62 = seed.as_ref().is_some_and(|layers| layers[0].len() == 62)
-                || self.qmk_hid_hosts.values().any(|bridge| bridge.device().is_ergohaven_sm62()
-                    && bridge.application_layout_device_key() == Some(device_key.as_str()))
-                || self.app_settings.application_layouts.get(&device_key).is_some_and(|settings|
-                    settings.layouts.get("default").is_some_and(|layout| layout.layers[0].len() == 62));
-            let allowed_profiles = is_sm62.then(|| {
-                let mut allowed = std::collections::BTreeSet::from([crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID.to_owned()]);
-                if let Some(settings) = self.app_settings.application_layouts.get(&device_key) {
-                    for layout in settings.layouts.values() {
-                        let snapshot = settings.snapshot_for_layout(layout);
-                        if self.qmk_hid_hosts.values().any(|bridge| {
-                            if bridge.application_layout_device_key() != Some(device_key.as_str())
-                                || !bridge.device().is_ergohaven_sm62()
-                                || !self.device_manager.devices().iter().any(|device| device.permits_hid_target(bridge.device())) {
-                                return false;
-                            }
-                            let Some(generation) = bridge.application_layout_publication_generation() else { return false; };
-                            self.application_layout_owner_intents.get(&(bridge.device().path.clone(), bridge.application_layout_owner_incarnation(), generation))
-                                .is_some_and(|ids| ids.contains(&layout.id))
-                                || bridge.confirms_resident_snapshot_for_generation(&snapshot, generation)
-                        }) {
-                            allowed.insert(layout.id.clone());
-                        }
-                    }
-                }
-                allowed
-            });
             let mut persist = false;
             let (active_layout_followed, active_layout_changed) = {
                 let settings = self
@@ -1278,11 +1208,15 @@ impl EntropyApp {
                     .entry(device_key.clone())
                     .or_insert_with(|| {
                         let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
-                        if let Some(seed) = seed.as_ref().filter(|s| s[0].len() == 62) {
+                        settings.geometry = geometry;
+                        if let Some(seed) = seed.as_ref() {
                             settings.layouts.get_mut(crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID).unwrap().layers = seed.to_vec();
+                        } else if let Some(g) = geometry {
+                            settings.layouts.get_mut(crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID).unwrap().layers = vec![vec![crate::application_layouts::APPLICATION_LAYOUT_UNSET_KEYCODE; g.controls()]; 16];
                         }
                         settings
                     });
+                if let Some(g) = geometry { if settings.geometry != Some(g) { settings.geometry = Some(g); persist = true; } }
                 persist |= settings.normalize();
                 persist |= settings.provision_builtin_presets(installed_presets.as_ref().ok());
                 persist |=
@@ -1294,11 +1228,8 @@ impl EntropyApp {
                         }
                     }
                 }
-                let resolved = if let Some(allowed) = allowed_profiles.as_ref() {
-                    resolve_authorized_layout_for_runtime(settings, &foreground_status.state, manual_override_active, allowed)
-                } else {
-                    resolve_layout_for_runtime(settings, &foreground_status.state, manual_override_active)
-                };
+                // The Entropy library is now authority for every supported board.
+                let resolved = resolve_layout_for_runtime(settings, &foreground_status.state, manual_override_active);
                 let focused_layout_is_configured =
                     should_follow_focused_layout(settings, &resolved, &foreground_status.state);
                 let previous_active_layout_id = settings.active_layout_id.clone();
@@ -1320,26 +1251,17 @@ impl EntropyApp {
             if selected {
                 self.maybe_sync_default_application_layout_to_device();
             }
-            let settings=&self.app_settings.application_layouts[&device_key];
-            let mut library:Vec<_>=settings.resident_deleted.values().map(|(slot,p)|{
-                let mut s=settings.snapshot_for_layout(p);s.resident_slot=Some(*slot);s.active=false;s
-            }).collect();
-            library.extend(settings.layouts.values()
-                .filter(|p|p.id!=crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID)
-                .filter(|p|p.layers.len()==16 && p.layers.iter().all(|l|l.len()==62))
-                .map(|p|settings.snapshot_for_layout(p))
-                .filter(|p|p.layers.iter().all(|l|l.len()==62 && (p.device_identity.is_some() || !l.contains(&crate::application_layouts::APPLICATION_LAYOUT_UNSET_KEYCODE))) && p.encoder_stacks.iter().all(|s|s.is_empty() || (2..=4).contains(&s.len()))));
             let snapshot = self.app_settings.application_layouts[&device_key]
                 .active_layout()
                 .map(|layout| {
                     let prepared=self.app_settings.application_layouts[&device_key].snapshot_for_layout(layout);
                     // Ownership and semantic identity are separate: background
                     // Default releases the overlay, but is still Default.
-                    if (layout.layers[0].len()==62 || connected_selected_key.as_ref() != Some(&device_key))
+                    if (geometry.is_some_and(|g| g.version() >= 8) || connected_selected_key.as_ref() != Some(&device_key))
                         && layout.id == crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID
                     {
                         crate::application_layouts::ApplicationLayoutSnapshot::firmware_default()
-                    } else if layout.layers[0].len()==62 && prepared.device_identity.is_none() && layout.layers.iter().any(|l|l.contains(&crate::application_layouts::APPLICATION_LAYOUT_UNSET_KEYCODE)) {
+                    } else if geometry.is_some_and(|g| if g.matrix() { !g.complete(&layout.layers) } else { g.version() == 8 && layout.layers.iter().any(|l|l.contains(&crate::application_layouts::APPLICATION_LAYOUT_UNSET_KEYCODE)) }) && prepared.device_identity.is_none() {
                         crate::application_layouts::ApplicationLayoutSnapshot::firmware_default()
                     } else {
                         prepared
@@ -1359,39 +1281,7 @@ impl EntropyApp {
                 self.selected_key = None;
                 self.selected_encoder = None;
             }
-            // Archive only matching rules with explicit current-owner intent or
-            // verified device provenance. This does not authorize publication.
-            let rule_updates: Vec<_> = self.qmk_hid_hosts.values().filter_map(|bridge| {
-                if bridge.application_layout_device_key() != Some(device_key.as_str()) { return None; }
-                let stable_key = self.sm62_rule_owner_key(bridge)?;
-                let generation = bridge.application_layout_publication_generation()?;
-                let intents = self.application_layout_owner_intents.get(&(bridge.device().path.clone(), bridge.application_layout_owner_incarnation(), generation));
-                let settings = &self.app_settings.application_layouts[&device_key];
-                let rules: Vec<_> = settings.layouts.values().filter(|p| p.id != "default").filter_map(|p| {
-                    let snapshot = settings.snapshot_for_layout(p);
-                    if !intents.is_some_and(|ids| ids.contains(&p.id))
-                        && !bridge.confirms_resident_snapshot_for_generation(&snapshot, generation) { return None; }
-                    let identity = snapshot.device_identity.unwrap_or_else(|| crate::qmk_hid_host::application_layout_identity_digest(&p.id));
-                    Some(crate::application_layouts::Sm62HostRule::capture(settings, p, identity))
-                }).collect();
-                let deleted: Vec<_> = settings.resident_deleted.iter().map(|(id, (_, p))| {
-                    (id.clone(), settings.snapshot_for_layout(p).device_identity)
-                }).collect();
-                Some((stable_key, rules, deleted))
-            }).collect();
-            for (stable_key, rules, deleted) in rule_updates {
-                let archive = self.app_settings.sm62_host_rules.entry(stable_key).or_default();
-                let before = archive.clone();
-                archive.retain(|id, rule| !deleted.iter().any(|(deleted_id, identity)|
-                    id == deleted_id || identity.as_ref() == Some(&rule.identity)));
-                for rule in rules {
-                    archive.retain(|id, old| old.identity != rule.identity || id == &rule.host_id);
-                    archive.insert(rule.host_id.clone(), rule);
-                }
-                persist |= *archive != before;
-            }
-            let durable_library=self.app_settings.application_layouts[&device_key].layouts.get("default")
-                .is_some_and(|p|p.layers[0].len()==62);
+            let durable_library = geometry.is_some_and(|g| g.version() >= 8);
             let persistence_current=durable_library && self.persisted_application_libraries.get(&device_key)
                 .is_some_and(|proof|proof.matches(&self.app_settings.application_layouts[&device_key]));
             if persist || (durable_library && !persistence_current) {
@@ -1420,23 +1310,9 @@ impl EntropyApp {
                         .any(|device| device.permits_hid_target(bridge.device()))
             }) {
                 if let Some(generation) = publication_generations.get(&bridge.device().path) {
-                    let authorized = |profile: &crate::application_layouts::ApplicationLayoutSnapshot| {
-                        // R1 gates publication, not the existing tombstone lifecycle.
-                        // Owner-scoped deletion authorization is the separate R2 seam.
-                        !profile.active || profile.profile_id.as_ref().is_some_and(|id| {
-                            self.application_layout_owner_intents.get(&(bridge.device().path.clone(), bridge.application_layout_owner_incarnation(), *generation))
-                                .is_some_and(|ids| ids.contains(id))
-                                || bridge.confirms_resident_snapshot_for_generation(profile, *generation)
-                        })
-                    };
-                    let mut owner_snapshot = snapshot.clone();
-                    if bridge.device().is_ergohaven_sm62() {
-                        let owner_library = library.iter().filter(|p| authorized(p)).cloned().collect();
-                        bridge.publish_resident_library_for_generation(owner_library,*generation);
-                        if owner_snapshot.active && !authorized(&owner_snapshot) {
-                            owner_snapshot = crate::application_layouts::ApplicationLayoutSnapshot::firmware_default();
-                        }
-                    }
+                    let owner_snapshot = if bridge.device().is_ergohaven_sm62() && unconfirmed_archives.contains(&bridge.device().path) {
+                        crate::application_layouts::ApplicationLayoutSnapshot::firmware_default()
+                    } else { snapshot.clone() };
                     bridge.publish_application_layout_snapshot_for_generation(
                         owner_snapshot,
                         *generation,
@@ -1596,6 +1472,25 @@ pub(super) fn app_layout_text(
 mod tests {
     use super::*;
     include!("runtime_read_first_fixture.inc");
+    #[test]
+    fn host_managed_partial_archive_cannot_adopt_or_replace_host_draft() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        let mut app = name_review_device_app(true);
+        let device = app.device_manager.devices()[0].clone();
+        let key = app.application_layout_device_key().unwrap();
+        let mut bridge = crate::qmk_hid_host::QmkHidHostBridge::test_inert(device.clone(), Default::default(), None, crate::qmk_hid_host::HostProtocol::Selected(false));
+        bridge.bind_selected_application_layout_device(key.clone());
+        bridge.test_set_device_inventory_for_host_id("draft");
+        app.qmk_hid_hosts.insert(device.path.clone(), bridge);
+        let s = app.app_settings.application_layouts.get_mut(&key).unwrap();
+        let mut draft = s.layouts["default"].clone(); draft.id = "draft".into(); draft.name = "Unsaved author draft".into();
+        draft.layers[0][0] = 123; draft.user_edit_revision = 4;
+        s.layouts.insert("draft".into(), draft.clone());
+        app.update_application_layout_runtime_with(Default::default());
+        assert_eq!(app.app_settings.application_layouts[&key].layouts["draft"], draft);
+        assert!(app.app_settings.application_layouts[&key].device_raw_profiles.is_empty(), "partial archive was adopted");
+    }
+
     include!("host_lease_runtime_regression.rs");
     include!("foreground_wake_regression.rs");
     include!("latest_base_composition_tests.rs");

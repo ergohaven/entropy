@@ -108,14 +108,16 @@ pub(crate) fn is_read_request(command: &[u8]) -> bool {
         ),
         // Pictogram QUERY/package/validity/slot reads never write storage.
         [0xC0 | 0xC1 | 0xCA | 0xCB, ..] => true,
-        [0xeb,8,0xa5,1|2,_,_,_,_,rest @ ..] if command.len()==32 && rest.iter().all(|b|*b==0)=>true,
-        [0xef,9,0|5,0..=99,..] if command.len()==32=>true,
+        [0xeb,8,0xa5,1|2|3,_,_,_,_,rest @ ..] if command.len()==32 && rest.iter().all(|b|*b==0)=>true,
+        [0xeb,9,0xa5,1,_,_,_,_,rest @ ..] if command.len()==32 && rest.iter().all(|b|*b==0)=>true,
+        [0xef,9,0,0..=99,..] if command.len()==32=>true,
         [0xef,9,3,0..=99,_,_,_,_,rest @ ..] if command.len()==32 && rest.iter().all(|b|*b==0)=>true,
+        [0xef,9,7,0,_,_,_,_,rest @ ..] if command.len()==32 && rest.iter().all(|b|*b==0)=>true,
         [0xef,9,6,0..=99,_,_,_,_,_,_,1..=20,rest @ ..] if command.len()==32 && rest.iter().all(|b|*b==0)=>true,
         // Capability poll with zero event acknowledgement cannot consume events.
         // Nonzero acknowledgements and all application-layout writes stay denied.
         [0xE6, version, 0xA5, 0, 0, rest @ ..]
-            if matches!(*version, 7 | 8)
+            if matches!(*version, 7 | 8 | 9)
                 && rest.iter().all(|byte| *byte == 0) =>
         {
             true

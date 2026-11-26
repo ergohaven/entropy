@@ -16,6 +16,3 @@ entropy-x86_64.AppImage
 entropy-v*.exe
 entropy-v*.AppImage
 entropy-v*-macos-*
-
-# Local design notes
-DESIGN_LANGUAGE.md

@@ -1168,6 +1168,7 @@ impl HostOutputLease {
 // writes wait behind it and revalidate after acquiring output_order, so an old
 // queued packet can never follow a successor's deactivate/new-profile packet.
 struct ApplicationLayoutOwnerState {
+    geometry: Option<crate::application_layouts::ApplicationLayoutGeometry>,
     output_order: Arc<Mutex<()>>,
     generation: u64,
     selected: bool,
@@ -1182,35 +1183,21 @@ struct ApplicationLayoutOwnerState {
     resident_recoveries: std::collections::BTreeMap<u8,resident100::RecoveredRecord>,
     resident_inventory_complete: bool,
     // Connection-local schema2 evidence, never inferred from protocol 8.
-    resident_export_capability: Option<bool>,
+    resident_export_capability: Option<resident_catalog::Capability>,
 }
 
 impl Default for ApplicationLayoutOwnerState {
     fn default() -> Self {
-        Self { output_order: Arc::new(Mutex::new(())), generation: 0, selected: false, discovered_key: None, verified_key: None,
+        Self { geometry: None, output_order: Arc::new(Mutex::new(())), generation: 0, selected: false, discovered_key: None, verified_key: None,
             snapshot_generation: 0,
             snapshot: crate::application_layouts::ApplicationLayoutSnapshot::inactive(), published_at: Instant::now(),
             library:Arc::new(Vec::new()),library_generation:0,resident_status:Default::default(),resident_recoveries:Default::default(),resident_inventory_complete:false,resident_export_capability:None }
     }
 }
 
-fn resident_readback_pending(state:&ApplicationLayoutOwnerState, snapshot:&crate::application_layouts::ApplicationLayoutSnapshot)->bool {
-    if !snapshot.active || snapshot.profile_id.as_deref()==Some("default") {return false;}
-    let Some(id)=snapshot.profile_id.as_ref() else{return true;};
-    let identity=snapshot.device_identity.unwrap_or_else(||wake_identity::digest(id));
-    if let Some(record)=state.resident_recoveries.values().find(|r|r.identity_crc[..20]==identity) {
-        if record.validation.is_some() || snapshot.resident_slot!=Some(record.slot) {return true;}
-        if snapshot.device_baseline_crc.as_ref().map(|c|c.as_slice())==Some(&record.identity_crc[20..]) {return false;}
-        // Low-level callers can present an exact known payload without an editor
-        // baseline. Admit only a byte-exact CRC hit, never a stale template STORE.
-        let legacy=ApplicationLayoutTransmission.packets(snapshot);
-        return !compact::full(&legacy).is_some_and(|raw|compact::crc32(&raw).to_le_bytes()==record.identity_crc[20..]);
-    }
-    !state.resident_inventory_complete
-}
-
 impl ApplicationLayoutOwnerState {
     fn revoke(&mut self) {
+        self.geometry = None;
         self.generation = self.generation.wrapping_add(1);
         self.selected = false;
         self.discovered_key = None;
@@ -1243,7 +1230,15 @@ mod resident100;
 mod resident_full;
 mod device_profiles;
 pub(crate) use device_profiles::decoded_layout as decode_device_profile;
+#[cfg(test)]
 pub(crate) use device_profiles::validate_portable_resident_profile;
+
+pub(crate) fn validate_device_profile_raw(raw: &[u8]) -> anyhow::Result<()> {
+    anyhow::ensure!(raw.len() >= 64, "Short FULL baseline");
+    let mut key = [0; 24]; key[..20].copy_from_slice(&raw[43..63]);
+    key[20..].copy_from_slice(&compact::crc32(raw).to_le_bytes());
+    validate_recovered_full(raw, &key)
+}
 
 pub(crate) fn attach_device_profile(snapshot: &mut crate::application_layouts::ApplicationLayoutSnapshot,
     layout: &crate::application_layouts::ApplicationLayout, raw: &[u8]) {
@@ -1263,6 +1258,8 @@ pub(crate) fn attach_device_profile(snapshot: &mut crate::application_layouts::A
 }
 
 use resident_full::validate_recovered_full;
+pub(crate) use resident100::RecoveredRecord;
+#[cfg(test)]
 pub(crate) use resident100::SyncStatus as ResidentSyncStatus;
 #[cfg(test)]
 mod compact_regressions;
@@ -1276,6 +1273,7 @@ mod production_c_tests;
 mod capability_review_tests;
 #[cfg(test)]
 mod resident_export_capability_tests;
+mod resident_catalog;
 #[cfg(test)]
 mod resident_stack_tests;
 
@@ -1599,6 +1597,7 @@ impl QmkHidHostBridge {
         self.incarnation
     }
 
+    #[cfg(test)]
     pub(crate) fn confirms_resident_snapshot_for_generation(
         &self,
         snapshot: &crate::application_layouts::ApplicationLayoutSnapshot,
@@ -1631,9 +1630,12 @@ impl QmkHidHostBridge {
         if state.generation != generation || state.verified_key.is_none()
             || state.verified_key.as_ref() != self.application_layout_device_key.as_ref()
             || self.application_layout_binding_generation != Some(generation) { return false; }
-        let controls = if self.device.application_layout_protocol_version() == Some(8) {62} else {15};
+        let Some(geometry) = state.geometry.filter(|g| g.valid()) else { return false; };
+        let controls = geometry.controls();
         if snapshot.active && (snapshot.layers.iter().any(|layer| layer.len() != controls)
             || snapshot.visuals.iter().any(|layer| layer.len() != controls)
+            || snapshot.geometry != geometry
+            || (geometry.matrix() && (!geometry.complete(&snapshot.layers) || snapshot.encoder_stacks.iter().any(|s| !s.is_empty()) || snapshot.device_raw.is_some()))
             || (controls == 62 && snapshot.encoder_stacks.iter().any(|stack| !stack.is_empty() && !(2..=4).contains(&stack.len())))) {
             state.snapshot_generation = generation;
             state.snapshot = crate::application_layouts::ApplicationLayoutSnapshot::inactive();
@@ -1652,6 +1654,7 @@ impl QmkHidHostBridge {
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn publish_resident_library_for_generation(&self, library: Vec<crate::application_layouts::ApplicationLayoutSnapshot>, generation: u64) -> bool {
         let mut state=self.application_layout_snapshot.lock().unwrap_or_else(|e|e.into_inner());
         if state.generation!=generation || state.verified_key.is_none()
@@ -1670,6 +1673,7 @@ impl QmkHidHostBridge {
         true
     }
 
+    #[cfg(test)]
     pub(crate) fn resident_deletion_confirmed(&self,id:&str)->bool {
         let s=self.application_layout_snapshot.lock().unwrap_or_else(|e|e.into_inner());
         s.library.iter().any(|p|!p.active && p.profile_id.as_deref()==Some(id)) && s.resident_status.get(id)==Some(&resident100::SyncStatus::Synced)
@@ -1682,6 +1686,7 @@ impl QmkHidHostBridge {
         drop(s);self.control.wake.wake();
     }
 
+    #[cfg(test)]
     pub(crate) fn resident_sync_status(&self,id:&str)->Option<resident100::SyncStatus> {
         self.application_layout_snapshot.lock().unwrap_or_else(|e|e.into_inner()).resident_status.get(id).cloned()
     }
@@ -1722,6 +1727,18 @@ impl QmkHidHostBridge {
             resident100::RecoveredRecord{slot:7,identity_crc,raw,validation:None});
     }
 
+    pub(crate) fn completed_legacy_archive(&self) -> Option<Vec<RecoveredRecord>> {
+        let state = self.application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        if self.application_layout_binding_generation != Some(state.generation)
+            || state.verified_key.is_none() || state.verified_key.as_ref() != self.application_layout_device_key.as_ref() { return None; }
+        match state.resident_export_capability? {
+            resident_catalog::Capability::Legacy => Some(Vec::new()),
+            resident_catalog::Capability::Resident(_) if state.resident_inventory_complete
+                && state.resident_recoveries.values().all(|r| r.validation.is_none()) => Some(state.resident_recoveries.values().cloned().collect()),
+            _ => None,
+        }
+    }
+
     pub(crate) fn resident_recoveries(&self)->Vec<resident100::RecoveredRecord> {
         self.application_layout_snapshot.lock().unwrap_or_else(|e|e.into_inner()).resident_recoveries.values().cloned().collect()
     }
@@ -1744,10 +1761,24 @@ impl QmkHidHostBridge {
     }
 
     pub(crate) fn set_selected_application_layout_support(&self, supported: bool) {
+        let mut state = self.application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        if !supported { state.geometry = None; }
+        if supported && state.geometry.is_none() {
+            state.geometry = self.device.application_layout_protocol_version().and_then(crate::application_layouts::ApplicationLayoutGeometry::legacy);
+        }
         self.application_layouts_enabled.store(
-            supported && self.device.application_layout_protocol_version().is_some(),
+            supported && state.geometry.is_some_and(|g| g.valid() && Some(g.version()) == self.device.application_layout_protocol_version()),
             Ordering::Release,
         );
+    }
+
+    pub(crate) fn set_selected_application_layout_geometry(&self, geometry: Option<crate::application_layouts::ApplicationLayoutGeometry>) {
+        self.application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner()).geometry = geometry
+            .filter(|g| g.valid() && Some(g.version()) == self.device.application_layout_protocol_version());
+    }
+
+    pub(crate) fn application_layout_geometry(&self) -> Option<crate::application_layouts::ApplicationLayoutGeometry> {
+        self.supports_application_layouts().then(|| self.application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner()).geometry).flatten()
     }
 
     /// Requests a complete transfer even if the logical profile is unchanged.
@@ -1850,7 +1881,8 @@ impl ApplicationLayoutEventPoll {
             }; Ok(())
         })? { return Ok(()); }
         let Some(reply)=reply else { return Ok(()); };
-        let controls=if version==8 {62} else {15};
+        let Some(geometry) = owner.lock().unwrap_or_else(|e| e.into_inner()).geometry else { return Ok(()); };
+        let controls=geometry.controls();
         if reply[..3]!=[0xe6,version,0x5a] || reply[3]!=1
             || reply[6]>=16 || usize::from(reply[7])>=controls { return Ok(()); }
         let sequence=u16::from_le_bytes([reply[4],reply[5]]);
@@ -1934,7 +1966,6 @@ fn run_bridge(
     let mut capability_owner_generation = None;
     let mut compact_transaction = 0u32;
     let mut resident_background=resident100::Background::default();
-    let mut resident_blocked:Option<(crate::application_layouts::ApplicationLayoutSnapshot,u64,u64)>=None;
     let mut last_application_layout_send = Instant::now() - Duration::from_secs(60);
     let mut application_events = ApplicationLayoutEventPoll::default();
     let mut event_generation = None;
@@ -1960,7 +1991,10 @@ fn run_bridge(
             }
             application_layouts_enabled.store(
                 target.application_layout_protocol_version().is_some()
-                    && match hid.probe_application_layout_protocol_version(target.application_layout_protocol_version().unwrap()) {
+                    && match hid.probe_application_layout_geometry(target.application_layout_protocol_version().unwrap()).map(|geometry| {
+                        application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner()).geometry = geometry;
+                        geometry.is_some()
+                    }) {
                         Ok(supported) => supported,
                         Err(error) => {
                             log::warn!("qmk-hid-host application capability unknown after transport error: {error:#}");
@@ -2044,7 +2078,10 @@ fn run_bridge(
                     application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner()).discovered_key = key;
                     application_layouts_enabled.store(
                         target.application_layout_protocol_version().is_some()
-                            && match hid.probe_application_layout_protocol_version(target.application_layout_protocol_version().unwrap()) {
+                            && match hid.probe_application_layout_geometry(target.application_layout_protocol_version().unwrap()).map(|geometry| {
+                        application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner()).geometry = geometry;
+                        geometry.is_some()
+                    }) {
                         Ok(supported) => supported,
                         Err(error) => {
                             log::warn!("qmk-hid-host application capability unknown after transport error: {error:#}");
@@ -2138,81 +2175,54 @@ fn run_bridge(
                 last_application_layout = None;
             }
             let mut wire_layout = application_layout.clone();
-            if target.application_layout_protocol_version() == Some(8) && !wire_layout.active {
-                for layer in &mut wire_layout.layers { layer.resize(62, crate::application_layouts::APPLICATION_LAYOUT_UNSET_KEYCODE); }
-                for visual in &mut wire_layout.visuals { visual.resize(62,0); }
+            let geometry = application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner()).geometry;
+            let Some(geometry) = geometry else { continue; };
+            wire_layout.geometry = geometry;
+            if !wire_layout.active {
+                for layer in &mut wire_layout.layers { layer.resize(geometry.controls(), crate::application_layouts::APPLICATION_LAYOUT_UNSET_KEYCODE); }
+                for visual in &mut wire_layout.visuals { visual.resize(geometry.controls(),0); }
             }
             // Protocol 8 firmware irreversibly releases an expired overlay.
             // E6 reports events, not overlay liveness; E5 cannot reactivate it.
             // A missed lease therefore needs BEGIN..COMMIT for the SAME desired
             // snapshot, without changing its identity or extending firmware timeouts.
             let overlay_lease = Duration::from_millis(2500);
-            let recoverable_overlay = sm62 && application_layout.active;
+            let recoverable_overlay = geometry.version() >= 8 && application_layout.active;
             if recoverable_overlay && last_application_layout_send.elapsed() >= overlay_lease {
                 last_application_layout = None;
             }
             let library_generation=application_layout_snapshot.lock().unwrap_or_else(|e|e.into_inner()).library_generation;
-            let foreground_blocked=resident_blocked.as_ref().is_some_and(|(s,g,l)|s==&application_layout&&*g==generation&&*l==library_generation);
-            let awaiting_readback=resident_capability && resident_readback_pending(&application_layout_snapshot.lock().unwrap_or_else(|e|e.into_inner()),&application_layout);
-            let snapshot_changed = last_application_layout.as_ref() != Some(&application_layout) && !foreground_blocked && !awaiting_readback;
+            let snapshot_changed = last_application_layout.as_ref() != Some(&application_layout);
             if snapshot_changed {
                 // Successful writes do not acknowledge firmware staging. The
                 // settings owner may hold the per-packet lease after BEGIN;
                 // COMMIT then succeeds at I/O but cannot apply expired staging.
                 let transfer_started = Instant::now();
                 let mut sent = true;
-                let mut terminal_status=None;
                 let mut sent_reports = 0usize;
                 let mut first_write_us = None;
                 let legacy = application_layout_transmission.packets(&wire_layout);
-                let semantic_identity: [u8; 20] = legacy.last().unwrap()[11..31].try_into().unwrap();
                 if compact_usb && compact_capability.is_none() && capability_probe.admit(library_generation) {
-                    compact_transaction = resident100::next_transaction();
-                    let request = resident100::capability_query(compact_transaction);
-                    let mut answer = None;
-                    match write_application_layout_payload(&application_layout_snapshot,
-                        &application_layout, generation, &request, |p| {
-                            answer = match dev {
-                                HostDataHid::Shared(output) => output.poll_application_layout_event(p)?,
-                                HostDataHid::Dedicated(hid) => Some(hid.usb_send(p)?),
-                            };
-                            Ok(())
-                        }) {
-                        Ok(true) => {
-                            if let Some(reply) = answer {
-                                let decision = device_profiles::resident_capability_reply(&request, &reply);
-                                resident_capability = decision == Some(true);
-                                if resident_capability {
-                                    compact_capability = Some(true);
-                                } else if decision == Some(false) {
-                                    let fallback = compact::query(resident100::next_transaction());
-                                    let mut old_reply = None;
-                                    let admitted = write_application_layout_payload(&application_layout_snapshot,
-                                        &application_layout,generation,&fallback,|p| {
-                                            old_reply=match dev {HostDataHid::Shared(o)=>o.poll_application_layout_event(p)?,HostDataHid::Dedicated(h)=>Some(h.usb_send(p)?)};Ok(())
-                                        });
-                                    match (admitted,old_reply) {
-                                        (Ok(true),Some(r))=>compact_capability=compact::capability(&fallback,&r),
-                                        _=>sent=false,
-                                    }
-                                } else { sent = false; }
-                                // A late reply cannot certify a successor owner.
-                                // Foreground selection is not capability identity;
-                                // no public proof setter is exposed.
-                                let mut state = application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner());
-                                if !stop.load(Ordering::Acquire) && state.generation == generation
-                                    && state.snapshot_generation == generation {
-                                    if resident_capability { state.resident_export_capability = Some(true); }
-                                    else if decision == Some(false) && compact_capability.is_some() {
-                                        state.resident_export_capability = Some(false);
-                                    }
-                                } else { sent = false; }
-                            }
-                            else { sent = false; }
-                        },
-                        Ok(false) => sent = false,
-                        // Optional capability read failure is not a write failure.
-                        Err(_) => { sent = false; },
+                    let result = device_profiles::negotiate_archive(|request| {
+                        let mut answer = None;
+                        let admitted = write_application_layout_payload(&application_layout_snapshot,
+                            &application_layout, generation, request, |p| {
+                                answer = match dev { HostDataHid::Shared(o) => o.poll_application_layout_event(p)?,
+                                    HostDataHid::Dedicated(h) => Some(h.usb_send(p)?) }; Ok(())
+                            })?;
+                        anyhow::ensure!(admitted && !stop.load(Ordering::Acquire), "Archive owner revoked");
+                        answer.ok_or_else(|| anyhow::anyhow!("Archive owner busy"))
+                    });
+                    match result {
+                        Ok((capability, compact)) => {
+                            let mut state = application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner());
+                            if state.generation == generation && state.snapshot_generation == generation {
+                                state.resident_export_capability = Some(capability);
+                                compact_capability = Some(compact);
+                                resident_capability = capability.resident().is_some();
+                            } else { sent = false; }
+                        }
+                        Err(error) => { log::debug!("Archive capability unconfirmed: {error:#}"); sent = false; }
                     }
                 }
                 if compact_usb && compact_capability.is_none() {
@@ -2224,33 +2234,13 @@ fn run_bridge(
                         }
                     }
                 }
-                if resident_capability && resident_readback_pending(&application_layout_snapshot.lock().unwrap_or_else(|e|e.into_inner()),&application_layout) {
-                    sent=false;
-                }
                 compact_transaction = resident100::next_transaction();
-                let mut packets = if sm62 && (!wire_layout.active || wire_layout.profile_id.as_deref()==Some("default")) {
+                let packets = if sm62 && (!wire_layout.active || wire_layout.profile_id.as_deref()==Some("default")) {
                     let mut p=crate::application_layouts::ApplicationLayoutSnapshot::deactivate_packet();p[1]=8;vec![p]
                 } else if compact_usb && compact_capability == Some(true) {
                     compact::encode(&legacy, compact_transaction).unwrap_or_else(|| legacy.clone())
                 } else { legacy };
-                // Only explicit application mappings0..99 may use schema2.
-                // Native Default uses EA; overflow and older firmware stream.
-                let resident_slot = wire_layout.resident_slot.filter(|slot| *slot < 100 && wire_layout.active && wire_layout.profile_id.as_deref()!=Some("default"))
-                    .filter(|_| compact_usb && resident_capability && packets[0][0] == 0xec);
-                if resident_slot.is_some() {packets[0][2]=2;}
-                let mut cache_hit = false;
-                if let Some(slot) = resident_slot.filter(|_| sent) {
-                    let request = resident100::request(0, slot, None,
-                        &semantic_identity, &packets[0][16..20]);
-                    match resident100::exchange(dev, &application_layout_snapshot, &application_layout,
-                        generation, stop, transfer_started, &request) {
-                        Ok(Some(status @ (0 | 1))) => cache_hit = status==0,
-                        Ok(Some(status)) => {sent=false;terminal_status=Some(status);},
-                        Ok(None) => sent = false,
-                        Err(_) => { sent = false; write_failed = true; }
-                    }
-                }
-                for packet in packets.iter().filter(|_| !cache_hit) {
+                for packet in &packets {
                     if !sent || stop.load(Ordering::Relaxed)
                         || (recoverable_overlay && transfer_started.elapsed() >= overlay_lease) {
                         sent = false; break;
@@ -2266,29 +2256,6 @@ fn run_bridge(
                         Err(_) => { sent = false; write_failed = true; break; },
                     }
                     thread::sleep(Duration::from_millis(1));
-                }
-                if let Some(slot) = resident_slot.filter(|_| sent) {
-                    // A miss is not applied/confirmed until STORE and SELECT
-                    // explicitly accept; I/O success of EE alone is insufficient.
-                    for command in if cache_hit { &[2u8][..] } else { &[5u8, 1, 0, 2][..] } {
-                        let token=matches!(*command,1|5).then_some(compact_transaction);
-                        let request = resident100::request(*command, slot, token,
-                            &semantic_identity, &packets[0][16..20]);
-                        match resident100::exchange(dev, &application_layout_snapshot, &application_layout,
-                            generation, stop, transfer_started, &request) {
-                            Ok(Some(0)) => { write_attempted = true; sent_reports += 1; }
-                            Ok(None) => { sent = false; break; }
-                            Ok(Some(status)) => {sent=false;if matches!(status,2|5..=8){terminal_status=Some(status);}else{write_failed=true;}break;},
-                            Err(_) => { sent = false; write_failed = true; break; }
-                        }
-                    }
-                }
-                if let Some(status)=terminal_status {
-                    resident_blocked=Some((application_layout.clone(),generation,library_generation));
-                    let mut s=application_layout_snapshot.lock().unwrap_or_else(|e|e.into_inner());
-                    if s.generation==generation && s.library_generation==library_generation && s.snapshot==application_layout {
-                        if let Some(id)=application_layout.profile_id.as_ref(){s.resident_status.insert(id.clone(),resident100::SyncStatus::Error(format!("Foreground resident status {status}; record preserved; Retry sync")));}
-                    }
                 }
                 if sent {
                     last_application_layout = if recoverable_overlay
@@ -2348,12 +2315,12 @@ fn run_bridge(
                     }
                 }
             }
-            if compact_usb && compact_capability.is_some() && !resident_capability {
-                let mut s=application_layout_snapshot.lock().unwrap_or_else(|e|e.into_inner());
-                for status in s.resident_status.values_mut(){if *status!=resident100::SyncStatus::Overflow{*status=resident100::SyncStatus::Error("Firmware supports streaming only; resident100 unconfirmed".into());}}
-            }
-            if compact_usb && resident_capability && !write_failed && (resident_readback_pending(&application_layout_snapshot.lock().unwrap_or_else(|e|e.into_inner()),&application_layout) || last_application_layout.as_ref()==Some(&application_layout) || resident_blocked.as_ref().is_some_and(|(s,g,l)|s==&application_layout&&*g==generation&&*l==library_generation)) {
-                resident_background.tick(dev,&application_layout_snapshot,&application_layout,generation,stop,&mut compact_transaction);
+            if compact_usb && resident_capability && !write_failed {
+                let caps = application_layout_snapshot.lock().unwrap_or_else(|e|e.into_inner())
+                        .resident_export_capability.and_then(resident_catalog::Capability::resident);
+                    if let Some(caps) = caps {
+                        resident_background.tick_with_capabilities(caps,dev,&application_layout_snapshot,&application_layout,generation,stop,&mut compact_transaction);
+                    }
             }
         }
 

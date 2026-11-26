@@ -589,23 +589,16 @@ impl SharedHidOutput {
     }
 
     pub(crate) fn write_application_layout_event_state(&self, data: &[u8]) -> Result<bool> {
-        anyhow::ensure!(matches!(data, [0xe8, 7 | 8, _, _, _, _, _, _, 0..=3]), "Invalid execution state");
+        anyhow::ensure!(matches!(data, [0xe8, 7 | 8 | 9, _, _, _, _, _, _, 0..=3]), "Invalid execution state");
         if let Some(lease)=self.host_lease.as_ref() {
             lease.try_request(|| self.write_output_report_unordered(data)).map(|sent| sent.is_some())
         } else { self.write_output_report_unordered(data).map(|_|true) }
     }
 
-    /// Stage packets share the exact settings/unlock pause and serialized owner.
-    pub(crate) fn try_write_application_layout_stage(&self,data:&[u8])->Result<bool> {
-        anyhow::ensure!(matches!(data,[0xec,8,2,..]|[0xed|0xee,8,..] if data.len()==32),"Invalid stage output");
-        if let Some(lease)=self.host_lease.as_ref(){lease.try_request(||self.write_output_report_unordered(data)).map(|sent|sent.is_some())}
-        else{self.write_output_report_unordered(data).map(|_|true)}
-    }
-
     /// Request/reply on the existing serialized owner, never a second HID open.
     pub(crate) fn poll_application_layout_event(&self, data: &[u8]) -> Result<Option<[u8; MSG_LEN]>> {
-        anyhow::ensure!(matches!(data, [0xe6, 7 | 8, 0xa5, _, _]) ||
-            (data.len() == 32 && matches!(data[..4], [0xeb, 8, 0xa5, 1 | 2]) && data[8..].iter().all(|b| *b == 0)) ||
+        anyhow::ensure!(matches!(data, [0xe6, 7 | 8 | 9, 0xa5, _, _]) ||
+            (data.len() == 32 && (matches!(data[..4], [0xeb, 8, 0xa5, 1 | 2 | 3]) || data[..4] == [0xeb, 9, 0xa5, 1]) && data[8..].iter().all(|b| *b == 0)) ||
             is_resident09_request(data) ||
             matches!(data, [0xef, 8, 0..=2, 0..=2, ..] if data.len() == 32), "Invalid runtime query");
         let request = || match &self.backend {
@@ -1342,18 +1335,21 @@ fn is_keymap_read_request(data: &[u8]) -> bool {
 
 #[cfg(not(target_arch = "wasm32"))]
 pub(crate) fn is_resident09_request(p: &[u8]) -> bool {
-    if !matches!(p,[0xef,9,0..=6,0..=99,..] if p.len()==32) {return false;}
+    if p.len() != 32 || p[..2] != [0xef,9] || p[2] > 7
+        || p[3] >= crate::application_layouts::SM62_RESIDENT_SLOT_LIMIT { return false; }
     match p[2] {
         3 => p[8..].iter().all(|b|*b==0),
         6 => (1..=20).contains(&p[10]) && p[11..].iter().all(|b|*b==0),
-        _ => true,
+        7 => p[3] == 0 && p[8..].iter().all(|b| *b == 0),
+        0 => true,
+        _ => false,
     }
 }
 
 #[cfg(not(target_arch = "wasm32"))]
 fn is_application_layout_capability_probe(data: &[u8]) -> bool {
-    matches!(data, [0xE6, 7 | 8, 0xA5, 0, 0, rest @ ..] if rest.iter().all(|b| *b == 0))
-        || (data.len() == 32 && matches!(data[..4], [0xeb, 8, 0xa5, 1 | 2]) && data[8..].iter().all(|b| *b == 0))
+    matches!(data, [0xE6, 7 | 8 | 9, 0xA5, 0, 0, rest @ ..] if rest.iter().all(|b| *b == 0))
+        || (data.len() == 32 && (matches!(data[..4], [0xeb, 8, 0xa5, 1 | 2 | 3]) || data[..4] == [0xeb, 9, 0xa5, 1]) && data[8..].iter().all(|b| *b == 0))
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -2016,18 +2012,22 @@ fn response_matches_command(command: &[u8], resp: &[u8; MSG_LEN]) -> bool {
         | CMD_VIA_LIGHTING_SAVE
         | CMD_VIA_MACRO_SET_BUFFER => resp[0] == cmd,
         CMD_VIA_VIAL_PREFIX => response_matches_vial_command(command, resp),
+        0xEB if command.len() == 32 && command[..4] == [0xeb,9,0xa5,1] => {
+            resp[..4] == [0xeb,9,0x5a,1] && resp[4..8] == command[4..8]
+                || resp.as_slice() == command // old echo is rejected by capability validation
+        }
         0xEF => {
             if is_resident09_request(command) {
                 return resp[..2]==command[..2] && resp[2]==command[2]|128
                     && if command[2]==6 {resp[3..10]==command[3..10] && resp[10]<=command[10] && resp[11]<=8 && resp[12+usize::from(resp[10])..].iter().all(|b|*b==0)}
-                    else {resp[3]<=8 && resp[4..8]==command[4..8] && (command[2]==3 || resp[8..]==command[8..])};
+                    else {resp[3]<=8 && resp[4..8]==command[4..8] && (matches!(command[2],3|7) || resp[8..]==command[8..])};
             }
             matches!(command, [0xef, 8, 0..=2, 0..=2, ..] if command.len() == MSG_LEN)
                 && resp[..2] == command[..2]
                 && resp[2] == command[2] | 0x80 && resp[3] <= 1
                 && resp[4..] == command[4..]
         }
-        0xE6 if matches!(command, [0xe6, 7 | 8, 0xa5, _, _, ..]) => {
+        0xE6 if matches!(command, [0xe6, 7 | 8 | 9, 0xa5, _, _, ..]) => {
             resp[0] == 0xE6
                 && resp[1] == command[1]
                 && resp[2] == 0x5A

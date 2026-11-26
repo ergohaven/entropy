@@ -44,6 +44,7 @@ pub(crate) struct ResidentPreparationSource {
     bundle: EntLayoutFile,
     defaults: crate::application_layouts::DeviceApplicationLayouts,
     known: Option<crate::application_layouts::DeviceApplicationLayouts>,
+    target: crate::device::Device,
 }
 
 #[cfg(not(target_arch = "wasm32"))]
@@ -78,79 +79,54 @@ pub(crate) fn prepare_gui_resident_document(
     };
     check()?;
     let hid = hid.require_vial()?;
-    let supported = hid.probe_resident_export_capability()
+    let capability = hid.probe_resident_capabilities()
         .context("Incomplete resident application catalog capability; export refused")?;
     check()?;
+    let records = if let Some(capabilities) = capability.resident() {
+        hid.read_resident_export_catalog_with_capabilities(capabilities, &mut check)
+            .context("Incomplete legacy application archive; export refused")?
+    } else { Vec::new() };
     let mut bundle = source.bundle;
-    if supported {
-        let records = hid.read_resident_export_catalog_checked(&mut check)
-            .context("Incomplete resident application catalog; export refused")?;
-        let mut settings = source.defaults;
-        let known = source.known.as_ref();
-        let mut identities = std::collections::BTreeSet::new();
-        for record in records {
-            anyhow::ensure!(identities.insert(record.identity_crc[..20].to_vec()), "Duplicate resident identity");
-            let mut profile = crate::qmk_hid_host::decode_device_profile(&record)?;
-            // Match forward digests only. A device digest cannot invent host
-            // matching rules, and stale cached payloads never replace a FULL.
-            if let Some(previous) = known.and_then(|s| s.layouts.values().find(|p| p.id != "default" &&
-                (crate::qmk_hid_host::application_layout_identity_matches(&p.id, &record.identity_crc[..20])
-                    || s.device_raw_profiles.get(&p.id).is_some_and(|raw| raw.get(43..63) == Some(&record.identity_crc[..20]))))) {
-                profile.id = previous.id.clone(); profile.executable = previous.executable.clone();
-                profile.application_identities = previous.application_identities.clone();
-                profile.title_contains = previous.title_contains.clone(); profile.category = previous.category;
-                profile.custom_category_id = previous.custom_category_id.clone();
-                profile.automatic_switching = previous.automatic_switching;
-            }
-            crate::qmk_hid_host::validate_portable_resident_profile(&record, &profile)
-                .context("Incomplete resident application catalog representation; export refused")?;
-            anyhow::ensure!(!settings.layouts.contains_key(&profile.id), "Resident export profile ID collision");
-            settings.resident_slots.insert(profile.id.clone(), record.slot);
-            settings.device_raw_profiles.insert(profile.id.clone(), record.raw);
-            settings.layouts.insert(profile.id.clone(), profile);
-        }
-        // Reading device-authoritative data does not authorize dropping local
-        // authoring data from a backup. Until the envelope can carry both sides
-        // of a conflict, refuse explicitly and leave the destination untouched.
-        if let Some(known) = known {
-            for (id, authored) in &known.layouts {
-                let Some(physical) = settings.layouts.get(id) else {
-                    // Nonresident author data is portable even though it is not
-                    // permission to STORE it. Preserve it alongside readback.
-                    settings.layouts.insert(id.clone(), authored.clone());
-                    continue;
-                };
-                let inherited_default = id == "default"
-                    && authored.layers.len() == physical.layers.len()
-                    && authored.layers.iter().zip(&physical.layers).all(|(a, p)|
-                        a.len() == p.len() && a.iter().zip(p).all(|(a, p)|
-                            *a == crate::application_layouts::APPLICATION_LAYOUT_UNSET_KEYCODE || a == p));
-                let same_layers = authored.layers == physical.layers || inherited_default;
-                anyhow::ensure!(same_layers
-                    && authored.layer_names == physical.layer_names
-                    && authored.encoder_stacks == physical.encoder_stacks
-                    && authored.name == physical.name,
-                    "Export would replace author data in profile {id}; backup refused (layers={}, names={}, stacks={}, display={})",
-                    same_layers, authored.layer_names == physical.layer_names,
-                    authored.encoder_stacks == physical.encoder_stacks, authored.name == physical.name);
-            }
-        }
-
-        bundle.application_categories = settings.category_names.into_iter().collect();
-        let mut profiles = settings.layouts;
-        for profile in profiles.values_mut() { profile.user_edit_revision = 0; }
-        bundle.application_layouts = Some(profiles);
-    } else {
-        // Correlated legacy support rejection only. Never fabricate inventory.
-        if let Some(known) = source.known {
-            bundle.application_categories = known.category_names.into_iter().collect();
-            let mut profiles = known.layouts;
-            for profile in profiles.values_mut() { profile.user_edit_revision = 0; }
-            bundle.application_layouts = Some(profiles);
-        }
-    }
+    let settings = if capability.resident().is_some() {
+        prepare_host_application_library(source.defaults, source.known, &source.target, &records)?
+    } else { source.known.unwrap_or(source.defaults) };
+    capture_host_application_library(&mut bundle, &settings);
     check()?;
     Ok(serde_json::to_string(&bundle)?)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+fn prepare_host_application_library(defaults: crate::application_layouts::DeviceApplicationLayouts,
+    known: Option<crate::application_layouts::DeviceApplicationLayouts>, device: &crate::device::Device,
+    records: &[crate::qmk_hid_host::RecoveredRecord]) -> Result<crate::application_layouts::DeviceApplicationLayouts> {
+    let mut library = known.unwrap_or_else(|| defaults.clone());
+    if let Some(authored) = library.layouts.get("default") {
+        let physical = &defaults.layouts["default"];
+        let inherited = authored.layers.len() == physical.layers.len()
+            && authored.layers.iter().zip(&physical.layers).all(|(a, p)| a.len() == p.len()
+                && a.iter().zip(p).all(|(a, p)| *a == crate::application_layouts::APPLICATION_LAYOUT_UNSET_KEYCODE || a == p));
+        anyhow::ensure!(inherited && authored.name == physical.name
+            && authored.layer_names == physical.layer_names && authored.encoder_stacks == physical.encoder_stacks,
+            "Export would replace author data in profile default; backup refused");
+    }
+    library.layouts.insert("default".into(), defaults.layouts["default"].clone());
+    let archive = crate::application_layouts::DeviceApplicationLayouts::legacy_archive_key(device, records)?;
+    if !library.host_archive_migrations.contains_key(&archive) {
+        library.merge_legacy_archive(records, None)?;
+    }
+    Ok(library)
+}
+
+/// Both CLI and GUI serialize the Entropy library, including lossless native
+/// baselines. Device copies are only archival migration inputs, never authority
+/// over newer host authoring. This helper never saves settings or exports again.
+fn capture_host_application_library(bundle: &mut EntLayoutFile, settings: &crate::application_layouts::DeviceApplicationLayouts) {
+    bundle.application_categories = settings.category_names.iter().map(|(id, name)| (id.clone(), name.clone())).collect();
+    let mut profiles = settings.layouts.clone();
+    for p in profiles.values_mut() { p.user_edit_revision = 0; }
+    bundle.application_layouts = Some(profiles);
+    bundle.application_raw_profiles = settings.device_raw_profiles.iter()
+        .filter(|(id, _)| settings.layouts.contains_key(*id)).map(|(id, raw)| (id.clone(), raw.clone())).collect();
 }
 
 const ENTLAYOUT_FORMAT: &str = "entropy.layout";
@@ -158,17 +134,20 @@ const ENTLAYOUT_VERSION: u16 = 7;
 // Complete Macropad device documents add every host profile and matching data.
 const MACROPAD_ENTLAYOUT_VERSION: u16 = 9;
 const SM62_ENTLAYOUT_VERSION: u16 = 10;
+const MATRIX_APPLICATION_ENTLAYOUT_VERSION: u16 = 12;
 
 fn complete_entlayout_document(bundle: &EntLayoutFile) -> bool {
     // Historical native-v2 files and custom SM62 complete backups both used
     // version 10. The complete-profile payload distinguishes the two schemas;
     // do not reinterpret native-v2 action files as incomplete SM62 backups.
     bundle.version == MACROPAD_ENTLAYOUT_VERSION
+        || bundle.version == MATRIX_APPLICATION_ENTLAYOUT_VERSION
         || (bundle.version == SM62_ENTLAYOUT_VERSION && bundle.application_layouts.is_some())
 }
 
 fn entlayout_version_supported(version: u16) -> bool {
     (1..=ENTLAYOUT_VERSION).contains(&version)
+        || version == MATRIX_APPLICATION_ENTLAYOUT_VERSION
         || version == crate::rynk::entlayout::NATIVE_V2_ENTLAYOUT_VERSION
         || version == crate::rynk::entlayout::RYNK_ENTLAYOUT_VERSION
 }
@@ -263,6 +242,8 @@ struct EntLayoutFile {
         deserialize_with = "deserialize_application_profiles"
     )]
     application_layouts: Option<EntLayoutProfiles>,
+    #[serde(default, skip_serializing_if = "std::collections::BTreeMap::is_empty")]
+    application_raw_profiles: std::collections::BTreeMap<String, Vec<u8>>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pictograms: Option<Vec<EntLayoutPictogram>>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
@@ -1526,9 +1507,9 @@ impl EntropyApp {
             purpose,
             owner: self.qmk_hid_hosts.get(&target.path).map(|b|
                 (b.application_layout_owner_incarnation(), b.application_layout_publication_generation())),
-            target, generation: self.connection_generation,
-            deadline: std::time::Instant::now() + std::time::Duration::from_secs(20),
-            source: Some(ResidentPreparationSource { bundle, defaults, known }), document: None,
+            target: target.clone(), generation: self.connection_generation,
+            deadline: std::time::Instant::now() + super::headless_export::DEFAULT_TIMEOUT,
+            source: Some(ResidentPreparationSource { bundle, defaults, known, target }), document: None,
         })
     }
 
@@ -1886,19 +1867,23 @@ impl EntropyApp {
                 })
             });
         if retry_probe {
-            let supported = self
+            let geometry = self
                 .hid_device
                 .as_ref()
                 .context("No active keyboard connection")?
                 .require_vial()?
-                .probe_application_layout_protocol_version(self.selected_device.and_then(|i| self.device_manager.devices().get(i)).and_then(|d| d.application_layout_protocol_version()).context("Unsupported application layout device")?)
+                .probe_application_layout_geometry(self.selected_device.and_then(|i| self.device_manager.devices().get(i)).and_then(|d| d.application_layout_protocol_version()).context("Unsupported application layout device")?)
                 .context("Application layout capability is unconfirmed; export refused")?;
             let info = self.device_about_info.as_mut().unwrap();
-            info.supports_application_layouts = supported;
+            info.supports_application_layouts = geometry.is_some();
+            info.application_layout_geometry = geometry;
             info.application_layout_probe_failed = false;
         }
         if self.application_layout_device_key().is_none() {
             return Ok(());
+        }
+        if self.selected_device.and_then(|i| self.device_manager.devices().get(i)).is_some_and(|d| d.is_ergohaven_phenom()) {
+            return Ok(()); // no display/compact/resident capability is implied by v9
         }
         let state = &self.display_settings.pictograms;
         if state.loading || state.saving || self.vial_hid_task.is_some() {
@@ -2001,15 +1986,15 @@ impl EntropyApp {
         check()?;
         let hid = self.hid_device.as_ref().context("Resident export keyboard is busy or disconnected")?
             .require_vial()?;
-        let supported = hid.probe_resident_export_capability()
+        let capability = hid.probe_resident_capabilities()
             .context("Incomplete resident application catalog capability; export refused")?;
         check()?;
-        if !supported {
+        let Some(capabilities) = capability.resident() else {
             // A correlated legacy handshake proves that there is no schema2
             // inventory to read. Unknown/error never reaches this fallback.
             return Ok(self.entlayout_snapshot_with_profiles(None));
-        }
-        let records = hid.read_resident_export_catalog_checked(check)
+        };
+        let records = hid.read_resident_export_catalog_with_capabilities(capabilities, check)
             .context("Incomplete resident application catalog; export refused")?;
         anyhow::ensure!(self.connection_generation == generation
             && self.selected_device.and_then(|i| self.device_manager.devices().get(i)).is_some_and(|d| d.path == device.path)
@@ -2024,55 +2009,8 @@ impl EntropyApp {
         if let Some(known) = known { settings.category_names = known.category_names.clone(); }
         preserve_local_default_metadata(&mut settings, known, &self.supported_qmk_settings,
             layout.live_features.qmk_settings_confirmed)?;
-        let mut identities = std::collections::BTreeSet::new();
-        for record in records {
-            anyhow::ensure!(identities.insert(record.identity_crc[..20].to_vec()), "Duplicate resident identity");
-            let mut profile = crate::qmk_hid_host::decode_device_profile(&record)?;
-            // Match forward digests only. A device digest cannot invent host
-            // matching rules, and stale cached payloads never replace a FULL.
-            if let Some(previous) = known.and_then(|s| s.layouts.values().find(|p| p.id != "default" &&
-                (crate::qmk_hid_host::application_layout_identity_matches(&p.id, &record.identity_crc[..20])
-                    || s.device_raw_profiles.get(&p.id).is_some_and(|raw| raw.get(43..63) == Some(&record.identity_crc[..20]))))) {
-                profile.id = previous.id.clone(); profile.executable = previous.executable.clone();
-                profile.application_identities = previous.application_identities.clone();
-                profile.title_contains = previous.title_contains.clone(); profile.category = previous.category;
-                profile.custom_category_id = previous.custom_category_id.clone();
-                profile.automatic_switching = previous.automatic_switching;
-            }
-            crate::qmk_hid_host::validate_portable_resident_profile(&record, &profile)
-                .context("Incomplete resident application catalog representation; export refused")?;
-            anyhow::ensure!(!settings.layouts.contains_key(&profile.id), "Resident export profile ID collision");
-            settings.resident_slots.insert(profile.id.clone(), record.slot);
-            settings.device_raw_profiles.insert(profile.id.clone(), record.raw);
-            settings.layouts.insert(profile.id.clone(), profile);
-        }
-        // Reading device-authoritative data does not authorize dropping local
-        // authoring data from a backup. Until the envelope can carry both sides
-        // of a conflict, refuse explicitly and leave the destination untouched.
-        if let Some(known) = known {
-            for (id, authored) in &known.layouts {
-                let Some(physical) = settings.layouts.get(id) else {
-                    // Nonresident author data is portable even though it is not
-                    // permission to STORE it. Preserve it alongside readback.
-                    settings.layouts.insert(id.clone(), authored.clone());
-                    continue;
-                };
-                let inherited_default = id == "default"
-                    && authored.layers.len() == physical.layers.len()
-                    && authored.layers.iter().zip(&physical.layers).all(|(a, p)|
-                        a.len() == p.len() && a.iter().zip(p).all(|(a, p)|
-                            *a == crate::application_layouts::APPLICATION_LAYOUT_UNSET_KEYCODE || a == p));
-                let same_layers = authored.layers == physical.layers || inherited_default;
-                anyhow::ensure!(same_layers
-                    && authored.layer_names == physical.layer_names
-                    && authored.encoder_stacks == physical.encoder_stacks
-                    && authored.name == physical.name,
-                    "Export would replace author data in profile {id}; backup refused (layers={}, names={}, stacks={}, display={})",
-                    same_layers, authored.layer_names == physical.layer_names,
-                    authored.encoder_stacks == physical.encoder_stacks, authored.name == physical.name);
-            }
-        }
-        Ok(self.entlayout_snapshot_with_profiles(Some(&settings)))
+        let prepared = prepare_host_application_library(settings, known.cloned(), &device, &records)?;
+        Ok(self.entlayout_snapshot_with_profiles(Some(&prepared)))
     }
 
     fn entlayout_snapshot(&self) -> Option<EntLayoutFile> {
@@ -2106,13 +2044,12 @@ impl EntropyApp {
         // Macropad backup. Default inherits firmware without publishing host data.
         let fresh_settings = self.application_layout_device_key().map(|_| {
             let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+            settings.geometry = self.application_layout_target_geometry();
             let profile = settings
                 .layouts
                 .get_mut(crate::application_layouts::DEFAULT_APPLICATION_LAYOUT_ID)
                 .unwrap();
-            if layout.keys.len() == 62 && layout.rows == 10 && layout.cols == 7 {
-                profile.layers = Self::base_application_layers(layout).to_vec();
-            }
+            profile.layers = Self::base_application_layers(layout).to_vec();
             for (target, source) in profile.layer_names.iter_mut().zip(&self.layer_names) {
                 *target = source.clone();
             }
@@ -2195,6 +2132,8 @@ impl EntropyApp {
             format: ENTLAYOUT_FORMAT.to_owned(),
             version: if has_rynk_actions {
                 crate::rynk::entlayout::RYNK_ENTLAYOUT_VERSION
+            } else if application_settings.is_some() && self.application_layout_target_geometry().is_some_and(|g| g.matrix()) {
+                MATRIX_APPLICATION_ENTLAYOUT_VERSION
             } else if application_settings.is_some() && layout.keys.len() == 62 && layout.rows == 10 && layout.cols == 7 {
                 SM62_ENTLAYOUT_VERSION
             } else if application_settings.is_some() {
@@ -2227,6 +2166,8 @@ impl EntropyApp {
                 for profile in profiles.values_mut() { profile.user_edit_revision = 0; }
                 profiles
             }),
+            application_raw_profiles: application_settings.map(|s| s.device_raw_profiles.iter()
+                .filter(|(id, _)| s.layouts.contains_key(*id)).map(|(id, raw)| (id.clone(), raw.clone())).collect()).unwrap_or_default(),
             pictograms: application_settings.and_then(|_| {
                 let state = &self.display_settings.pictograms;
                 state.loaded.then(|| {
@@ -2597,6 +2538,14 @@ impl EntropyApp {
         if (complete_entlayout_document(&bundle)) != bundle.application_layouts.is_some() {
             bail!("Invalid complete Macropad layout version/payload");
         }
+        if !bundle.application_raw_profiles.is_empty() {
+            anyhow::ensure!(bundle.version == SM62_ENTLAYOUT_VERSION, "Raw application baselines require an SM62 complete document");
+            let profiles = bundle.application_layouts.as_ref().context("Raw baselines lack host profiles")?;
+            for (id, raw) in &bundle.application_raw_profiles {
+                anyhow::ensure!(id != "default" && profiles.contains_key(id), "Orphan/default raw profile baseline");
+                crate::qmk_hid_host::validate_device_profile_raw(raw)?;
+            }
+        }
         if let Some(profiles) = &bundle.application_layouts {
             let mut category_ids = std::collections::BTreeSet::new();
             let mut category_names = std::collections::BTreeSet::new();
@@ -2630,6 +2579,16 @@ impl EntropyApp {
                 && _layout.encoders.is_empty()
                 && self.selected_device.and_then(|i| self.device_manager.devices().get(i))
                     .is_some_and(|d| d.application_layout_protocol_version() == Some(8));
+            let target_geometry = self.application_layout_target_geometry()
+                .or_else(|| crate::application_layouts::ApplicationLayoutGeometry::for_layout(_layout))
+                .context("Unconfirmed application layout target geometry")?;
+            let source_matrix = bundle.version == MATRIX_APPLICATION_ENTLAYOUT_VERSION;
+            if source_matrix != target_geometry.matrix() || (source_matrix && (
+                bundle.keyboard.rows != _layout.rows || bundle.keyboard.cols != _layout.cols
+                || bundle.keyboard.layers != 16
+                || geometry.keys.iter().map(|k| (k.row,k.col)).collect::<std::collections::BTreeSet<_>>() != _layout.keys.iter().map(|k| (k.row,k.col)).collect()
+                || geometry.encoders.iter().map(|e| (e.encoder_idx,e.direction)).collect::<std::collections::BTreeSet<_>>() != _layout.encoders.iter().map(|e| (e.encoder_idx,e.direction)).collect()
+            )) { bail!("Matrix application layout geometry mismatch"); }
             if (bundle.version == SM62_ENTLAYOUT_VERSION) != source_sm62
                 || source_sm62 != target_sm62
                 || (source_sm62 && bundle.keyboard.layers != 16) {
@@ -2791,10 +2750,8 @@ impl EntropyApp {
                 }
             }
             for (id, profile) in profiles {
-                let source_controls = if bundle.keyboard.rows == 10 && bundle.keyboard.cols == 7
-                    && geometry.keys.len() == 62 && geometry.encoders.is_empty() { 62 } else { 15 };
-                let target_controls = if _layout.rows == 10 && _layout.cols == 7
-                    && _layout.keys.len() == 62 && _layout.encoders.is_empty() { 62 } else { 15 };
+                let source_controls = if source_matrix { target_geometry.controls() } else if source_sm62 { 62 } else { 15 };
+                let target_controls = target_geometry.controls();
                 if id.is_empty()
                     || id != &profile.id
                     || profile.layers.len() != 16
@@ -2803,6 +2760,7 @@ impl EntropyApp {
                     || profile.layer_names.len() != 16
                     || profile.encoder_stacks.len() != 16
                     || (source_sm62 && profile.encoder_stacks.iter().any(|stack| !stack.is_empty()))
+                    || (source_matrix && (!target_geometry.complete(&profile.layers) || profile.encoder_stacks.iter().any(|stack| !stack.is_empty())))
                     || profile
                         .encoder_stacks
                         .iter()
@@ -3112,6 +3070,7 @@ impl EntropyApp {
             self.refresh_application_layout_edit_owners(&key);
             let mut settings = self.app_settings.clone();
             let target = settings.application_layouts.entry(key).or_default();
+            target.geometry = self.application_layout_target_geometry();
             let mut category_mapping = std::collections::BTreeMap::new();
             for (id, name) in &bundle.application_categories {
                 let mapped = target
@@ -3169,6 +3128,11 @@ impl EntropyApp {
                     }
                 }
                 target.layouts.insert(id.clone(), profile);
+                if let Some(raw) = bundle.application_raw_profiles.get(id) {
+                    target.device_raw_profiles.insert(id.clone(), raw.clone());
+                } else {
+                    target.device_raw_profiles.remove(id);
+                }
             }
             if let (Some(source), Some(layout), Some(device_key)) = (
                 bundle.data.layout_element_visibility.as_ref(),

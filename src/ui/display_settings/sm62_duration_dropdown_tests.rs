@@ -23,7 +23,8 @@ fn position(out:&egui::FullOutput,label:&str)->egui::Pos2 {
 }
 fn field<'a>(out:&'a egui::FullOutput,label:&str)->&'a egui::epaint::RectShape {
     let y=position(out,label).y;
-    out.shapes.iter().filter_map(|s|match &s.shape {egui::Shape::Rect(r) if (r.rect.height()-34.0).abs()<0.1 && (r.rect.center().y-y).abs()<4.0=>Some(r),_=>None}).next().expect("actual control background")
+    let control_height=crate::ui_style::ResponsiveMetrics {scale:1.0}.settings_control_height();
+    out.shapes.iter().filter_map(|s|match &s.shape {egui::Shape::Rect(r) if (r.rect.height()-control_height).abs()<0.1 && (r.rect.center().y-y).abs()<4.0=>Some(r),_=>None}).next().expect("actual control background")
 }
 fn click(app:&mut EntropyApp,ctx:&egui::Context,width:f32,p:egui::Pos2) {
     frame(app,ctx,width,vec![egui::Event::PointerMoved(p),egui::Event::PointerButton {pos:p,button:egui::PointerButton::Primary,pressed:true,modifiers:Default::default()},egui::Event::PointerButton {pos:p,button:egui::PointerButton::Primary,pressed:false,modifiers:Default::default()}]);
@@ -76,19 +77,72 @@ fn all_sm62_list_trigger_geometry_matches_standard_without_repaint_writes() {
         app.display_settings.sm62_hold_ms=pair;app.display_settings.confirmed_sm62_hold_ms=pair;
         let before=app.display_settings.clone();frame(&mut app,&ctx,width,vec![]);let out=frame(&mut app,&ctx,width,vec![]);
         let timeout_label=crate::i18n::tr_catalog(app.app_settings.language,"display_settings.display_timeout");
-        let fields:Vec<_>=(if ru {["Половинка","Режим по умолчанию","Анимация ожидания через","Показывать раскладку в течение",timeout_label]}
-            else {["Half","Default mode","Enable standby mode after","Show layout for",timeout_label]}).iter().map(|label|field(&out,label)).collect();
+        let fields:Vec<_>=(if ru {["Половинка","Режим по умолчанию","Анимация ожидания через","Раскладка","Показывать раскладку в течение",timeout_label]}
+            else {["Half","Default mode","Enable standby mode after","Layout","Show layout for",timeout_label]}).iter().map(|label|field(&out,label)).collect();
+        let metrics=crate::ui_style::ResponsiveMetrics::from_ctx(&ctx);
         for r in &fields {
-            assert_eq!(r.rect.size(),egui::vec2(196.0,34.0),"all five trigger widths use standard settings dropdown size width={width}");
+            assert_eq!(r.rect.size(),egui::vec2(metrics.settings_control_width(),metrics.settings_control_height()),"all display triggers use the common settings control metrics width={width}");
             assert_eq!(r.corner_radius.nw,9,"modern shared dropdown radius");
             assert_eq!(r.fill,crate::ui_style::surface_fill(dark),"standard modern dropdown surface");
             assert_eq!(r.stroke,crate::ui_style::modal_outline_stroke(dark),"standard modern dropdown outline");
             assert!(r.rect.left()>=0.0 && r.rect.right()<=width);
         }
         assert_eq!(fields[0].rect.right(),fields[1].rect.right());assert_eq!(fields[1].rect.right(),fields[2].rect.right());
-        assert_eq!(fields[3].rect.right(),fields[4].rect.right());
+        assert_eq!(fields[3].rect.right(),fields[4].rect.right());assert_eq!(fields[4].rect.right(),fields[5].rect.right());
         let text=if pair[0]!=pair[1] {if ru {"Различаются".to_owned()} else {"Mixed".to_owned()}}
             else {format!("{} {}",pair[0],if ru {"мс"} else {"ms"})};position(&out,&text);
         assert_eq!(app.display_settings,before);assert!(recorder.requests().is_empty());assert!(!app.qmk_settings_write_busy());
     }}}}
+}
+
+#[test]
+fn shared_layout_dropdown_preserves_mixed_values_and_confirms_existing_fields() {
+    let _storage = crate::app::app_storage::ScopedTempConfig::new();
+    for ru in [false, true] {
+        for (initial, selected) in [([0, 0], 1u8), ([1, 1], 0), ([0, 1], 0), ([0, 1], 1)] {
+            let (mut app, ctx, recorder) = setup();
+            if ru { app.app_settings.language = crate::i18n::Language::Russian; }
+            for (side, value) in initial.into_iter().enumerate() {
+                app.display_settings.sm62_values[side * 5 + 4] = value;
+            }
+            app.display_settings.confirmed_sm62_values = app.display_settings.sm62_values;
+            let before = app.display_settings.clone();
+            frame(&mut app, &ctx, 1100.0, vec![]);
+            let out = frame(&mut app, &ctx, 1100.0, vec![]);
+            assert_eq!(app.display_settings, before);
+            assert!(recorder.requests().is_empty(), "opening the page is read-only");
+            if initial[0] != initial[1] {
+                position(&out, if ru { "Различаются" } else { "Mixed" });
+            }
+            let label = if ru { "Раскладка" } else { "Layout" };
+            click(&mut app, &ctx, 1100.0, field(&out, label).rect.center());
+            frame(&mut app, &ctx, 1100.0, vec![]);
+            let out = frame(&mut app, &ctx, 1100.0, vec![]);
+            position(&out, "English");
+            position(&out, "English + Russian");
+            assert_eq!(app.display_settings, before, "opening the dropdown is read-only");
+            assert!(recorder.requests().is_empty());
+            let choice = if selected == 0 { "English" } else { "English + Russian" };
+            click(&mut app, &ctx, 1100.0, position(&out, choice));
+            drain(&mut app, &ctx);
+            let mut expected = before.sm62_values;
+            expected[4] = selected;
+            expected[9] = selected;
+            assert_eq!(app.display_settings.sm62_values, expected);
+            assert_eq!(app.display_settings.confirmed_sm62_values, expected);
+            let expected_qsids: Vec<_> = initial.into_iter().enumerate()
+                .filter(|(_, value)| *value != selected)
+                .map(|(side, _)| 234 + side as u16 * 5).collect();
+            let sets: Vec<_> = recorder.requests().iter().filter(|r| r[1] == 0x0B)
+                .map(|r| u16::from_le_bytes([r[2], r[3]])).collect();
+            assert_eq!(sets, expected_qsids);
+            let mut restored = app.display_settings.clone();
+            restored.sm62_values = before.sm62_values;
+            restored.confirmed_sm62_values = before.confirmed_sm62_values;
+            assert_eq!(restored, before, "layout choice preserves every unrelated setting");
+            let count = recorder.requests().len();
+            for _ in 0..3 { frame(&mut app, &ctx, 1100.0, vec![]); }
+            assert_eq!(recorder.requests().len(), count, "repaint must not repeat writes");
+        }
+    }
 }

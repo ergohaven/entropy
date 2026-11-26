@@ -896,18 +896,19 @@ impl EntropyApp {
                 };
 
                 let application_layout_probe = if let Some(version) = dev.application_layout_protocol_version() {
-                    dev_conn.probe_application_layout_protocol_version(version)
+                    dev_conn.probe_application_layout_geometry(version)
                 } else {
-                    Ok(false)
+                    Ok(None)
                 };
                 let application_layout_probe_failed = application_layout_probe.is_err();
-                let supports_application_layouts =
+                let application_layout_geometry =
                     application_layout_probe.unwrap_or_else(|error| {
                         log::warn!(
                             "Application layout protocol capability is unconfirmed: {error:#}"
                         );
-                        false
+                        None
                     });
+                let supports_application_layouts = application_layout_geometry.is_some();
 
                 progress("Reading keyboard layout definition…")?;
                 log::info!("Getting layout JSON…");
@@ -1626,6 +1627,7 @@ impl EntropyApp {
                     path: dev.path.clone(),
                     firmware_version,
                     supports_application_layouts,
+                    application_layout_geometry,
                     application_layout_probe_failed,
                     firmware_update_target,
                     supports_battery_halves,

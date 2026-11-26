@@ -8,6 +8,7 @@ const TYPING_TRAINER_SYMBOL_STATS_VERSION: u8 = 1;
 mod resident_save_regression {
     use super::*;
     include!("app_storage_resident_save_tests.inc");
+    include!("host_managed_migration_tests.inc");
 }
 
 #[cfg(test)]
@@ -653,6 +654,8 @@ pub(super) fn try_save_app_settings(settings: &AppSettings)->anyhow::Result<()> 
     let original=match std::fs::read(&path) {Ok(bytes)=>Some(bytes),Err(e) if e.kind()==std::io::ErrorKind::NotFound=>None,Err(e)=>return Err(e.into())};
     if let Some(old_bytes)=original {
         if old_bytes==bytes {
+            std::fs::OpenOptions::new().read(true).write(true).open(&path)?.sync_all()?;
+            sync_settings_parent(parent)?;
             let pic=pictogram_library_path();if !pic.exists(){write_pictogram_file(&pic,&settings.saved_pictograms)?;}return Ok(());
         }
         let old:AppSettings=serde_json::from_slice(&old_bytes).context("refuse to overwrite invalid existing settings")?;
@@ -687,7 +690,7 @@ pub(super) fn try_save_app_settings(settings: &AppSettings)->anyhow::Result<()> 
 
 #[cfg(not(target_arch = "wasm32"))]
 fn sync_settings_parent(parent:&std::path::Path)->anyhow::Result<()> {
-    #[cfg(unix)] std::fs::File::open(parent)?.sync_all()?;
+    #[cfg(unix)] for ancestor in parent.ancestors() { if !ancestor.as_os_str().is_empty() {std::fs::File::open(ancestor)?.sync_all()?;} }
     #[cfg(not(unix))] let _=parent;
     Ok(())
 }
@@ -698,9 +701,37 @@ pub(super) fn preserve_resident_recovery(value:&serde_json::Value)->anyhow::Resu
     let bytes=serde_json::to_vec_pretty(value)?;let mut hash=std::collections::hash_map::DefaultHasher::new();bytes.hash(&mut hash);
     let dir=app_settings_path().with_file_name("resident100-recovery");std::fs::create_dir_all(&dir)?;
     let path=dir.join(format!("{:016x}.json",hash.finish()));
-    if path.exists(){anyhow::ensure!(std::fs::read(&path)?==bytes,"recovery filename collision; refusing overwrite");return Ok(path);}
+    if path.exists(){anyhow::ensure!(std::fs::read(&path)?==bytes,"recovery filename collision; refusing overwrite");std::fs::OpenOptions::new().read(true).write(true).open(&path)?.sync_all()?;sync_settings_parent(&dir)?;return Ok(path);}
     let mut tmp=tempfile::NamedTempFile::new_in(&dir)?;std::io::Write::write_all(&mut tmp,&bytes)?;tmp.as_file().sync_all()?;
     tmp.persist_noclobber(&path).map_err(|e|e.error)?;sync_settings_parent(&dir)?;Ok(path)
+}
+
+#[cfg(not(target_arch = "wasm32"))]
+pub(super) fn migrate_legacy_archive(settings: &mut AppSettings, device_key: &str,
+    device: &crate::device::Device, records: &[crate::qmk_hid_host::RecoveredRecord], rule_key: Option<&str>) -> anyhow::Result<Option<std::path::PathBuf>> {
+    let archive_key = crate::application_layouts::DeviceApplicationLayouts::legacy_archive_key(device, records)?;
+    if settings.application_layouts.get(device_key).is_some_and(|s| s.host_archive_migrations.contains_key(&archive_key)) { return Ok(None); }
+    let path = app_settings_path();
+    let disk_before = match std::fs::read(&path) { Ok(b) => Some(b), Err(e) if e.kind() == std::io::ErrorKind::NotFound => None, Err(e) => return Err(e.into()) };
+    let backup = preserve_resident_recovery(&serde_json::json!({
+        "version": 2, "kind": "host-managed-complete-legacy-archive", "archive_key": archive_key,
+        "device_library": device_key, "vendor_id": device.vendor_id, "product_id": device.product_id,
+        "owner_path": device.path, "owner_serial": device.serial_number,
+        "records": records, "previous_host_settings": settings, "previous_settings_file_bytes": disk_before
+    }))?;
+    let mut adopted = settings.clone();
+    let rules = rule_key.and_then(|k| settings.sm62_host_rules.get(k));
+    let library = adopted.application_layouts.entry(device_key.to_owned()).or_insert_with(|| {
+        let mut library = crate::application_layouts::DeviceApplicationLayouts::default();
+        library.layouts.get_mut("default").unwrap().layers = vec![vec![crate::application_layouts::APPLICATION_LAYOUT_UNSET_KEYCODE; 62]; 16];
+        library
+    });
+    library.merge_legacy_archive(records, rules)?;
+    library.host_archive_migrations.insert(archive_key, backup.to_string_lossy().into_owned());
+    // No normalization or publication may discard a host draft on save failure.
+    try_save_app_settings(&adopted)?;
+    *settings = adopted;
+    Ok(Some(backup))
 }
 
 pub(super) fn normalize_text_expander_app_name(raw: &str) -> Option<String> {

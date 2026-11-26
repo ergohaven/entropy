@@ -509,6 +509,7 @@ impl EntropyApp {
         let Some(title) = tab.get("name").and_then(serde_json::Value::as_str) else {
             return false;
         };
+        let title = title.trim();
         let words = Self::settings_title_words(title);
         let identifies_touchpad = words
             .iter()
@@ -517,7 +518,9 @@ impl EntropyApp {
             .iter()
             .any(|word| matches!(word.as_str(), "left" | "right"));
 
-        identifies_touchpad && !identifies_side
+        // Full dynamic groups own their fields, including gestures and timeout
+        // settings absent from the legacy fixed editor. Never load both states.
+        identifies_touchpad && !identifies_side && !Self::is_module_settings_title(title)
     }
 
     pub(super) fn touchpad_setting_field(
@@ -1589,7 +1592,11 @@ impl EntropyApp {
     }
 
     fn is_module_settings_title(title: &str) -> bool {
-        if title.eq_ignore_ascii_case("Qube display") || title.eq_ignore_ascii_case("Encoders") {
+        if title.eq_ignore_ascii_case("Qube display")
+            || title.eq_ignore_ascii_case("Encoders")
+            || title.eq_ignore_ascii_case("Touchpad settings")
+            || title.eq_ignore_ascii_case("Trackpad settings")
+        {
             return true;
         }
         let words = Self::settings_title_words(title);
@@ -2285,6 +2292,9 @@ impl EntropyApp {
                 })
             });
             let binding = profile_bindings.get(&path).cloned();
+            let selected_geometry = self.device_about_info.as_ref()
+                .filter(|info| info.path == device.path && info.vendor_id == device.vendor_id && info.product_id == device.product_id)
+                .and_then(|info| info.application_layout_geometry);
             let bridge = self
                 .qmk_hid_hosts
                 .entry(path)
@@ -2293,6 +2303,7 @@ impl EntropyApp {
                 bridge.bind_application_layout_device(key);
             }
             if let Some(supported) = selected_support {
+                bridge.set_selected_application_layout_geometry(selected_geometry);
                 bridge.set_selected_application_layout_support(supported);
             }
         }

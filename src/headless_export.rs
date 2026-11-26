@@ -36,7 +36,9 @@ pub(crate) const EXIT_USAGE: i32 = 64;
 const EXPORT_LAYOUT_ARG: &str = "--export-layout";
 const DEVICE_ARG: &str = "--device";
 const TIMEOUT_ARG: &str = "--timeout";
-const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
+// GUI preparation and the default console export share one complete-read budget.
+// A valid resident catalog can require hundreds of sequential HID round trips.
+pub(super) const DEFAULT_TIMEOUT: Duration = Duration::from_secs(60);
 const POLL_INTERVAL: Duration = Duration::from_millis(25);
 const DISCOVERY_INTERVAL: Duration = Duration::from_millis(500);
 
@@ -1341,10 +1343,11 @@ mod tests {
                     && request[3..].iter().all(|byte| *byte == 0))
             }
             0xeb => !(request[..3] == [0xeb, 8, 0xa5]
-                && matches!(request[3], 1 | 2)
+                && matches!(request[3], 1 | 2 | 3)
                 && request[8..].iter().all(|byte| *byte == 0)),
             // Independently classify only the real read-only resident commands.
-            0xef => !(request[1] == 9 && matches!(request[2], 3 | 6)),
+            0xef => !(request[1] == 9 && (matches!(request[2], 3 | 6)
+                || (request[2] == 7 && request[3] == 0 && request[8..].iter().all(|b| *b == 0)))),
             0xA0..=0xFD => true,
             _ => false,
         }

@@ -24,6 +24,40 @@ fn choose(app: &mut EntropyApp, ctx: &egui::Context, current: &str, option: &str
 }
 
 #[test]
+fn default_mode_off_uses_each_halfs_existing_power_setting() {
+    let _storage = crate::app::app_storage::ScopedTempConfig::new();
+    for ru in [false, true] {
+        let (mut app, ctx, recorder) = setup();
+        if ru { app.app_settings.language = crate::i18n::Language::Russian; }
+        let before = app.display_settings.clone();
+        let (left, right, clock, player, off) = if ru {
+            ("Левая", "Правая", "Часы", "Плеер", "Выключен")
+        } else {
+            ("Left", "Right", "Clock", "Player", "Off")
+        };
+        for (side, current) in [(0, clock), (1, player)] {
+            if side == 1 { choose(&mut app, &ctx, left, right); }
+            choose(&mut app, &ctx, current, off);
+            drain(&mut app, &ctx);
+            let mut expected = [0, 0];
+            expected[side] = 1;
+            assert_eq!(app.display_settings.sm62_screens_off_values, expected);
+            assert_eq!(app.display_settings.confirmed_sm62_screens_off_values, expected);
+            assert_eq!(app.display_settings.sm62_values, before.sm62_values);
+            let count = recorder.requests().len();
+            for _ in 0..3 { frame_events(&mut app, &ctx, vec![]); }
+            assert_eq!(recorder.requests().len(), count, "rendering Off must not write");
+            choose(&mut app, &ctx, off, current);
+            drain(&mut app, &ctx);
+            assert_eq!(app.display_settings, before, "restore without changing saved settings");
+        }
+        let sets: Vec<_> = recorder.requests().iter().filter(|r| r[1] == 0x0B)
+            .map(|r| u16::from_le_bytes([r[2], r[3]])).collect();
+        assert_eq!(sets, [248, 248, 249, 249]);
+    }
+}
+
+#[test]
 fn half_dropdown_pointer_switching_is_read_only_and_retains_all_settings() {
     let _storage = crate::app::app_storage::ScopedTempConfig::new();
     for ru in [false,true] {
@@ -109,7 +143,8 @@ fn selected_half_layout_matrix_is_bounded_and_input_free() {
             draw(&mut app,events(p));draw(&mut app,vec![]);let popup=draw(&mut app,vec![]);
             draw(&mut app,events(position(&popup,to)));draw(&mut app,vec![]);
             let out=draw(&mut app,vec![]);position(&out,to);
-            let controls:Vec<_>=out.shapes.iter().filter_map(|s|match &s.shape {egui::Shape::Rect(r) if r.rect.height()==34.0=>Some(r.rect),_=>None}).collect();
+            let control_height=crate::ui_style::ResponsiveMetrics::from_ctx(&ctx).settings_control_height();
+            let controls:Vec<_>=out.shapes.iter().filter_map(|s|match &s.shape {egui::Shape::Rect(r) if r.rect.height()==control_height=>Some(r.rect),_=>None}).collect();
             assert!(controls.len()>=4,"half/mode/idle/timeout backgrounds");
             // Within each half's controls, retain common right-edge alignment.
             let mode=position(&out,if to=="Left"||to=="Левая" {if ru {"Часы"} else {"Clock"}} else {if ru {"Плеер"} else {"Player"}});

@@ -225,7 +225,7 @@ pub(super) fn click_shared(app: &mut EntropyApp, ctx: &egui::Context, label: &st
 }
 
 #[test]
-fn shared_sm62_real_edits_coalesce_across_fields_without_repaint_writes() {
+fn shared_sm62_real_edits_coalesce_without_repaint_writes() {
     let _storage = crate::app::app_storage::ScopedTempConfig::new();
     let ctx = egui::Context::default();
     let mut fonts = egui::FontDefinitions::default();
@@ -245,19 +245,16 @@ fn shared_sm62_real_edits_coalesce_across_fields_without_repaint_writes() {
     let before = app.display_settings.clone();
     click_shared(&mut app, &ctx, "Star animation");
     assert_eq!(app.display_settings.sm62_stars_values, [0, 0]);
-    click_shared(&mut app, &ctx, "Turn off displays");
-    assert_eq!(app.display_settings.sm62_screens_off_values, [1, 1]);
+
     click_shared(&mut app, &ctx, "Star animation");
     assert_eq!(app.display_settings.sm62_stars_values, [1, 1]);
     drain(&mut app, &ctx);
     assert_eq!(app.display_settings.confirmed_sm62_stars_values, [1, 1]);
     assert_eq!(
         app.display_settings.confirmed_sm62_screens_off_values,
-        [1, 1]
+        before.confirmed_sm62_screens_off_values
     );
-    let mut after = app.display_settings.clone();
-    after.sm62_screens_off_values = before.sm62_screens_off_values;
-    after.confirmed_sm62_screens_off_values = before.confirmed_sm62_screens_off_values;
+    let after = app.display_settings.clone();
     assert_eq!(
         after, before,
         "independent modes/date/language/hold remain unchanged"

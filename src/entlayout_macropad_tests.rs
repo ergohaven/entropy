@@ -24,7 +24,7 @@ impl LegacyResidentFixture for crate::hid::TestHidRecorder {
     ) {
         self.respond_by(move |p| {
             responder(p).or_else(|| {
-                (p[..3] == [0xeb, 8, 0xa5] && matches!(p[3], 1 | 2)
+                (p[..3] == [0xeb, 8, 0xa5] && matches!(p[3], 1 | 2 | 3)
                     && p[8..].iter().all(|b| *b == 0)).then_some(Ok(*p))
             })
         });
@@ -33,6 +33,7 @@ impl LegacyResidentFixture for crate::hid::TestHidRecorder {
 
 
 include!("entlayout_review_fixes_tests.rs");
+include!("phenom_application_tests.inc");
 
 fn drain_pending_layout_import(app: &mut EntropyApp, ctx: &egui::Context, now: f64) {
     // Full-device transfers need headroom when integration tests run in parallel.
@@ -1588,6 +1589,8 @@ fn macropad_unified_shared_macros_and_tap_dance_round_trip_every_profile() { sha
 
 #[test]
 fn sm62_unified_shared_resources_and_categories_round_trip_every_control() { shared_resources_round_trip_every_profile(true); }
+#[test]
+fn host_managed_full_export_import_retains_sm62_raw_baselines_and_host_rules() { shared_resources_round_trip_every_profile(true); }
 
 fn shared_resources_round_trip_every_profile(sm62: bool) {
     let storage = crate::app::app_storage::ScopedTempConfig::new();
@@ -1651,6 +1654,22 @@ fn shared_resources_round_trip_every_profile(sm62: bool) {
     app.application_layout_settings_mut().unwrap().set_layout_category_id(&application,&category);
     app.app_settings.application_layouts.insert("other-device".into(),Default::default());
     let unrelated=app.app_settings.application_layouts["other-device"].clone();
+    let mut raw_baselines = std::collections::BTreeMap::new();
+    if sm62 {
+        let library = app.application_layout_settings().unwrap();
+        let snapshot = library.snapshot_for_layout(&library.layouts[&application]);
+        let packets = crate::qmk_hid_host::test_application_layout_transmission_packets(&snapshot);
+        let mut raw = packets[0].to_vec(); raw.extend_from_slice(packets.last().unwrap());
+        for p in &packets[1..packets.len()-1] { match p[0] {
+            0xe2 => raw.extend_from_slice(&p[5..5+usize::from(p[4])*2]),
+            0xe7 => raw.extend_from_slice(&p[5..5+usize::from(p[4])]),
+            0xe9 => raw.extend_from_slice(&p[4..10+usize::from(p[5])]),
+            0xe4 => raw.extend_from_slice(&p[3..4+usize::from(p[3])]), _ => panic!("unexpected FULL packet")
+        }}
+        crate::qmk_hid_host::validate_device_profile_raw(&raw).unwrap();
+        raw_baselines.insert(application.clone(), raw);
+        app.application_layout_settings_mut().unwrap().device_raw_profiles = raw_baselines.clone();
+    }
     let expected = app.application_layout_settings().unwrap().layouts.clone();
     let path = storage.path().join("resources.entlayout");
     app.write_entlayout_export(&path);
@@ -1667,6 +1686,7 @@ fn shared_resources_round_trip_every_profile(sm62: bool) {
         &persisted.application_layouts[&key].layouts, &expected, &previous_profiles,
     );
     assert_eq!(persisted.application_layouts[&key].category_names[&category],"Keyboard projects");
+    if sm62 { assert_eq!(persisted.application_layouts[&key].device_raw_profiles, raw_baselines); }
     assert_eq!(persisted.application_layouts["other-device"],unrelated);
     assert_eq!(app.keycode_picker.macro_texts, vec![b"macro body".to_vec()]);
 }

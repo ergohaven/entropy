@@ -112,6 +112,14 @@ impl EntropyApp {
             || separate_encoder_visibility_settings_available(layout)
     }
 
+    // Visibility belongs to Show/Hide Keys even on a mixed encoder/touchpad
+    // page. Keep module-page routing independent so its controls remain intact.
+    pub(super) fn encoder_visibility_in_layout(&self, layout: &KeyboardLayout) -> bool {
+        layout.encoder_count() > 0
+            && (self.global_encoder_settings_group().is_some()
+                || self.encoder_only_module_settings(layout))
+    }
+
     pub(super) fn encoder_visibility_allows(
         layout: &KeyboardLayout,
         encoder_idx: u8,
@@ -170,7 +178,7 @@ impl EntropyApp {
                 }
             }
         }
-        if !self.encoder_only_module_settings(layout) {
+        if !self.encoder_visibility_in_layout(layout) {
             rows.extend(
                 Self::encoder_visibility_entries(layout)
                     .into_iter()
@@ -235,7 +243,7 @@ impl EntropyApp {
     }
 
     pub(super) fn migrate_fixed_encoder_visibility_to_layout(&mut self, layout: &KeyboardLayout) {
-        if !self.encoder_only_module_settings(layout) {
+        if !self.encoder_visibility_in_layout(layout) {
             return;
         }
         let Some(device_key) = self.layout_element_visibility_device_key() else {
@@ -392,7 +400,7 @@ impl EntropyApp {
                         if self
                             .layout
                             .as_ref()
-                            .is_some_and(|layout| self.encoder_only_module_settings(layout))
+                            .is_some_and(|layout| self.encoder_visibility_in_layout(layout))
                         {
                             crate::i18n::tr_catalog(lang, "encoder_settings.controls_description")
                         } else {
@@ -566,6 +574,57 @@ mod tests {
             })
             .collect();
         layout
+    }
+
+    #[test]
+    fn mixed_global_encoder_controls_use_layout_visibility_without_hiding_touchpad_settings() {
+        let definition = serde_json::json!({
+            "settings": [
+                {"name": "Encoders", "fields": [
+                    {"type": "select", "title": "Encoder interval", "qsid": 325, "variants": ["0 ms", "5 ms"]},
+                    {"type": "select", "title": "Encoder steps", "qsid": 332, "variants": ["1", "2"]}
+                ]},
+                {"name": "Touchpad settings", "fields": [
+                    {"type": "select", "title": "DPI", "qsid": 120, "variants": ["100", "200"]}
+                ]}
+            ]
+        });
+        let mut app = EntropyApp::new_inert_for_test();
+        app.module_settings =
+            EntropyApp::module_settings_from_definition(&definition, &[325, 332, 120]);
+        let layout = fixed_test_layout(3, "Ergohaven K:03 Pro");
+        assert!(app.encoder_visibility_in_layout(&layout));
+        assert!(!app.encoder_only_module_settings(&layout));
+        let rows = app.encoder_settings_rows(&layout);
+        let qsids = rows
+            .iter()
+            .map(|row| match *row {
+                EncoderSettingsRow::Field(group, field) => {
+                    app.module_settings.groups[group].fields[field].qsid
+                }
+                EncoderSettingsRow::Visibility(..) => {
+                    panic!("visibility belongs to Show/Hide Keys")
+                }
+            })
+            .collect::<Vec<_>>();
+        assert_eq!(qsids, [325, 332]);
+        assert!(app
+            .module_settings
+            .groups
+            .iter()
+            .any(|group| group.fields.iter().any(|field| field.qsid == 120)));
+        let mut legacy = vec![true, false, true, false, true, true];
+        let mut settings = AppSettings::default();
+        assert!(migrate_hidden_encoders(
+            &mut settings,
+            "k03pro-serial",
+            &mut legacy
+        ));
+        assert_eq!(
+            settings.layout_element_visibility["k03pro-serial"].hidden_encoders,
+            [1, 3].into_iter().collect()
+        );
+        assert!(legacy.iter().all(|visible| *visible));
     }
 
     #[test]

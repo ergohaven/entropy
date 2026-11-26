@@ -3,6 +3,7 @@ use super::*;
 
 /// Classify schema2 with the production validators. Adapt only the schema byte
 /// for the shared exact legacy-rejection validator; malformed bytes stay unknown.
+#[cfg(test)]
 pub(super) fn resident_capability_reply(request: &[u8; 32], reply: &[u8; 32]) -> Option<bool> {
     if resident100::supported(request, reply) { return Some(true); }
     if request[3] != 2 || reply[3] != 2 { return None; }
@@ -13,22 +14,35 @@ pub(super) fn resident_capability_reply(request: &[u8; 32], reply: &[u8; 32]) ->
     compact::capability(&q, &r).filter(|supported| !supported)
 }
 
+/// Shared GUI/headless/worker negotiation. Only correlated explicit rejection
+/// permits downgrade; malformed replies and transport errors remain unknown.
+pub(super) fn negotiate_archive(mut send: impl FnMut(&[u8; 32]) -> anyhow::Result<[u8; 32]>) -> anyhow::Result<(resident_catalog::Capability, bool)> {
+    for schema in [3, 2] {
+        let mut q = compact::query(resident100::next_transaction());
+        q[3] = schema;
+        let r = send(&q)?;
+        if let Some(caps) = resident_catalog::capabilities(&q, &r) {
+            return Ok((resident_catalog::Capability::Resident(caps), true));
+        }
+        let mut rejected = q; rejected[0] = 0xff;
+        anyhow::ensure!(r == q || r == rejected, "Archive capability unknown: invalid schema{schema} response");
+    }
+    let q = compact::query(resident100::next_transaction());
+    let r = send(&q)?;
+    let compact = compact::capability(&q, &r).ok_or_else(|| anyhow::anyhow!("Archive capability unknown: invalid v1 fallback"))?;
+    Ok((resident_catalog::Capability::Legacy, compact))
+}
+
 impl crate::hid::HidDevice {
     /// Read-only capability proof, independent of the application protocol version.
     /// Unknown transport/correlation/format is an error, never an empty catalog.
+    pub(crate) fn probe_resident_capabilities(&self) -> anyhow::Result<resident_catalog::Capability> {
+        Ok(negotiate_archive(|q| self.usb_send(q))?.0)
+    }
+
+    #[cfg(test)]
     pub(crate) fn probe_resident_export_capability(&self) -> anyhow::Result<bool> {
-        let q = resident100::capability_query(resident100::next_transaction());
-        let r = self.usb_send(&q)?;
-        match resident_capability_reply(&q, &r) {
-            Some(true) => Ok(true),
-            Some(false) => {
-                let q = compact::query(resident100::next_transaction());
-                let r = self.usb_send(&q)?;
-                anyhow::ensure!(compact::capability(&q, &r).is_some(), "Resident capability unknown: invalid v1 fallback");
-                Ok(false)
-            }
-            None => anyhow::bail!("Resident capability unknown: invalid schema2 response"),
-        }
+        Ok(self.probe_resident_capabilities()?.resident().is_some())
     }
 
     /// A bounded, read-only inventory for complete-device export. No bridge or
@@ -38,6 +52,14 @@ impl crate::hid::HidDevice {
     }
 
     pub(crate) fn read_resident_export_catalog_checked(&self, check: &mut dyn FnMut() -> anyhow::Result<()>) -> anyhow::Result<Vec<resident100::RecoveredRecord>> {
+        check()?;
+        let capability = self.probe_resident_capabilities()?;
+        check()?;
+        let Some(caps) = capability.resident() else { return Ok(Vec::new()); };
+        self.read_resident_export_catalog_with_capabilities(caps, check)
+    }
+
+    pub(crate) fn read_resident_export_catalog_with_capabilities(&self, caps: resident_catalog::Capabilities, check: &mut dyn FnMut() -> anyhow::Result<()>) -> anyhow::Result<Vec<resident100::RecoveredRecord>> {
         fn header(hid: &crate::hid::HidDevice, slot: u8, check: &mut dyn FnMut() -> anyhow::Result<()>) -> anyhow::Result<Option<[u8; 24]>> {
             let p = resident100::request(3, slot, None, &[0; 20], &[0; 4]);
             check()?;
@@ -50,10 +72,20 @@ impl crate::hid::HidDevice {
                 Ok(None)
             } else { Ok(Some(r[8..32].try_into()?)) }
         }
-        let mut inventory = Vec::with_capacity(100);
+        let p = resident_catalog::query();
+        check()?;
+        let response = self.usb_send(&p);
+        check()?;
+        let initial = resident_catalog::decode(&p, &response?, caps)?;
+        let mut inventory = Vec::with_capacity(usize::from(caps.slots));
         let mut records = Vec::new();
-        for slot in 0..100 {
+        for slot in 0..caps.slots {
+            if initial.as_ref().is_some_and(|c| !c.occupied(usize::from(slot))) {
+                inventory.push(None);
+                continue;
+            }
             let key = header(self, slot, check)?;
+            anyhow::ensure!(initial.is_none() || key.is_some(), "Resident catalog changed before READ");
             inventory.push(key);
             let Some(key) = key else { continue; };
             let mut raw = Vec::new();
@@ -77,8 +109,16 @@ impl crate::hid::HidDevice {
         }
         // Also detect empty->occupied, deletion and replacement after an earlier
         // slot was read. Never certify a partial or mixed inventory.
-        for slot in 0..100 {
-            anyhow::ensure!(header(self, slot, check)? == inventory[usize::from(slot)], "Resident inventory changed during export");
+        if let Some(initial) = initial {
+            let p = resident_catalog::query();
+            check()?;
+            let response = self.usb_send(&p);
+            check()?;
+            anyhow::ensure!(resident_catalog::decode(&p, &response?, caps)?.as_ref() == Some(&initial), "Resident inventory changed during export");
+        } else {
+            for slot in 0..caps.slots {
+                anyhow::ensure!(header(self, slot, check)? == inventory[usize::from(slot)], "Resident inventory changed during export");
+            }
         }
         check()?;
         Ok(records)
@@ -93,24 +133,21 @@ impl QmkHidHostBridge {
             || state.verified_key.is_none()
             || state.verified_key.as_ref() != self.application_layout_device_key.as_ref() { return false; }
         match state.resident_export_capability {
-            Some(false) => return true, // Confirmed legacy: no schema2 inventory exists.
-            Some(true) => {},
-            None => return false,
+            Some(resident_catalog::Capability::Legacy) => true,
+            Some(resident_catalog::Capability::Resident(_)) if state.resident_inventory_complete => {
+                let records: Vec<_> = state.resident_recoveries.values().cloned().collect();
+                crate::application_layouts::DeviceApplicationLayouts::legacy_archive_key(&self.device, &records)
+                    .is_ok_and(|key| settings.host_archive_migrations.contains_key(&key))
+            }
+            _ => false,
         }
-        state.resident_inventory_complete && state.resident_recoveries.values().all(|r|
-            r.validation.is_none() && settings.device_raw_profiles.iter().any(|(id, raw)|
-                raw == &r.raw && settings.resident_slots.get(id) == Some(&r.slot)
-                    && settings.layouts.get(id).is_some_and(|profile|
-                        validate_portable_resident_profile(r, profile).is_ok())))
-            && settings.layouts.keys().filter(|id| id.as_str() != "default").all(|id|
-                state.resident_recoveries.values().any(|r| settings.device_raw_profiles.get(id) == Some(&r.raw)
-                    && settings.resident_slots.get(id) == Some(&r.slot)))
     }
 }
 
 /// Prove that the portable profile can reconstruct every physical FULL frame.
 /// Raw records are not serialized by the current envelope, so a lossy decoder
 /// must not turn an intact device record into a falsely complete backup.
+#[cfg(test)]
 pub(crate) fn validate_portable_resident_profile(
     record: &resident100::RecoveredRecord,
     profile: &crate::application_layouts::ApplicationLayout,

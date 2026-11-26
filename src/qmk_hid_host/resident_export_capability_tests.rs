@@ -26,7 +26,7 @@ fn unattended_inventory_requires_lossless_profile_payload_not_only_raw_membershi
         settings.layouts.insert(decoded.id.clone(), decoded);
         {
             let mut state = bridge.application_layout_snapshot.lock().unwrap();
-            state.resident_export_capability = Some(true);
+            state.resident_export_capability = Some(resident_catalog::Capability::Resident(resident_catalog::fixture_capabilities()));
             state.resident_inventory_complete = true;
             state.resident_recoveries.insert(99, record);
         }
@@ -101,9 +101,12 @@ fn export_probe_zero_wrong_nonce_padding_and_transport_remain_unknown() {
 
 #[test]
 fn export_catalog_checked_cancels_before_and_after_enum_exchange() {
-    for cancel_at in [1, 2, 201, 202, 400, 401] {
+    for cancel_at in [1, 2, 3, 4, 203, 204, 402, 403] {
         let (hid, rec) = crate::hid::HidDevice::test_device();
         rec.respond_by(|p| {
+            if p[..3] == [0xef, 9, 7] {
+                let mut r = *p; r[2] = 0x87; r[3] = 2; return Some(Ok(r));
+            }
             assert_eq!(p[..3], [0xef, 9, 3]);
             let mut r = *p;
             r[2] = 0x83;
@@ -111,7 +114,7 @@ fn export_catalog_checked_cancels_before_and_after_enum_exchange() {
             Some(Ok(r))
         });
         let mut checks = 0;
-        let result = hid.read_resident_export_catalog_checked(&mut || {
+        let result = hid.read_resident_export_catalog_with_capabilities(resident_catalog::fixture_capabilities(), &mut || {
             checks += 1;
             anyhow::ensure!(checks != cancel_at, "modeled cancellation");
             Ok(())
@@ -124,17 +127,18 @@ fn export_catalog_checked_cancels_before_and_after_enum_exchange() {
 
 #[test]
 fn export_catalog_checked_cancels_before_and_after_read_exchange() {
-    for cancel_at in [3, 4] {
+    for cancel_at in [5, 6] {
         let (hid, rec) = crate::hid::HidDevice::test_device();
         rec.respond_by(|p| {
             let mut r = *p;
             r[2] |= 0x80;
-            if p[2] == 3 { r[8..].fill(7); }
+            if p[2] == 7 { r[3] = 2; }
+            else if p[2] == 3 { r[8..].fill(7); }
             else { r[10] = 0; }
             Some(Ok(r))
         });
         let mut checks = 0;
-        let result = hid.read_resident_export_catalog_checked(&mut || {
+        let result = hid.read_resident_export_catalog_with_capabilities(resident_catalog::fixture_capabilities(), &mut || {
             checks += 1;
             anyhow::ensure!(checks != cancel_at, "modeled READ cancellation");
             Ok(())
@@ -142,7 +146,7 @@ fn export_catalog_checked_cancels_before_and_after_read_exchange() {
         assert!(result.unwrap_err().to_string().contains("modeled READ cancellation"));
         let ps = rec.requests();
         assert_eq!(ps.len(), cancel_at / 2);
-        if cancel_at == 4 { assert_eq!(ps[1][..3], [0xef, 9, 6]); }
+        if cancel_at == 6 { assert_eq!(ps[2][..3], [0xef, 9, 6]); }
     }
 }
 
@@ -168,10 +172,10 @@ fn export_inventory_unknown_false_true_and_revoke_are_distinct() {
     {
         let mut s = bridge.application_layout_snapshot.lock().unwrap();
         s.resident_inventory_complete = false;
-        s.resident_export_capability = Some(false);
+        s.resident_export_capability = Some(resident_catalog::Capability::Legacy);
     }
     assert!(bridge.resident_export_inventory_confirmed(&settings));
-    bridge.application_layout_snapshot.lock().unwrap().resident_export_capability = Some(true);
+    bridge.application_layout_snapshot.lock().unwrap().resident_export_capability = Some(resident_catalog::Capability::Resident(resident_catalog::fixture_capabilities()));
     assert!(!bridge.resident_export_inventory_confirmed(&settings));
     bridge.application_layout_snapshot.lock().unwrap().resident_inventory_complete = true;
     assert!(bridge.resident_export_inventory_confirmed(&settings));
@@ -182,7 +186,7 @@ fn export_inventory_unknown_false_true_and_revoke_are_distinct() {
     bridge.bind_selected_application_layout_device("replacement".into());
     assert!(!bridge.resident_export_inventory_confirmed(&settings));
     let mut s = bridge.application_layout_snapshot.lock().unwrap();
-    s.resident_export_capability = Some(false);
+    s.resident_export_capability = Some(resident_catalog::Capability::Legacy);
     s.revoke();
     assert_eq!(s.resident_export_capability, None);
 }

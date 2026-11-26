@@ -537,7 +537,6 @@ impl EntropyApp {
         self.maybe_begin_bluetooth_reconnect();
         #[cfg(unix)]
         self.poll_console_export(ctx);
-        self.finish_deferred_full_layout_action(ctx);
         self.maybe_start_periodic_battery_refresh(ctx, main_window_hidden_to_tray);
         self.maybe_start_deferred_device_load(ctx, main_window_hidden_to_tray);
         if self.application_layout_runtime_needed() {
@@ -547,6 +546,11 @@ impl EntropyApp {
             self.foreground_repaint_subscription = None;
         }
         self.update_application_layout_runtime();
+        // A cold full read can complete in this frame. Reconcile native Default
+        // through its normal owner before an export freezes the profile library;
+        // otherwise its author-data guard compares yesterday's Default to the
+        // freshly read keys and the first request only warms the next attempt.
+        self.finish_deferred_full_layout_action(ctx);
         // Foreground application changes happen while Entropy itself is not
         // focused. Keep a lightweight runtime tick alive so auto-switching is
         // not accidentally tied to egui input/repaint events.

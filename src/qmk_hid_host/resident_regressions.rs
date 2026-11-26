@@ -77,7 +77,7 @@ fn cancelled_store_recovers_readback(existing: bool, cancellation: &str) {
     let generation = {
         let mut state = owner.lock().unwrap();
         state.snapshot = foreground.clone();
-        state.resident_export_capability = Some(true);
+        state.resident_export_capability = Some(resident_catalog::Capability::Resident(resident_catalog::fixture_capabilities()));
         state.generation
     };
     let mut snapshot = profile();
@@ -501,6 +501,7 @@ impl Peer {
             }
             0xef => {
                 assert_eq!(p[1],9);
+                if p[2] == 7 { reply[2] = 0x87; reply[3] = 2; reply[8..].fill(0); return Some(Ok(reply)); }
                 self.slots.resize(100,None);self.raws.resize(100,None);
                 if p[2]==3 {
                     reply[2]=0x83;reply[8..].fill(0);

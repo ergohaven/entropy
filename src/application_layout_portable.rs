@@ -88,15 +88,11 @@ impl EntropyApp {
         // The namespace is produced by Device::application_layout_storage_key,
         // including while editing a retained offline device. The source profile
         // (or an already-corrupted target profile) cannot choose target geometry.
-        let sm62 = self.selected_device.and_then(|index| self.device_manager.devices().get(index)).map_or_else(
-            || key.ends_with("-sm62") || key.rsplit_once("-sm62-owner-").is_some_and(|(model, owner)| {
-                !model.is_empty() && owner.len() == 40 && owner.bytes().all(|byte| byte.is_ascii_hexdigit())
-            }),
-            |device| device.is_ergohaven_sm62(),
-        );
-        let controls = if sm62 { 62 } else { crate::application_layouts::APPLICATION_LAYOUT_CONTROL_COUNT };
+        let geometry = self.application_layout_target_geometry().context("Target application geometry is unconfirmed")?;
+        let controls = geometry.controls();
         if source.layers.iter().any(|layer| layer.len() != controls)
-            || (sm62 && source.encoder_stacks.iter().any(|stack| !stack.is_empty()))
+            || (!geometry.presets() && source.encoder_stacks.iter().any(|stack| !stack.is_empty()))
+            || (geometry.matrix() && !geometry.complete(&source.layers))
         {
             bail!("Application layout geometry does not match the target device; nothing was written");
         }

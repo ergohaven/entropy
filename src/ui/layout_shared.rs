@@ -327,8 +327,12 @@ pub(crate) fn layout_uses_combined_encoder_press(layout: &KeyboardLayout) -> boo
     matches!(
         name.as_str(),
         "ergohavenk03" | "k03" | "ergohavenimperial44" | "imperial44"
-    ) || name.starts_with("m4cr0pad")
+    ) || name.starts_with("macropad")
+        || name.starts_with("ergohavenmacropad")
+        || name.starts_with("m4cr0pad")
         || name.starts_with("ergohavenm4cr0pad")
+        || name.starts_with("hpdv2")
+        || name.starts_with("ergohavenhpdv2")
 }
 
 pub(crate) fn encoder_group_layout_condition(
@@ -836,6 +840,86 @@ mod tests {
                 "{name}"
             );
         }
+    }
+
+    #[test]
+    fn hpd_v2_modules_pair_each_encoder_with_its_centered_press_key() {
+        for (variant, press_rows) in [
+            ("enc/ball", vec![5]),
+            ("ball/enc", vec![11]),
+            ("enc/enc", vec![5, 11]),
+            ("enc/touch", vec![5]),
+            ("touch/enc", vec![11]),
+            ("enc/joy", vec![5]),
+        ] {
+            let mut rows = vec![serde_json::json!(["0,0"])];
+            for (idx, row) in press_rows.iter().enumerate() {
+                // The descriptor centers the press between the direction slots.
+                rows.push(serde_json::json!([
+                    {"rx": if *row == 5 { 6.5 } else { 10.5 }, "ry": 2.0},
+                    format!("{idx},0\n\n\n\n\n\n\n\n\ne"),
+                    {"x": -1, "y": 1},
+                    format!("{row},6"),
+                    {"x": -1, "y": 1},
+                    format!("{idx},1\n\n\n\n\n\n\n\n\ne")
+                ]));
+            }
+            let layout = KeyboardLayout::from_vial_json(&serde_json::json!({
+                "name": format!("HPD v2 {variant}"),
+                "matrix": {"rows": 12, "cols": 7},
+                "layouts": {"keymap": rows}
+            }))
+            .unwrap();
+            let geometry = LayoutGeometry {
+                offset_x: 0.0,
+                offset_y: 0.0,
+                unit: 64.0,
+                padding: 3.0,
+                layout_h: 384.0,
+            };
+            let key_rects = layout
+                .keys
+                .iter()
+                .enumerate()
+                .map(|(idx, key)| (idx, layout_physical_key_rect(key, geometry)))
+                .collect::<Vec<_>>();
+            let mut groups = std::collections::BTreeMap::<u8, egui::Rect>::new();
+            for encoder in &layout.encoders {
+                let rect = layout_physical_encoder_rect(encoder, geometry);
+                groups
+                    .entry(encoder.encoder_idx)
+                    .and_modify(|group| *group = group.union(rect))
+                    .or_insert(rect);
+            }
+            let group_rects = groups.into_iter().collect::<Vec<_>>();
+            let presses = encoder_press_key_rects(&layout, &key_rects, &group_rects, &[]);
+            assert_eq!(presses.len(), press_rows.len(), "{variant}");
+            for press in presses {
+                let key = &layout.keys[press.key_idx];
+                assert_eq!(
+                    (key.row, key.col),
+                    (press_rows[press.encoder_idx as usize], 6)
+                );
+                let group = group_rects
+                    .iter()
+                    .find(|(idx, _)| *idx == press.encoder_idx)
+                    .unwrap()
+                    .1;
+                assert_eq!(press.press_rect.center(), group.center(), "{variant}");
+            }
+        }
+    }
+
+    #[test]
+    fn hpd_v2_does_not_capture_an_offset_module_key() {
+        let mut layout = encoder_test_layout(&[None], None);
+        layout.name = "HPD v2 enc/joy".to_owned();
+        let group = egui::Rect::from_center_size(egui::pos2(128.0, 192.0), egui::vec2(58.0, 186.0));
+        let key_rects = vec![(
+            0,
+            egui::Rect::from_center_size(egui::pos2(64.0, 96.0), egui::vec2(58.0, 58.0)),
+        )];
+        assert!(encoder_press_key_rects(&layout, &key_rects, &[(0, group)], &[]).is_empty());
     }
 
     #[test]

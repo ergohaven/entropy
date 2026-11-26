@@ -1478,6 +1478,26 @@ pub fn modal_centered_text_block(ui: &mut Ui, width: f32, add_contents: impl FnO
     });
 }
 
+/// All Config/Advanced pages start below the main navigation, not below the
+/// Layout tab's layer bar or application-layout selector.
+pub fn settings_page_content_top(navigation_top: f32, navigation_height: f32) -> f32 {
+    const NAVIGATION_CONTENT_GAP: f32 = 8.0;
+    navigation_top + navigation_height + NAVIGATION_CONTENT_GAP
+}
+
+/// Standard Settings/Advanced title and muted description. The caller owns
+/// column alignment and the gap before the controls, as on the existing pages.
+pub fn settings_section_header(ui: &mut Ui, title: &str, description: &str) -> egui::Response {
+    let title_response = ui.label(RichText::new(title.trim_end_matches('.')).size(18.0).strong());
+    ui.add_space(6.0);
+    ui.label(
+        RichText::new(description.trim_end_matches('.'))
+            .size(13.0)
+            .color(muted_text(ui.visuals().dark_mode)),
+    );
+    title_response
+}
+
 pub fn settings_list_row(
     ui: &mut Ui,
     content_width: f32,

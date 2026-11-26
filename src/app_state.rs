@@ -661,6 +661,7 @@ pub(crate) struct DeviceAboutInfo {
     pub(crate) path: String,
     pub(crate) firmware_version: Option<String>,
     pub(crate) supports_application_layouts: bool,
+    pub(crate) application_layout_geometry: Option<crate::application_layouts::ApplicationLayoutGeometry>,
     // Connection-local only; never a persisted editor/runtime authority grant.
     pub(crate) application_layout_probe_failed: bool,
     pub(crate) firmware_update_target: Option<FirmwareReleaseTarget>,
@@ -2039,6 +2040,18 @@ pub(crate) struct ModuleSettingsGroup {
 }
 
 impl ModuleSettingsGroup {
+    pub(crate) fn is_global_encoder_settings(&self) -> bool {
+        self.kind == ModuleSettingsGroupKind::Other
+            && self.title.eq_ignore_ascii_case("Encoders")
+            && self.fields.len() == 2
+            && ["Encoder interval", "Encoder steps"].iter().all(|title| {
+                self.fields.iter().any(|field| {
+                    field.title.eq_ignore_ascii_case(title)
+                        && field.kind == ModuleSettingKind::Select
+                })
+            })
+    }
+
     pub(crate) fn module_selector_field(&self) -> Option<&ModuleSettingField> {
         self.fields.iter().find(|field| {
             matches!(field.kind, ModuleSettingKind::Select)
@@ -2218,20 +2231,33 @@ impl std::fmt::Display for ModuleSettingWritebackError {
 
 impl ModuleSettingsState {
     pub(crate) fn is_trackball_page(&self) -> bool {
-        let mut has_trackball_group = false;
-        let only_trackball_groups = self.groups.iter().all(|group| match group.kind {
+        self.is_pointing_page(&["trackball"])
+    }
+
+    pub(crate) fn is_touchpad_page(&self) -> bool {
+        self.is_pointing_page(&["touchpad", "trackpad"])
+    }
+
+    fn is_pointing_page(&self, names: &[&str]) -> bool {
+        let mut has_pointing_group = false;
+        let only_pointing_groups = self.groups.iter().all(|group| match group.kind {
             ModuleSettingsGroupKind::AutoLayer => true,
             ModuleSettingsGroupKind::Other => {
-                let is_trackball = group
+                // These controls have their own Encoders route and do not
+                // turn a dedicated pointing page into a mixed module page.
+                if group.is_global_encoder_settings() {
+                    return true;
+                }
+                let is_pointing = group
                     .title
                     .split(|character: char| !character.is_ascii_alphanumeric())
-                    .any(|word| word.eq_ignore_ascii_case("trackball"));
-                has_trackball_group |= is_trackball;
-                is_trackball
+                    .any(|word| names.iter().any(|name| word.eq_ignore_ascii_case(name)));
+                has_pointing_group |= is_pointing;
+                is_pointing
             }
             ModuleSettingsGroupKind::Left | ModuleSettingsGroupKind::Right => false,
         });
-        has_trackball_group && only_trackball_groups
+        has_pointing_group && only_pointing_groups
     }
 
     pub(crate) fn selected_module_group(&self) -> Option<usize> {

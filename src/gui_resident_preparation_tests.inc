@@ -1,4 +1,57 @@
 // Real menu and serialized worker; only OS HID and native portal are scripted.
+#[cfg(target_os = "linux")]
+#[test]
+fn gui_sm62_cold_export_reaches_save_picker_through_native_lifecycle() {
+    let _storage = crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app, _session, recorder) = scripted_export_device_app(|_| None, true);
+    // The user's native HID trace reports roughly 68 ms per resident request.
+    // Realistic round trips must not be replaced with instantaneous test replies.
+    resident_export_peer_observing(&recorder, "", |packet| {
+        if packet[..2] == [0xef, 9] {
+            std::thread::sleep(Duration::from_millis(68));
+        }
+    });
+    app.headless = false;
+    let ctx = egui::Context::default();
+    app.start_connect(0);
+    let end = Instant::now() + Duration::from_secs(120);
+    while app.layout.is_none() || matches!(app.connect_state, ConnectState::Loading { .. }) {
+        app.poll_connect(&ctx);
+        assert!(Instant::now() < end, "cold connect did not complete: {}", app.status_msg);
+        std::thread::yield_now();
+    }
+    // Click immediately after connect, without a preliminary runtime tick.
+    // Persisted Default is from the prior connection; native layer-name reads
+    // must reconcile it before the first export freezes its author-data guard.
+    let key = app.application_layout_device_key().expect("connected SM62 library");
+    let mut known = crate::application_layouts::DeviceApplicationLayouts::default();
+    let default = known.layouts.get_mut("default").unwrap();
+    default.layers = vec![vec![4; 62]; 16];
+    default.layer_names[0] = "Before reconnect".into();
+    app.app_settings.application_layouts.insert(key, known);
+    app.default_layout_device_reconciled = false;
+    // The first action must initialize data AND reach the picker itself.
+    let dir = tempfile::tempdir().unwrap();
+    let path = dir.path().join("sm62.entlayout");
+    crate::app::file_dialog::set_test_dialog_result(Some(path.clone()));
+    click_resident_export_without_wait(&mut app, &ctx);
+    while app.pending_file_dialog.is_none()
+        && (app.deferred_full_layout_action.is_some()
+            || app.gui_entlayout_preparation.is_some()
+            || app.vial_hid_task_active())
+    {
+        app.tick_layout_import_lifecycle_for_test(&ctx, 1.1);
+        assert!(Instant::now() < end, "cold export did not finish: {}", app.status_msg);
+        std::thread::yield_now();
+    }
+    assert!(app.pending_file_dialog.is_some(), "save picker missing after cold export: {}", app.status_msg);
+    app.poll_file_dialog(&ctx);
+    let exported: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(exported["keyboard"]["name"], "SM62");
+    assert!(exported["application_layouts"].as_object().unwrap().contains_key("default"));
+    assert!(recorder.requests().iter().all(|packet| !is_write(packet)));
+}
+
 // Source-first regression; execution deliberately deferred to parent checkpoint.
 #[cfg(target_os = "linux")]
 #[test]
@@ -151,6 +204,13 @@ fn preimport_resident_peer(
                 return Some(Ok(r));
             }
             _ => {}
+        }
+        if p[..3] == [0xef, 9, 7] {
+            let mut reply = *p; reply[2] = 0x87;
+            reply[8..].fill(0); reply[8..12].copy_from_slice(&1u32.to_le_bytes());
+            reply[12] = 100; reply[13] = 13;
+            for (slot, _) in &records { reply[14 + usize::from(*slot)/8] |= 1 << (*slot % 8); }
+            return Some(Ok(reply));
         }
         if p[..2] != [0xef, 9] { return None; }
         assert!(matches!(p[2], 3 | 6), "backup must be read-only: {p:?}");

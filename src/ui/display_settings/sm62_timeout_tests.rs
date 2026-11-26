@@ -75,7 +75,6 @@ fn sm62_timeout_right_edge_matches_shared_hold_field() {
                             Some(&mut hold),
                             None,
                             None,
-                            None,
                         );
                         app.draw_sm62_timeout_control(ui);
                     })

@@ -825,7 +825,7 @@ fn display_settings_row(
     control_width: f32,
     control: impl FnOnce(&mut egui::Ui),
 ) {
-    let mut tooltip = None;
+    let mut tooltip = sm62_display_setting_tooltip(label);
     for lang in [
         crate::i18n::Language::Russian,
         crate::i18n::Language::English,
@@ -4918,7 +4918,7 @@ mod tests {
                 assert!(!labels.contains(&category), "unnecessary category {category}: {labels:?}");
             }
             let russian = language == crate::i18n::Language::Russian;
-            assert!(labels.contains(&if russian { "Режимы экранов настраиваются отдельно. Настройки сохраняются в клавиатуре." } else { "Display modes are configured independently. Settings are saved on the keyboard." }));
+            assert!(labels.contains(&if russian { "Режимы экранов настраиваются отдельно; настройки сохраняются в клавиатуре" } else { "Display modes are configured independently; settings are saved on the keyboard" }));
             assert!(!labels.iter().any(|l| l.starts_with("Корабль как режим") || l.starts_with("Spaceship mode is continuous")));
             let layout=labels.iter().position(|l| *l==if russian {"Показывать текущую раскладку RU/EN"} else {"Show current layout RU/EN"}).unwrap();
             let date=labels.iter().position(|l| *l==if russian {"Дата на часах"} else {"Date on clock"}).unwrap();
@@ -4931,24 +4931,22 @@ mod tests {
                     "Режим по умолчанию",
                     "Анимация ожидания через",
                     "Показывать раскладку при нажатии",
-                    "Кириллические символы",
+                    "Раскладка",
                     "Показывать раскладку в течение",
                     "Дата на часах",
                     "Показывать текущую раскладку RU/EN",
                     "Анимация звёзд",
-                    "Выключить экраны",
                 ]
             } else {
                 [
                     "Default mode",
                     "Enable standby mode after",
                     "Show layout on key press",
-                    "Cyrillic symbols",
+                    "Layout",
                     "Show layout for",
                     "Date on clock",
                     "Show current layout RU/EN",
                     "Star animation",
-                    "Turn off displays",
                 ]
             } {
                 assert_eq!(labels.iter().filter(|label| **label == control).count(), 1,
@@ -4972,7 +4970,7 @@ mod tests {
                 screen_rect: Some(egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(700.0, 900.0))),
                 events, ..Default::default()
             }, |ctx| { ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
-                sm62_display_controls(ui, side, &mut values, &mut changed, false);
+                sm62_display_controls(ui, side, &mut values, &mut changed, false, None);
             })); }))
         };
         let click = |pos| vec![egui::Event::PointerMoved(pos),
@@ -5018,7 +5016,7 @@ mod tests {
             let mut id = egui::Id::NULL;
             let output = crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
                 ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
-                    id = sm62_display_controls(ui, 0, &mut values, &mut changed, false);
+                    id = sm62_display_controls(ui, 0, &mut values, &mut changed, false, None);
                 }));
             }));
             assert_eq!(values, saved);
@@ -5030,13 +5028,13 @@ mod tests {
                 egui::Popup::open_id(&ctx, id);
                 let draw = |ctx: &egui::Context| {
                     ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
-                        sm62_display_controls(ui, 0, &mut values, &mut changed, false);
+                        sm62_display_controls(ui, 0, &mut values, &mut changed, false, None);
                     }));
                 };
                 ctx.run_pass(egui::RawInput::default(), draw).drop_without_applying_deltas();
                 let output = crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
                     ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
-                        sm62_display_controls(ui, 0, &mut values, &mut changed, false);
+                        sm62_display_controls(ui, 0, &mut values, &mut changed, false, None);
                     }));
                 }));
                 let labels: Vec<_> = output.shapes.iter().filter_map(|s| match &s.shape {
@@ -5069,7 +5067,7 @@ mod tests {
             let mut language = [1,1];
             let mut draw = |events| crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput { events, ..Default::default() }, |ctx| {
                 ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
-                    sm62_shared_controls(ui,&mut values,&mut Vec::new(),false,None,None,Some(&mut language),None,None);
+                    sm62_shared_controls(ui,&mut values,&mut Vec::new(),false,None,None,Some(&mut language),None);
                 }));
             }));
             let output = draw(vec![]);
@@ -5082,7 +5080,7 @@ mod tests {
                     }
                     _ => None,
                 })
-                .nth(1)
+                .nth(0)
                 .expect("language switch paint");
             draw(vec![
                 egui::Event::PointerMoved(pos),
@@ -5116,7 +5114,7 @@ mod tests {
         let mut changed = Vec::new();
         let output = crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput::default(), |ctx| {
             ctx.root_ui(|ui| egui::CentralPanel::default().show(ui, |ui| {
-                sm62_shared_controls(ui,&mut values,&mut changed,false,Some(&mut date),Some(&mut hold),Some(&mut language),None,None);
+                sm62_shared_controls(ui,&mut values,&mut changed,false,Some(&mut date),Some(&mut hold),Some(&mut language),None);
             }));
         }));
         assert_eq!((values,date,hold,language),before);
@@ -5128,14 +5126,14 @@ mod tests {
 
     #[test]
     fn sm62_shared_switches_apply_both_without_changing_other_settings() {
-        for index in 0..3 {
+        for index in 0..2 {
             let ctx = egui::Context::default();
             let mut values = [0,0,20,1,1,2,1,0,1,1];
             let mut date = [1,1]; let mut hold = [112,333]; let mut language = [1,1];
             let before = values; let mut changed = Vec::new();
             let mut draw = |events| crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput { events,..Default::default() },|ctx| {
                 ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui| {
-                    sm62_shared_controls(ui,&mut values,&mut changed,false,Some(&mut date),Some(&mut hold),Some(&mut language),None,None);
+                    sm62_shared_controls(ui,&mut values,&mut changed,false,Some(&mut date),Some(&mut hold),Some(&mut language),None);
                 }));
             }));
             let output = draw(vec![]);
@@ -5149,7 +5147,7 @@ mod tests {
                     _ => None,
                 })
                 .collect();
-            assert_eq!(switches.len(), 5);
+            assert_eq!(switches.len(), 3);
             let pos = switches[index];
             draw(vec![
                 egui::Event::PointerMoved(pos),
@@ -5167,15 +5165,10 @@ mod tests {
                 },
             ]);
             drop(draw);
-            if index == 0 {
-                assert_eq!([values[4], values[9]], [0, 0]);
-                assert_eq!(changed, [4, 9]);
-            } else {
-                assert_eq!(values, before);
-                assert!(changed.is_empty());
-            }
-            assert_eq!(date, if index == 2 { [0, 0] } else { [1, 1] });
-            assert_eq!(language, if index == 1 { [0, 0] } else { [1, 1] });
+            assert_eq!(values, before);
+            assert!(changed.is_empty());
+            assert_eq!(date, if index == 1 { [0, 0] } else { [1, 1] });
+            assert_eq!(language, if index == 0 { [0, 0] } else { [1, 1] });
             assert_eq!(hold, [112, 333]);
             assert_eq!(
                 [
@@ -5193,7 +5186,7 @@ mod tests {
     fn shared_hold_dropdown_choice(initial:[u16;2],selected:&str)->[u16;2] {
         let ctx=egui::Context::default();let mut values=[0,0,20,1,1,0,0,20,1,1];let before=values;let mut hold=initial;
         let mut draw=|events| crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput {events,..Default::default()},|ctx| {
-            ctx.root_ui(|ui|egui::CentralPanel::default().show(ui,|ui|sm62_shared_controls(ui,&mut values,&mut Vec::new(),false,None,Some(&mut hold),None,None,None)));
+            ctx.root_ui(|ui|egui::CentralPanel::default().show(ui,|ui|sm62_shared_controls(ui,&mut values,&mut Vec::new(),false,None,Some(&mut hold),None,None)));
         }));
         let position=|out:&egui::FullOutput,label:&str|out.shapes.iter().rev().find_map(|s|match &s.shape {egui::Shape::Text(t) if t.galley.job.text==label=>Some(t.pos+t.galley.size()/2.0),_=>None}).unwrap();
         let output=draw(vec![]);let p=position(&output,"Mixed");
@@ -5341,19 +5334,19 @@ mod tests {
 
     #[test]
     fn sm62_new_shared_effect_switches_apply_to_both_only() {
-        for index in [3,4] {
+        for index in [2] {
             let ctx=egui::Context::default();
             let mut values=[0,0,20,1,1,2,1,0,1,1];let before=values;
-            let mut stars=[1,1];let mut off=[0,0];let mut changed=Vec::new();
+            let mut stars=[1,1];let mut changed=Vec::new();
             let mut draw=|events|crate::app::discard_texture_deltas(ctx.run_pass(egui::RawInput {events,..Default::default()},|ctx| {
-                ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui| {sm62_shared_controls(ui,&mut values,&mut changed,false,None,None,None,Some(&mut stars),Some(&mut off));}));
+                ctx.root_ui(|ui| egui::CentralPanel::default().show(ui,|ui| {sm62_shared_controls(ui,&mut values,&mut changed,false,None,None,None,Some(&mut stars));}));
             }));
             let output=draw(vec![]);let switches:Vec<_>=output.shapes.iter().filter_map(|s|match &s.shape {egui::Shape::Rect(r) if r.rect.width()==46.0&&r.rect.height()==24.0=>Some(r.rect.center()),_=>None}).collect();
             let pos=switches[index];draw(vec![egui::Event::PointerMoved(pos),
                 egui::Event::PointerButton {pos,button:egui::PointerButton::Primary,pressed:true,modifiers:Default::default()},
                 egui::Event::PointerButton {pos,button:egui::PointerButton::Primary,pressed:false,modifiers:Default::default()}]);
             drop(draw);assert_eq!(values,before);assert!(changed.is_empty());
-            assert_eq!(stars,if index==3 {[0,0]} else {[1,1]});assert_eq!(off,if index==4 {[1,1]} else {[0,0]});
+            assert_eq!(stars,[0,0]);
         }
     }
 
@@ -5376,11 +5369,11 @@ mod tests {
             egui::Event::PointerButton {pos,button:egui::PointerButton::Primary,pressed:false,modifiers:Default::default()}]);
         let output=draw(vec![]);
         let (id,max)=ctx.data(|data|data.get_temp::<(egui::Id,f32)>(egui::Id::unique("sm62_scroll_fixture"))).unwrap();assert!(max>0.0);assert!(egui::scroll_area::State::load(&ctx,id).unwrap().unclamped_offset().y>0.0);
-        assert!(output.shapes.iter().any(|s|match &s.shape {egui::Shape::Text(t) if t.galley.job.text=="Turn off displays"=>s.clip_rect.contains(t.pos+t.galley.size()/2.0),_=>false}),"last setting must be visible after scrolling");
+        assert!(output.shapes.iter().any(|s|match &s.shape {egui::Shape::Text(t) if t.galley.job.text=="Turn display off after"=>s.clip_rect.contains(t.pos+t.galley.size()/2.0),_=>false}),"last setting must be visible after scrolling");
     }
 
     #[test]
-    fn sm62_settings_column_is_centered_bounded_and_headings_centered() {
+    fn sm62_half_and_shared_settings_use_the_same_bounded_column() {
         for language in [crate::i18n::Language::English,crate::i18n::Language::Russian] {
             for width in [540.0,1000.0,1600.0,2560.0] {
                 let ctx=egui::Context::default();let cc=eframe::CreationContext::_new_kittest(ctx.clone());let mut app=EntropyApp::new(&cc);app.app_settings.language=language;
@@ -5393,7 +5386,8 @@ mod tests {
                 let russian=language==crate::i18n::Language::Russian;
                 let half_label=if russian {"Половинка"} else {"Half"};
                 let label=top.shapes.iter().find_map(|s|match &s.shape {egui::Shape::Text(t) if t.galley.job.text==half_label=>Some(t.pos),_=>None}).unwrap();
-                let selector=top.shapes.iter().find_map(|s|match &s.shape {egui::Shape::Rect(r) if r.rect.height()==34.0 && r.rect.center().y >= label.y && r.rect.center().y < label.y+26.0=>Some(r.rect),_=>None}).unwrap();
+                let control_height=crate::ui_style::ResponsiveMetrics::from_ctx(&ctx).settings_control_height();
+                let selector=top.shapes.iter().find_map(|s|match &s.shape {egui::Shape::Rect(r) if r.rect.height()==control_height && r.rect.center().y >= label.y && r.rect.center().y < label.y+26.0=>Some(r.rect),_=>None}).unwrap();
                 let center=(label.x-2.0+selector.right())/2.0;
                 let expected_center=width/2.0-9.0;
                 if width < 620.0 {
@@ -5413,14 +5407,14 @@ mod tests {
                 scroll_sm62_display_to(&ctx,max);
                 draw();let bottom=draw();drop(draw);
                 let shared=if russian {"Общие настройки экранов"} else {"Shared display settings"};
-                let symbol=if russian {"Кириллические символы"} else {"Cyrillic symbols"};
+                let symbol=if russian {"Раскладка"} else {"Layout"};
                 let shared_center=bottom.shapes.iter().find_map(|s|match &s.shape {egui::Shape::Text(t) if t.galley.job.text==shared=>Some(t.pos.x+t.galley.rect.center().x),_=>None}).unwrap();
-                assert!((shared_center-expected_center).abs()<2.0,"shared heading must align with half headings, width={width}");
+                assert!((shared_center-center).abs()<2.0,"shared heading must be centered over the settings column, width={width}");
                 let left=bottom.shapes.iter().find_map(|s|match &s.shape {egui::Shape::Text(t) if t.galley.job.text==symbol=>Some(t.pos.x-2.0),_=>None}).unwrap();
                 let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(&ctx);
                 let gutter = metrics.settings_content_width() - metrics.settings_row_content_width();
                 let block_width=(full.width()-gutter).min(metrics.settings_row_content_width());
-                assert!((left-(expected_center-block_width/2.0)).abs()<2.0,"shared row must not stretch to window width: width={width}, left={left}, expected_center={expected_center}, block_width={block_width}, full={full:?}");
+                assert!((left-(label.x-2.0)).abs()<2.0,"shared and half settings must have the same left edge: width={width}, shared={left}, half={}",label.x-2.0);
                 let symbol_top = bottom.shapes.iter().find_map(|shape| match &shape.shape {
                     egui::Shape::Text(t) if t.galley.job.text == symbol => Some(t.pos.y), _ => None,
                 }).unwrap();
@@ -5429,7 +5423,7 @@ mod tests {
                         && r.rect.center().y >= symbol_top
                         && s.clip_rect.contains(r.rect.center()) => Some(r.rect), _=>None
                 }).collect();
-                assert_eq!(switches.len(), 5, "all shared switches must be visible at the bottom");
+                assert_eq!(switches.len(), 3, "all shared switches must be visible at the bottom");
                 assert!(switches.iter().all(|r| (r.right()-(left+block_width)).abs()<2.0),
                     "shared controls must stay in the same bounded block");
             }
@@ -6146,15 +6140,26 @@ fn sm62_display_controls(
     values: &mut [u8; 10],
     changed: &mut Vec<usize>,
     russian: bool,
+    mut screens_off: Option<&mut [u8; 2]>,
 ) -> egui::Id {
     let base = side * 5;
     let width = ui.available_width();
     let row_height = 54.0;
-    let control_width = sm62_dropdown_width(width);
-    let modes: Vec<String> = (if russian { ["Часы", "Плеер", "Корабль", "Раскладка"] }
+    let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
+    let control_width = metrics.settings_control_width().min(width.max(1.0));
+    let mut modes: Vec<String> = (if russian { ["Часы", "Плеер", "Корабль", "Раскладка"] }
         else { ["Clock", "Player", "Spaceship", "Layout"] })
         .into_iter().map(str::to_owned).collect();
-    let mut mode = values[base].min(3);
+    if screens_off.is_some() {
+        modes.push(if russian { "Выключен" } else { "Off" }.to_owned());
+    }
+    // Off is a view of the existing per-half power setting, not a new firmware
+    // mode. Keep the saved scene intact while this display is off.
+    let mut mode = if screens_off.as_deref().is_some_and(|pair| pair[side] != 0) {
+        4
+    } else {
+        values[base].min(3)
+    };
     let mut mode_edited = false;
     display_settings_row(
         ui,
@@ -6174,8 +6179,8 @@ fn sm62_display_controls(
                 &modes,
                 mode as usize,
                 control_width,
-                34.0,
-                12.0,
+                metrics.settings_control_height(),
+                metrics.settings_control_font_size(),
             );
             if let Some(picked) = picked {
                 mode = picked as u8;
@@ -6184,7 +6189,12 @@ fn sm62_display_controls(
         },
     );
     if mode_edited {
-        sm62_apply_mode_change(values, changed, side, mode);
+        if let Some(pair) = screens_off.as_deref_mut() {
+            pair[side] = u8::from(mode == 4);
+        }
+        if mode != 4 {
+            sm62_apply_mode_change(values, changed, side, mode);
+        }
         // Couple this option only to an explicit enabled mode selection.
         // Stored Layout/keypress=0 is valid input to a read-only render.
         if mode == 3 && values[base + 3] == 0 {
@@ -6250,7 +6260,7 @@ fn sm62_display_controls(
         true,
         control_width,
         |ui| {
-            ui.add_enabled_ui(mode != 2, |ui| {
+            ui.add_enabled_ui(mode != 2 && mode != 4, |ui| {
                 idle_dropdown_id = ui.make_persistent_id(("sm62_idle_delay", side));
                 let (_, choice) = crate::ui_style::modern_dropdown_select_sized(
                     ui,
@@ -6258,8 +6268,8 @@ fn sm62_display_controls(
                     &labels,
                     selected,
                     control_width,
-                    34.0,
-                    12.0,
+                    metrics.settings_control_height(),
+                    metrics.settings_control_font_size(),
                 );
                 picked = choice;
             });
@@ -6297,7 +6307,7 @@ fn sm62_display_controls(
             control_width,
             |ui| {
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add_enabled_ui(!locked_layout && !locked_ship, |ui| {
+                    ui.add_enabled_ui(mode != 4 && !locked_layout && !locked_ship, |ui| {
                         edited = crate::ui_style::settings_switch_sized_stable(
                             ui,
                             ("sm62_switch", side, offset),
@@ -6370,14 +6380,19 @@ impl EntropyApp {
         crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(18.0);
-                ui.label(RichText::new(if russian { "Дисплей" } else { "Display" })
-                    .size(18.0).strong());
-                ui.add_space(6.0);
-                ui.label(RichText::new(if russian {
-                    "Режимы экранов настраиваются отдельно. Настройки сохраняются в клавиатуре."
+                crate::ui_style::settings_section_header(
+                    ui,
+                    if russian { "Дисплей" } else { "Display" },
+                    if russian {
+                        "Режимы экранов настраиваются отдельно; настройки сохраняются в клавиатуре"
+                    } else {
+                        "Display modes are configured independently; settings are saved on the keyboard"
+                    },
+                ).on_hover_text(if russian {
+                    "Выберите половинку, чтобы настроить её экран отдельно от другого"
                 } else {
-                    "Display modes are configured independently. Settings are saved on the keyboard."
-                }).size(13.0).color(app_muted_text(ui.visuals().dark_mode)));
+                    "Choose a half to configure its display independently"
+                });
                 if !supported {
                     ui.add_space(8.0);
                     ui.colored_label(egui::Color32::from_rgb(220, 92, 76), if russian {
@@ -6391,22 +6406,26 @@ impl EntropyApp {
                         "Нет связи с SM62. Переподключите клавиатуру для изменения настроек."
                     } else { "SM62 is disconnected. Reconnect the keyboard to change settings." });
                 }
-                ui.add_space(16.0);
+                ui.add_space(24.0);
                 // Preview and edit only the chosen half; shared rows remain global.
                 let scene = 0;
                 let body=ui.available_rect_before_wrap();
                 sm62_display_scroll(ui,body,|ui| {
+                        let wide = ui.available_width()
+                            >= SM62_DISPLAY_PREVIEW_WIDTH + SM62_DISPLAY_PANEL_GAP + settings_width;
                         {
                             let half_control = |ui: &mut egui::Ui, mut side: usize| {
                                 let width = ui.available_width();
-                                let control_width = sm62_dropdown_width(width);
+                                let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
+                                let control_width = metrics.settings_control_width().min(width.max(1.0));
                                 let halves: Vec<String> = if russian { ["Левая", "Правая"] } else { ["Left", "Right"] }
                                     .into_iter().map(str::to_owned).collect();
                                 display_settings_row(ui, width, 54.0,
                                     if russian { "Половинка" } else { "Half" },
                                     true, control_width, |ui| {
                                         let (_, picked) = crate::ui_style::modern_dropdown_select_sized(
-                                            ui, half_id, &halves, side, control_width, 34.0, 12.0);
+                                            ui, half_id, &halves, side, control_width,
+                                            metrics.settings_control_height(), metrics.settings_control_font_size());
                                         if let Some(picked) = picked { side = picked; }
                                     });
                                 ui.ctx().data_mut(|data| data.insert_temp(half_id, side));
@@ -6414,8 +6433,6 @@ impl EntropyApp {
                             };
                             let base = side * 5;
                             let side_values: [u8; 5] = values[base..base + 5].try_into().unwrap();
-                            let wide = ui.available_width()
-                                >= SM62_DISPLAY_PREVIEW_WIDTH + SM62_DISPLAY_PANEL_GAP + settings_width;
                             if wide {
                                 ui.horizontal(|ui| {
                                     ui.spacing_mut().item_spacing.x = 0.0;
@@ -6428,7 +6445,8 @@ impl EntropyApp {
                                         ui.set_width(settings_width.min(ui.available_width()));
                                         side = half_control(ui, side);
                                         ui.add_enabled_ui(ready, |ui| {
-                                            sm62_display_controls(ui, side, &mut values, &mut changed, russian);
+                                            sm62_display_controls(ui, side, &mut values, &mut changed, russian,
+                                                screens_off_supported.then_some(&mut screens_off_values));
                                         });
                                     });
                                 });
@@ -6441,25 +6459,38 @@ impl EntropyApp {
                                     ui.set_width(settings_width.min(ui.available_width()));
                                     side = half_control(ui, side);
                                     ui.add_enabled_ui(ready, |ui| {
-                                        sm62_display_controls(ui, side, &mut values, &mut changed, russian);
+                                        sm62_display_controls(ui, side, &mut values, &mut changed, russian,
+                                            screens_off_supported.then_some(&mut screens_off_values));
                                     });
                                 });
                             }
                             ui.add_space(16.0);
                         }
                         ui.add_space(12.0);
-                        ui.vertical_centered(|ui| {
-                            ui.set_width(settings_width.min(ui.available_width()));
-                            ui.add_enabled_ui(ready, |ui| {
-                            sm62_shared_controls(ui, &mut values, &mut changed, russian,
-                                date_supported.then_some(&mut date_values),
-                                hold_supported.then_some(&mut hold_values),
-                                language_supported.then_some(&mut language_values),
-                                stars_supported.then_some(&mut stars_values),
-                                screens_off_supported.then_some(&mut screens_off_values));
-                            self.draw_sm62_timeout_control(ui);
+                        let mut shared_settings = |ui: &mut egui::Ui| {
+                            ui.vertical_centered(|ui| {
+                                ui.set_width(settings_width.min(ui.available_width()));
+                                ui.add_enabled_ui(ready, |ui| {
+                                    sm62_shared_controls(ui, &mut values, &mut changed, russian,
+                                        date_supported.then_some(&mut date_values),
+                                        hold_supported.then_some(&mut hold_values),
+                                        language_supported.then_some(&mut language_values),
+                                        stars_supported.then_some(&mut stars_values));
+                                    self.draw_sm62_timeout_control(ui);
+                                });
                             });
-                        });
+                        };
+                        if wide {
+                            ui.horizontal_top(|ui| {
+                                ui.spacing_mut().item_spacing.x = 0.0;
+                                // Use the same preview column and gap as the
+                                // rows above, including the full shared section.
+                                ui.add_space(SM62_DISPLAY_PREVIEW_WIDTH + SM62_DISPLAY_PANEL_GAP);
+                                shared_settings(ui);
+                            });
+                        } else {
+                            shared_settings(ui);
+                        }
                     });
             });
         });

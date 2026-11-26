@@ -409,6 +409,7 @@ impl Device {
         if self.firmware != FirmwareProtocol::Vial { return None; }
         if self.is_ergohaven_sm62() { Some(8) }
         else if self.is_ergohaven_display_macropad() { Some(7) }
+        else if self.is_ergohaven_phenom() { Some(9) }
         else { None }
     }
 
@@ -434,7 +435,9 @@ impl Device {
     }
 
     pub(crate) fn application_layout_storage_key(&self, key: String) -> String {
-        if self.is_ergohaven_sm62() {
+        if self.is_ergohaven_phenom() {
+            format!("{key}-phenom-{:04x}", self.product_id)
+        } else if self.is_ergohaven_sm62() {
             // SM62's Vial UID and factory serial identify a model, not a unit.
             // Scope cached drafts to the actual OS enumeration. This is a cache
             // namespace only, never permission to skip device readback.
@@ -452,6 +455,10 @@ impl Device {
 
     pub(crate) fn is_ergohaven_sm62(&self) -> bool {
         self.vendor_id == ERGOHAVEN_VENDOR_ID && self.product_id == SM62_PRODUCT_ID
+    }
+
+    pub(crate) fn is_ergohaven_phenom(&self) -> bool {
+        self.vendor_id == ERGOHAVEN_VENDOR_ID && matches!(self.product_id, 0x0052..=0x0054)
     }
 
     pub(crate) fn is_m4cr0pad_v3(&self) -> bool {

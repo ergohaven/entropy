@@ -1,5 +1,8 @@
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
+#[path = "application_layout_geometry.rs"]
+mod geometry;
+pub(crate) use geometry::ApplicationLayoutGeometry;
 
 #[cfg(test)]
 mod sm62_geometry_tests {
@@ -486,6 +489,9 @@ pub(crate) const APPLICATION_LAYOUT_PROTOCOL_VERSION: u8 = 7;
 pub(crate) const APPLICATION_LAYOUT_STACK_SLOTS: usize = 4;
 pub(crate) const APPLICATION_LAYOUT_STACK_NAME_BYTES: usize = 12;
 pub(crate) const APPLICATION_LAYOUT_NAME_BYTES: usize = 22;
+// Existing SM62 persisted mapping format. Negotiate the actual device capacity
+// separately; never accept slots that normalization would discard or reassign.
+pub(crate) const SM62_RESIDENT_SLOT_LIMIT: u8 = 100;
 
 /// UI grouping for application layouts; never sent to firmware.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -939,7 +945,7 @@ impl ApplicationLayout {
         // Catalog shortcuts describe Macropad physical/encoder controls, not a
         // full keyboard. Until an SM62 placement is specified, retain the
         // Default-derived bindings and names instead of remapping its top row.
-        if self.layers.first().is_some_and(|layer| layer.len() == 62) { return false; }
+        if self.layers.iter().any(|layer| layer.len() != APPLICATION_LAYOUT_CONTROL_COUNT) { return false; }
         self.normalize();
         let mut changed = false;
         for (index, preset_layer) in preset.layers.iter().enumerate() {
@@ -976,11 +982,18 @@ impl ApplicationLayout {
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub(crate) struct DeviceApplicationLayouts {
+    /// Confirmed descriptor geometry scoped by the owning device storage key.
+    /// Offline description only; a live owner independently negotiates it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub(crate) geometry: Option<ApplicationLayoutGeometry>,
     #[serde(default)]
     pub(crate) resident_mapping_version: u8,
     #[serde(default)]
     pub(crate) resident_slots: BTreeMap<String, u8>,
-    /// Byte-exact device records retained for readback and no-wear selection.
+    /// Archive/catalog-specific receipts; never a global model migration flag.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub(crate) host_archive_migrations: BTreeMap<String, String>,
+    /// Byte-exact legacy FULL records retained while the active runtime is RAM-only.
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub(crate) device_raw_profiles: BTreeMap<String, Vec<u8>>,
     #[serde(default)]
@@ -1040,9 +1053,11 @@ impl Default for DeviceApplicationLayouts {
     fn default() -> Self {
         Self {
             layouts: default_layouts(),
+            geometry: None,
             resident_mapping_version: 0,
             resident_slots: BTreeMap::new(),
             device_raw_profiles: BTreeMap::new(),
+            host_archive_migrations: BTreeMap::new(),
             resident_deleted: BTreeMap::new(),
             sm62_resident_firefox_id: None,
             sm62_resident_application_id: None,
@@ -1063,9 +1078,75 @@ impl Default for DeviceApplicationLayouts {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
+impl DeviceApplicationLayouts {
+    /// A physical endpoint plus the complete, byte-exact catalog identifies an
+    /// archive. Another USB half, changed record or occupied slot needs its own
+    /// backup/adoption even when both halves share one host library.
+    pub(crate) fn legacy_archive_key(device: &crate::device::Device, records: &[crate::qmk_hid_host::RecoveredRecord]) -> anyhow::Result<String> {
+        let mut records = records.to_vec(); records.sort_by_key(|r| r.slot);
+        let mut slots = BTreeSet::new();
+        for r in &records {
+            anyhow::ensure!(slots.insert(r.slot) && r.slot < SM62_RESIDENT_SLOT_LIMIT, "Duplicate/invalid archive slot");
+            crate::qmk_hid_host::decode_device_profile(r)?;
+        }
+        let identity = serde_json::to_string(&(device.vendor_id, device.product_id,
+            &device.serial_number, &device.path, records))?;
+        Ok(crate::qmk_hid_host::application_layout_identity_digest(&identity).iter().map(|b|format!("{b:02x}")).collect())
+    }
+
+    /// Host authoring always wins. Conflicting device content becomes an
+    /// additional disabled archival profile, never a replacement host draft.
+    pub(crate) fn merge_legacy_archive(&mut self, records: &[crate::qmk_hid_host::RecoveredRecord], rules: Option<&BTreeMap<String, Sm62HostRule>>) -> anyhow::Result<()> {
+        for r in records {
+            let mut recovered = crate::qmk_hid_host::decode_device_profile(r)?;
+            let identity = &r.identity_crc[..20];
+            if self.resident_deleted.iter().any(|(id, (_, p))|
+                crate::qmk_hid_host::application_layout_identity_matches(id, identity)
+                    || self.snapshot_for_layout(p).device_identity.as_ref().is_some_and(|key| key.as_slice() == identity)) { continue; }
+            if self.device_raw_profiles.iter().any(|(id, raw)| self.layouts.contains_key(id) && raw == &r.raw) { continue; }
+            let matching: Vec<_> = self.layouts.values().filter(|p| p.id != "default" &&
+                (crate::qmk_hid_host::application_layout_identity_matches(&p.id, identity)
+                    || self.device_raw_profiles.get(&p.id).is_some_and(|raw| raw.get(43..63) == Some(identity)))).cloned().collect();
+            if matching.len() == 1 {
+                let previous = &matching[0];
+                // Matching rules are host-only; keys, names and all other FULL
+                // data may not overwrite newer authoring or its raw baseline.
+                if previous.name == recovered.name && previous.layers == recovered.layers
+                    && previous.layer_names == recovered.layer_names && previous.encoder_stacks == recovered.encoder_stacks
+                    && previous.revision == recovered.revision {
+                    if !self.device_raw_profiles.contains_key(&previous.id) {
+                        self.device_raw_profiles.insert(previous.id.clone(), r.raw.clone());
+                        self.resident_slots.entry(previous.id.clone()).or_insert(r.slot);
+                        continue;
+                    }
+                }
+            } else if matching.is_empty() {
+                let candidates: Vec<_> = rules.into_iter().flat_map(|r| r.values()).filter(|rule|
+                    rule.identity.as_slice() == identity && rule.host_id != "default").collect();
+                if candidates.len() == 1 && !self.layouts.contains_key(&candidates[0].host_id)
+                    && !self.resident_deleted.contains_key(&candidates[0].host_id) { candidates[0].restore(self, &mut recovered); }
+            }
+            if self.layouts.contains_key(&recovered.id) || self.resident_deleted.contains_key(&recovered.id) {
+                let text = serde_json::to_string(&(r.slot, &r.raw))?;
+                recovered.id = format!("legacy-{}", crate::qmk_hid_host::application_layout_identity_digest(&text).iter().map(|b|format!("{b:02x}")).collect::<String>());
+                anyhow::ensure!(!self.layouts.contains_key(&recovered.id) && !self.resident_deleted.contains_key(&recovered.id), "Archive profile collision; source preserved");
+            }
+            // Conflicts cannot inherit an automatic routing rule by accident.
+            if !matching.is_empty() { recovered.automatic_switching = false; }
+            self.resident_slots.entry(recovered.id.clone()).or_insert(r.slot);
+            self.device_raw_profiles.insert(recovered.id.clone(), r.raw.clone());
+            self.layouts.insert(recovered.id.clone(), recovered);
+        }
+        Ok(())
+    }
+}
+
 impl DeviceApplicationLayouts {
     pub(crate) fn snapshot_for_layout(&self, layout: &ApplicationLayout) -> ApplicationLayoutSnapshot {
         let mut snapshot = ApplicationLayoutSnapshot::from_layout(layout);
+        if let Some(geometry) = self.geometry.filter(|g| g.valid()) { snapshot.geometry = geometry; }
+        if !snapshot.geometry.presets() { snapshot.visuals.iter_mut().for_each(|v| v.fill(0)); }
         if self.is_sm62() {
             snapshot.resident_slot = self.resident_slots.get(&layout.id).copied()
                 .filter(|_| layout.id != DEFAULT_APPLICATION_LAYOUT_ID);
@@ -1101,9 +1182,9 @@ impl DeviceApplicationLayouts {
     fn reconcile_resident_slots(&mut self) -> bool {
         if !self.is_sm62() { return false; }
         let before = (self.resident_mapping_version, self.resident_slots.clone());
-        let mut used:BTreeSet<u8> = self.resident_deleted.values().filter_map(|(s,_)|(*s<100).then_some(*s)).collect();
+        let mut used:BTreeSet<u8> = self.resident_deleted.values().filter_map(|(s,_)|(*s<SM62_RESIDENT_SLOT_LIMIT).then_some(*s)).collect();
         self.resident_slots.retain(|id, slot| id != DEFAULT_APPLICATION_LAYOUT_ID
-            && self.layouts.contains_key(id) && *slot < 100 && used.insert(*slot));
+            && self.layouts.contains_key(id) && *slot < SM62_RESIDENT_SLOT_LIMIT && used.insert(*slot));
         if self.resident_mapping_version == 0 {
             for (id, slot) in [(&self.sm62_resident_firefox_id,1), (&self.sm62_resident_application_id,2)] {
                 if let Some(id) = id.as_ref().filter(|id| id.as_str() != DEFAULT_APPLICATION_LAYOUT_ID && self.layouts.contains_key(*id)) {
@@ -1115,7 +1196,7 @@ impl DeviceApplicationLayouts {
         }
         for id in self.layouts.keys().filter(|id| id.as_str()!=DEFAULT_APPLICATION_LAYOUT_ID) {
             if self.resident_slots.contains_key(id) { continue; }
-            if let Some(slot) = (0..100).find(|slot| !used.contains(slot)) {
+            if let Some(slot) = (0..SM62_RESIDENT_SLOT_LIMIT).find(|slot| !used.contains(slot)) {
                 self.resident_slots.insert(id.clone(),slot); used.insert(slot);
             }
         }
@@ -1449,6 +1530,8 @@ impl DeviceApplicationLayouts {
         &mut self,
         installed: Option<&std::collections::BTreeSet<String>>,
     ) -> bool {
+        // Explicit device capability, not a profile width, grants this catalog.
+        if !self.geometry.is_some_and(|g| g.valid() && g.presets()) { return false; }
         if self.is_sm62() {
             // These built-ins describe Macropad shortcuts, not SM62 profiles.
             let mut changed = !self.builtin_presets_provisioned;
@@ -1660,6 +1743,10 @@ impl DeviceApplicationLayouts {
     }
 
     pub(crate) fn create_from_preset(&mut self, preset: &ApplicationLayoutPreset) -> String {
+        if !self.geometry.is_some_and(|g| g.valid() && g.presets()) { return self.create_for_application(&DetectedApplication {
+            executable: preset.executable.into(), identities: preset.identities.iter().map(|s| (*s).into()).collect(),
+            display_name: preset.name.into(), window_title: String::new(),
+        }); }
         let name = (1..)
             .map(|suffix| {
                 if suffix == 1 {
@@ -1964,6 +2051,7 @@ impl DeviceApplicationLayouts {
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct ApplicationLayoutSnapshot {
+    pub(crate) geometry: ApplicationLayoutGeometry,
     pub(crate) resident_slot: Option<u8>,
     pub(crate) device_identity: Option<[u8; 20]>,
     pub(crate) device_baseline_crc: Option<[u8;4]>,
@@ -1997,7 +2085,7 @@ impl ApplicationLayoutSnapshot {
                     return 0;
                 };
                 let Some(&keycode) = preset_layer.keycodes.get(control) else { return 0 };
-                if keycode == 0 || configured[control] != keycode {
+                if keycode == 0 || configured.get(control) != Some(&keycode) {
                     return 0;
                 }
                 crate::action_icons::preset_visual(preset.id, layer, control)
@@ -2005,6 +2093,7 @@ impl ApplicationLayoutSnapshot {
         });
         Self {
             profile_id: Some(layout.id.clone()),
+            geometry: ApplicationLayoutGeometry::legacy(if layout.layers.first().is_some_and(|l| l.len() == 62) { 8 } else { 7 }).unwrap(),
             resident_slot: None,
             device_identity: None,
             device_baseline_crc: None,
@@ -2046,6 +2135,7 @@ impl ApplicationLayoutSnapshot {
     pub(crate) fn inactive() -> Self {
         Self {
             profile_id: None,
+            geometry: ApplicationLayoutGeometry::legacy(7).unwrap(),
             resident_slot: None,
             device_identity: None,
             device_baseline_crc: None,
@@ -2067,7 +2157,7 @@ impl ApplicationLayoutSnapshot {
         begin[2] = u8::from(self.active);
         begin[3..7].copy_from_slice(&self.revision.to_le_bytes());
         let controls = self.layers[0].len();
-        let version = if controls == 62 { 8 } else { APPLICATION_LAYOUT_PROTOCOL_VERSION };
+        let version = self.geometry.version();
         begin[1] = version;
         begin[7] = controls as u8;
         begin[8] = APPLICATION_LAYOUT_LAYER_COUNT as u8;
@@ -2107,6 +2197,7 @@ impl ApplicationLayoutSnapshot {
                     let count = (controls - start).min(27);
                     packet[3] = start as u8;
                     packet[4] = count as u8;
+                    packet[5..].fill(0);
                     packet[5..5 + count].copy_from_slice(&self.visuals[layer][start..start + count]);
                     packets.push(packet);
                 }
@@ -2179,7 +2270,7 @@ impl ApplicationLayoutSnapshot {
     pub(crate) fn keepalive_packet(&self) -> [u8; 32] {
         let mut packet = [0u8; 32];
         packet[0] = HID_APPLICATION_LAYOUT_KEEPALIVE;
-        packet[1] = if self.layers[0].len() == 62 { 8 } else { APPLICATION_LAYOUT_PROTOCOL_VERSION };
+        packet[1] = self.geometry.version();
         packet[2] = u8::from(self.active);
         packet[3..7].copy_from_slice(&self.revision.to_le_bytes());
         packet
@@ -3667,10 +3758,12 @@ where
 {
     let layers = Vec::<Vec<u16>>::deserialize(deserializer)?;
     if let Some(first) = layers.first() {
-        if !matches!(first.len(), APPLICATION_LAYOUT_CONTROL_COUNT | 62)
+        // Parsing preserves a bounded uniform profile; only the verified target
+        // geometry authorizes import/publication, never this width.
+        if !(1..=255).contains(&first.len())
             || layers.iter().any(|layer| layer.len() != first.len())
         {
-            return Err(serde::de::Error::custom("application layers require a uniform 15- or 62-control geometry"));
+            return Err(serde::de::Error::custom("application layers require a uniform bounded control geometry"));
         }
     }
     Ok(layers)

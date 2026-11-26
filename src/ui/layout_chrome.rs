@@ -9,7 +9,6 @@ impl EntropyApp {
         top_base_y: f32,
         main_tabs_h: f32,
         layer_bar_h: f32,
-        top_reserved_h: f32,
         viewport: egui::Rect,
     ) -> bool {
         let typing_trainer_page = self.main_menu_tab == MainMenuTab::Advanced
@@ -80,7 +79,7 @@ impl EntropyApp {
                     ui,
                     layout,
                     ctx,
-                    chrome_rect.top() + top_reserved_h,
+                    crate::ui_style::settings_page_content_top(top_base_y, main_tabs_h),
                     chrome_rect,
                 );
                 return true;

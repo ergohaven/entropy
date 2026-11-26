@@ -166,10 +166,23 @@ impl HidDevice {
     }
 
     pub fn probe_application_layout_protocol_version(&self, version: u8) -> Result<bool> {
-        anyhow::ensure!(matches!(version, 7 | 8), "Unsupported application layout protocol");
+        Ok(self.probe_application_layout_geometry(version)?.is_some())
+    }
+
+    pub(crate) fn probe_application_layout_geometry(&self, version: u8) -> Result<Option<crate::application_layouts::ApplicationLayoutGeometry>> {
+        use crate::application_layouts::ApplicationLayoutGeometry as Geometry;
+        anyhow::ensure!(matches!(version, 7 | 8 | 9), "Unsupported application layout protocol");
         // Zero acknowledgement is read-only and never consumes an event.
-        self.usb_send(&[0xE6, version, 0xA5, 0, 0])
-            .map(|response| response[0] == 0xE6 && response[1] == version && response[2] == 0x5A)
+        let response = self.usb_send(&[0xE6, version, 0xA5, 0, 0])?;
+        if response[..3] != [0xe6, version, 0x5a] { return Ok(None); }
+        if version != 9 { return Ok(Geometry::legacy(version)); }
+        static NONCE: std::sync::atomic::AtomicU32 = std::sync::atomic::AtomicU32::new(1);
+        let nonce = NONCE.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let reply = self.usb_send(&Geometry::request(nonce))?;
+        let Some(geometry) = Geometry::capability(&reply, nonce) else { return Ok(None); };
+        let json = self.get_layout_json()?;
+        let layout = crate::keyboard::KeyboardLayout::from_vial_json(&json)?;
+        Ok(geometry.descriptor(&layout))
     }
 
     pub fn get_firmware_version(&self) -> Result<Option<String>> {

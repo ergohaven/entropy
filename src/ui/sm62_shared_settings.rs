@@ -1,6 +1,26 @@
-// Standard compact settings trigger, capped only by actual available space.
-// Do not derive its width from the label/preview column's fractional width.
-fn sm62_dropdown_width(available: f32) -> f32 { 196.0_f32.min(available.max(1.0)) }
+fn sm62_display_setting_tooltip(label: &str) -> Option<&'static str> {
+    Some(match label {
+        "Половинка" => "Выберите левую или правую половинку: её экран и настройки появятся рядом",
+        "Half" => "Choose the left or right half to see its display preview and settings",
+        "Режим по умолчанию" => "Что показывать на выбранном экране при обычной работе. «Выключен» гасит этот экран и его подсветку, не меняя сохранённую яркость",
+        "Default mode" => "What the selected display shows during normal use. Off turns off this display and its backlight without changing the saved brightness",
+        "Анимация ожидания через" => "Через какое время без нажатий включать анимацию корабля. «Без анимации» оставляет основной режим; в режиме «Корабль» анимация работает постоянно",
+        "Enable standby mode after" => "How long to wait after the last key press before showing the spaceship animation. No animation keeps the default mode; Spaceship mode plays continuously",
+        "Показывать раскладку при нажатии" => "При нажатии клавиши временно показывать окружающие её клавиши текущего слоя. В режиме «Раскладка» это отображение всегда включено",
+        "Show layout on key press" => "Temporarily show nearby keys from the current layer when you press a key. This is always enabled in Layout mode",
+        "Раскладка" => "Подписи клавиш на обоих экранах: английские или английские с дополнительными русскими буквами на основном слое. Язык ввода на компьютере не меняется",
+        "Layout" => "Choose English key labels or English with added Russian letters on the base layer of both displays. This does not change the computer's input language",
+        "Показывать раскладку в течение" => "Как долго оставлять изображение клавиш после отпускания клавиши, прежде чем вернуться к основному режиму. Применяется к обоим экранам",
+        "Show layout for" => "How long to keep the key view after releasing a key before returning to the default mode. Applies to both displays",
+        "Показывать текущую раскладку RU/EN" => "Показывать индикатор языка ввода, переданного компьютером, на обоих экранах. Индикатор не переключает язык ввода",
+        "Show current layout RU/EN" => "Show the input language reported by the computer on both displays. The indicator does not switch the input language",
+        "Дата на часах" => "Показывать дату рядом с часами на обоих экранах, когда выбран режим часов",
+        "Date on clock" => "Show the date with the clock on both displays when Clock mode is selected",
+        "Анимация звёзд" => "Движущийся звёздный фон в режимах часов и плеера на обоих экранах. На анимацию корабля не влияет",
+        "Star animation" => "Animate the star background in Clock and Player modes on both displays. This does not affect the spaceship animation",
+        _ => return None,
+    })
+}
 
 // Shared editor only: the firmware retains its existing per-half fields.
 // Rendering mixed stored values must not normalize or queue writes.
@@ -22,10 +42,8 @@ fn sm62_shared_toggle(
             }).inner;
             if response.clicked() { picked = Some(u8::from(enabled)); }
             let response = response.on_disabled_hover_text(if russian { "Для этой настройки обновите прошивку SM62" } else { "Update SM62 firmware to enable this setting" });
-            if id == "sm62_shared_stars" {
-                response.on_hover_text(if russian { "Только часы и плеер. Анимация корабля не изменяется." } else { "Clock and player only. Spaceship animation is unchanged." });
-            } else if id == "sm62_shared_screens_off" {
-                response.on_hover_text(if russian { "Гасит оба дисплея и их подсветку. Режимы и сохранённая яркость остаются прежними." } else { "Turns off both displays and their backlights. Modes and saved brightness are retained." });
+            if let Some(tooltip) = sm62_display_setting_tooltip(label) {
+                response.on_hover_text(tooltip);
             }
             if mixed { ui.label(if russian { "Различаются" } else { "Mixed" }); }
         });
@@ -52,16 +70,20 @@ impl EntropyApp {
             .collect();
         let mut picked = None;
         let width = ui.available_width();
+        let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
+        let control_width = metrics.settings_control_width().min(width.max(1.0));
         let supported = self.display_settings.display_timeout_supported;
         display_settings_row(ui, width, 54.0,
-            crate::i18n::tr_catalog(lang, "display_settings.display_timeout"), true, 222.0, |ui| {
+            crate::i18n::tr_catalog(lang, "display_settings.display_timeout"), true,
+            control_width + metrics.value(26.0), |ui| {
                 // Keep the field on the common right edge; reserve status space
                 // to its left rather than shifting the dropdown itself.
                 ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                     ui.add_enabled_ui(supported, |ui| {
                         let (_, choice) = crate::ui_style::modern_dropdown_select_sized(
                             ui, ui.make_persistent_id("sm62_shared_display_timeout"), &labels,
-                            self.display_settings.display_timeout as usize, sm62_dropdown_width(width), 34.0, 12.0);
+                            self.display_settings.display_timeout as usize, control_width,
+                            metrics.settings_control_height(), metrics.settings_control_font_size());
                         picked = choice;
                     })
                     .response
@@ -122,30 +144,58 @@ fn sm62_shared_controls(
     hold: Option<&mut [u16; 2]>,
     language: Option<&mut [u8; 2]>,
     stars: Option<&mut [u8; 2]>,
-    screens_off: Option<&mut [u8; 2]>,
 ) {
-    ui.heading(if russian {
-        "Общие настройки экранов"
-    } else {
-        "Shared display settings"
-    });
-    ui.label(if russian {
-        "Изменения применяются к обоим экранам."
-    } else {
-        "Changes apply to both displays."
-    });
-    ui.add_space(8.0);
-    if let Some(value) = sm62_shared_toggle(
+    crate::ui_style::settings_section_header(
         ui,
         if russian {
-            "Кириллические символы"
+            "Общие настройки экранов"
         } else {
-            "Cyrillic symbols"
+            "Shared display settings"
         },
-        "sm62_shared_cyrillic",
-        Some([values[4], values[9]]),
-        russian,
-    ) {
+        if russian {
+            "Изменения применяются к обоим экранам"
+        } else {
+            "Changes apply to both displays"
+        },
+    ).on_hover_text(if russian {
+        "Эти настройки применяются сразу к обоим дисплеям, независимо от выбранной половинки"
+    } else {
+        "These settings apply to both displays, regardless of the selected half"
+    });
+    ui.add_space(24.0);
+    let layout_labels = vec!["English".to_owned(), "English + Russian".to_owned()];
+    let layout_selected = if values[4] == values[9] {
+        values[4] as usize
+    } else {
+        usize::MAX
+    };
+    let layout_text = layout_labels.get(layout_selected).map(String::as_str)
+        .unwrap_or(if russian { "Различаются" } else { "Mixed" });
+    let width = ui.available_width();
+    let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
+    let control_width = metrics.settings_control_width().min(width.max(1.0));
+    let mut picked_layout = None;
+    display_settings_row(
+        ui,
+        width,
+        54.0,
+        if russian { "Раскладка" } else { "Layout" },
+        true,
+        control_width,
+        |ui| {
+            let id = ui.make_persistent_id("sm62_shared_layout");
+            let response = crate::ui_style::modern_dropdown_button_sized(
+                ui, id, layout_text, ui.visuals().text_color(), control_width,
+                metrics.settings_control_height(), metrics.settings_control_font_size());
+            picked_layout = crate::ui_style::modern_dropdown_popup_options(
+                ui, id, &response, &layout_labels, layout_selected, control_width,
+                metrics.settings_control_font_size());
+        },
+    );
+    // Present the existing per-half Cyrillic flag as a shared layout choice.
+    // Merely rendering a mixed pair must not normalize either stored value.
+    if let Some(selected) = picked_layout {
+        let value = selected as u8;
         for index in [4, 9] {
             if values[index] != value {
                 values[index] = value;
@@ -165,15 +215,16 @@ fn sm62_shared_controls(
         else {format!("{} {}",pair[0],if russian {"мс"} else {"ms"})};
     let mut picked = None;
     let width = ui.available_width();
-    let control_width = sm62_dropdown_width(width);
+    let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
+    let control_width = metrics.settings_control_width().min(width.max(1.0));
     display_settings_row(ui,width,54.0,
         if russian { "Показывать раскладку в течение" } else { "Show layout for" },true,control_width,|ui| {
             ui.add_enabled_ui(supported,|ui| {
                 let id=ui.make_persistent_id("sm62_shared_hold");
-                let response=crate::ui_style::modern_dropdown_button_sized(ui,id,&text,ui.visuals().text_color(),control_width,34.0,12.0);
+                let response=crate::ui_style::modern_dropdown_button_sized(ui,id,&text,ui.visuals().text_color(),control_width,metrics.settings_control_height(),metrics.settings_control_font_size());
                 #[cfg(test)]
                 ui.ctx().data_mut(|data|data.insert_temp(egui::Id::unique("sm62_hold_render_trigger"),response.rect));
-                picked=crate::ui_style::modern_dropdown_popup_options(ui,id,&response,&labels,selected,control_width,12.0);
+                picked=crate::ui_style::modern_dropdown_popup_options(ui,id,&response,&labels,selected,control_width,metrics.settings_control_font_size());
                 if mixed {response.on_hover_text(if russian {
                     format!("Левый: {} мс; правый: {} мс. Новое значение применяется к обоим.",pair[0],pair[1])
                 } else {format!("Left: {} ms; right: {} ms. Editing applies to both.",pair[0],pair[1])});}
@@ -222,21 +273,6 @@ fn sm62_shared_controls(
         russian,
     ) {
         if let Some(pair) = stars {
-            pair.fill(value);
-        }
-    }
-    if let Some(value) = sm62_shared_toggle(
-        ui,
-        if russian {
-            "Выключить экраны"
-        } else {
-            "Turn off displays"
-        },
-        "sm62_shared_screens_off",
-        screens_off.as_deref().copied(),
-        russian,
-    ) {
-        if let Some(pair) = screens_off {
             pair.fill(value);
         }
     }

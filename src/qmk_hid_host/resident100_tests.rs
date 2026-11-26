@@ -162,6 +162,7 @@ fn resident100_library_publication_admits_all_100_and_syncs_without_select() {
 }
 
 pub(super) fn capability(p: &[u8; 32]) -> [u8; 32] {
+    if p[3] == 3 { return *p; } // legacy schema2 peer
     let mut r = *p;
     r[2] = 0x5a;
     if p[3] == 2 {

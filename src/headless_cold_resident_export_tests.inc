@@ -1,6 +1,29 @@
 // Production encoder/decoder; only the OS HID boundary is scripted.
 #[cfg(target_os = "linux")]
 #[test]
+fn host_managed_export_preserves_newer_host_edits_and_exact_archive_without_settings_writes() {
+    let _storage = crate::app::app_storage::ScopedTempConfig::new();
+    let (mut app, session, rec) = scripted_export_device_app(|_| None, true);
+    resident_export_peer(&rec, "");
+    let initial = export_entlayout(&mut app, 0, &session, deadline(), &AtomicBool::default()).unwrap();
+    let v: serde_json::Value = serde_json::from_str(&initial).unwrap();
+    let mut library = crate::application_layouts::DeviceApplicationLayouts::default();
+    library.layouts = serde_json::from_value(v["application_layouts"].clone()).unwrap();
+    let id = library.layouts.values().find(|p| p.name == "device-editor").unwrap().id.clone();
+    library.layouts.get_mut(&id).unwrap().layers[0][0] = 6;
+    let key = app.application_layout_device_key().unwrap();
+    app.app_settings.application_layouts.insert(key.clone(), library);
+    let before = serde_json::to_value(&app.app_settings).unwrap();
+    let json = app.entlayout_export_json().unwrap().expect("host edits must not be replaced by stale device records");
+    let bundle: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(bundle["application_layouts"][&id]["layers"][0][0], 6);
+    assert_eq!(serde_json::to_value(&app.app_settings).unwrap(), before);
+    assert!(!crate::app::app_storage::app_settings_path().exists());
+    assert!(rec.requests().iter().all(|p| !is_write(p)));
+}
+
+#[cfg(target_os = "linux")]
+#[test]
 fn sm62_failed_live_qmk_query_cannot_certify_default_labels_or_preimport_backup() {
     let storage = crate::app::app_storage::ScopedTempConfig::new();
     let (mut source, session, source_recorder) = scripted_export_device_app(|_| None, true);
@@ -223,6 +246,7 @@ fn resident_export_peer_observing(
             r[1..7].copy_from_slice(b"Native");
             return Some(Ok(r));
         }
+        if p[..4] == [0xeb, 8, 0xa5, 3] { return Some(Ok(*p)); }
         if p[..3] == [0xeb, 8, 0xa5] && p[3] == 2 {
             let mut r = *p;
             r[2] = 0x5a;
@@ -231,6 +255,13 @@ fn resident_export_peer_observing(
             r[20..24].copy_from_slice(&15u32.to_le_bytes());
             r[24] = 2;
             return Some(Ok(r));
+        }
+        if p[..3] == [0xef, 9, 7] {
+            let mut reply = *p; reply[2] = 0x87;
+            reply[8..].fill(0); reply[8..12].copy_from_slice(&1u32.to_le_bytes());
+            reply[12] = 100; reply[13] = 13;
+            for (slot, _) in &records { reply[14 + usize::from(*slot)/8] |= 1 << (*slot % 8); }
+            return Some(Ok(reply));
         }
         if p[..2] != [0xef, 9] { return None; }
         assert!(matches!(p[2], 3 | 6), "export attempted a resident mutation: {p:?}");

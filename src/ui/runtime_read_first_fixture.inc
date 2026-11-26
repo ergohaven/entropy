@@ -40,6 +40,7 @@ fn runtime_fixture_hid_identity(
             },
             0xe6 => { r.fill(0); r[..3].copy_from_slice(&[0xe6,version,0x5a]); },
             0xeb => {
+                if p[3] == 3 { return Some(Ok(*p)); } // legacy schema2 peer
                 if resident.is_empty() { return Some(Ok(*p)); } // correlated unsupported
                 r[2]=0x5a;
                 if p[3]==2 {
