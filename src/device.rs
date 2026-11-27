@@ -128,18 +128,18 @@ impl Device {
         {
             return true;
         }
-        // USB serials and Bluetooth addresses are unrelated namespaces, but
-        // Ergohaven's assigned product families are shared across transports.
-        // A display macropad and a different Ergohaven product therefore are
-        // proven distinct even when one endpoint is Bluetooth. This lets the
-        // macropad's already-open clock owner coexist with the selected board
-        // without weakening the conservative fallback for unknown products.
+        // USB serials and Bluetooth addresses are unrelated namespaces. Known
+        // Ergohaven product families, however, use the same assigned PID ranges
+        // on both transports. Distinct families may coexist; unknown products
+        // and two endpoints of the same family retain the conservative fallback.
         if self.vendor_id == ERGOHAVEN_VENDOR_ID
             && other.vendor_id == ERGOHAVEN_VENDOR_ID
             && self.product_id != 0
             && other.product_id != 0
             && ((self.is_ergohaven_display_macropad() != other.is_ergohaven_display_macropad())
-                || (self.is_ergohaven_sm62() != other.is_ergohaven_sm62()))
+                || (self.is_ergohaven_sm62() != other.is_ergohaven_sm62())
+                || (self.is_ergohaven_phenom() != other.is_ergohaven_phenom())
+                || (self.is_k04_qube() != other.is_k04_qube()))
         {
             return false;
         }
@@ -859,6 +859,26 @@ mod tests {
         assert!(b.may_share_physical_device(&a));
         b.name = "Not identity evidence".into();
         assert!(a.may_share_physical_device(&b));
+    }
+
+    #[test]
+    fn known_ergohaven_product_families_do_not_overlap_across_transports() {
+        for left_pid in [0x0041, 0x0052, 0x0071, 0x00b2] {
+            for right_pid in [0x0041, 0x0052, 0x0071, 0x00b2] {
+                let mut usb = test_device("Usb", "usb-endpoint");
+                usb.vendor_id = ERGOHAVEN_VENDOR_ID;
+                usb.product_id = left_pid;
+                usb.serial_number = "vial:f64c2b3c".into();
+                let mut bluetooth = test_device("Bluetooth", "bluetooth-endpoint");
+                bluetooth.vendor_id = ERGOHAVEN_VENDOR_ID;
+                bluetooth.product_id = right_pid;
+                bluetooth.serial_number = "AA:BB:CC:DD:EE:FF".into();
+                assert_eq!(usb.may_share_physical_device(&bluetooth), left_pid == right_pid);
+                assert_eq!(bluetooth.may_share_physical_device(&usb), left_pid == right_pid);
+                bluetooth.path = usb.path.clone();
+                assert!(usb.may_share_physical_device(&bluetooth));
+            }
+        }
     }
 
     #[test]

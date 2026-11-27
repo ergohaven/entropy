@@ -2028,16 +2028,15 @@ fn response_matches_command(command: &[u8], resp: &[u8; MSG_LEN]) -> bool {
                 && resp[4..] == command[4..]
         }
         0xE6 if matches!(command, [0xe6, 7 | 8 | 9, 0xa5, _, _, ..]) => {
-            (resp[0] == 0xE6
-                && resp[1] == command[1]
-                && resp[2] == 0x5A)
-                // Legacy Ergohaven firmware echoes unknown custom requests.
-                // Accept only an exact padded read-only capability probe echo;
-                // hid_settings interprets it as absence, never support. Keep
-                // real timeouts/IO errors fatal and event-consuming polls strict.
+            (resp[0] == 0xE6 && resp[1] == command[1] && resp[2] == 0x5A)
+                // Legacy firmware echoes an unknown command, or changes only
+                // its opcode to VIA's 0xff. This is a correlated negative reply
+                // to a read-only capability probe, not a broken HID stream.
+                // Runtime event requests must still receive the live 0x5a ACK.
                 || (is_application_layout_capability_probe(command)
                     && command.len() <= MSG_LEN
-                    && resp[..command.len()] == *command
+                    && matches!(resp[0], 0xe6 | 0xff)
+                    && resp[1..command.len()] == command[1..]
                     && resp[command.len()..].iter().all(|byte| *byte == 0))
         }
         0xD7 => {
@@ -2701,6 +2700,29 @@ mod tests {
         unrelated[..5].copy_from_slice(&[0xe6, 9, 0xa5, 0, 0]);
         assert!(!response_matches_command(&[CMD_VIA_GET_PROTOCOL_VERSION], &unrelated));
         assert!(!response_matches_command(&[CMD_VIA_VIAL_PREFIX, CMD_VIAL_GET_SIZE], &unrelated));
+    }
+
+    #[test]
+    fn legacy_application_layout_probe_rejection_is_correlated_not_a_timeout() {
+        for version in [7, 8, 9] {
+            let request = [0xe6, version, 0xa5, 0, 0];
+            for opcode in [0xe6, 0xff] {
+                let mut reply = [0; MSG_LEN];
+                reply[..request.len()].copy_from_slice(&request);
+                reply[0] = opcode;
+                assert!(response_matches_command(&request, &reply), "legacy response {opcode:#x}, protocol {version}");
+                reply[1] = version + 1;
+                assert!(!response_matches_command(&request, &reply));
+                reply[1] = version;
+                reply[31] = 1;
+                assert!(!response_matches_command(&request, &reply));
+            }
+            let runtime_request = [0xe6, version, 0xa5, 1, 0];
+            let mut runtime_echo = [0; MSG_LEN];
+            runtime_echo[..runtime_request.len()].copy_from_slice(&runtime_request);
+            assert!(!response_matches_command(&runtime_request, &runtime_echo));
+            assert!(!response_matches_command(&request, &[0; MSG_LEN]));
+        }
     }
 
     #[test]

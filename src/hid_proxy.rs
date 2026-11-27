@@ -1228,6 +1228,27 @@ mod tests {
                 ready.to_owned()
             } else {
                 let mut data = hex_to_bytes(line.trim()).unwrap();
+                if mode == "legacy-capability" {
+                    // Replay a legacy QMK unhandled response through the real
+                    // correlator before crossing the real helper IPC boundary.
+                    let request = data.clone();
+                    data.resize(MSG_LEN, 0);
+                    if request.starts_with(&[0xe6]) {
+                        data[0] = 0xff;
+                    } else if request.starts_with(&[0xfe, 1]) {
+                        data.fill(0);
+                        data[..4].copy_from_slice(&1024u32.to_le_bytes());
+                    }
+                    let packet: [u8; MSG_LEN] = data.try_into().unwrap();
+                    let response = if super::super::response_matches_command(&request, &packet) {
+                        ProxyResponse { ok: true, data: Some(bytes_to_hex(&packet)), error: None }
+                    } else {
+                        ProxyResponse { ok: false, data: None, error: Some("HID stale or unrelated report".into()) }
+                    };
+                    writeln!(output, "{}", serde_json::to_string(&response).unwrap()).unwrap();
+                    output.flush().unwrap();
+                    continue;
+                }
                 if data.starts_with(&[0xFE, 0x09]) && mode == "discovery-block" {
                     std::thread::sleep(Duration::from_secs(60));
                     return;
@@ -1400,6 +1421,47 @@ mod tests {
             assert!(proxy.usb_send(&[1]).is_err());
             assert!(!proxy.is_available());
             drop(proxy);
+            empty_registry();
+        }
+    }
+
+    #[test]
+    fn real_helper_unsupported_probe_keeps_definition_read_available() {
+        let _guard = serial_test();
+        let proxy = start("legacy-capability", "Phenom");
+        let rejected = proxy.usb_send(&[0xe6, 9, 0xa5, 0, 0]);
+        assert!(rejected.is_ok(), "unsupported read-only probe retired the connection: {rejected:?}");
+        assert_eq!(rejected.unwrap()[0], 0xff);
+        assert!(proxy.is_available());
+        let definition = proxy.usb_send(&[0xfe, 1]).unwrap();
+        assert_eq!(u32::from_le_bytes(definition[..4].try_into().unwrap()), 1024);
+        drop(proxy);
+        empty_registry();
+    }
+
+    #[test]
+    fn real_helper_k04_bluetooth_and_phenom_usb_have_independent_reservations() {
+        let _guard = serial_test();
+        let mut k04 = device("K04");
+        k04.vendor_id = 0xe126;
+        k04.product_id = 0x0071;
+        k04.bus_type = "Bluetooth".into();
+        k04.serial_number = "AA:BB:CC:DD:EE:FF".into();
+        let mut phenom = device("Phenom");
+        phenom.vendor_id = 0xe126;
+        phenom.product_id = 0x0052;
+        phenom.serial_number = "vial:f64c2b3c".into();
+        for (first, second) in [(&k04, &phenom), (&phenom, &k04)] {
+            let a = HidProxy::start(first, spec("echo", None, None), Duration::from_secs(3)).unwrap();
+            let b = HidProxy::start(second, spec("echo", None, None), Duration::from_secs(3));
+            assert!(b.is_ok(), "different product family was reserved: {}", b.err().unwrap());
+            let b = b.unwrap();
+            assert_eq!(a.usb_send(&[11]).unwrap()[0], 11);
+            assert_eq!(b.usb_send(&[22]).unwrap()[0], 22);
+            // The fix must not allow two owners of either endpoint.
+            assert!(HidProxy::start(first, spec("echo", None, None), TEST_TIMEOUT).is_err());
+            assert!(HidProxy::start(second, spec("echo", None, None), TEST_TIMEOUT).is_err());
+            drop((a, b));
             empty_registry();
         }
     }
