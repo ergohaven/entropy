@@ -728,6 +728,42 @@ mod tests {
     }
 
     #[test]
+    fn k04_followon_normal_picker_and_actual_rynk_assignment_roundtrip() {
+        use crate::rynk::session::testing::{board,link,Stored};
+        use rmk_types_rynk::action::{Action,KeyAction};
+        let definitions:std::collections::BTreeMap<String,serde_json::Value>=serde_json::from_str(include_str!("../tests/fixtures/k04-followon-settings.json")).unwrap();
+        let old:std::collections::BTreeMap<String,serde_json::Value>=serde_json::from_str(include_str!("../tests/fixtures/k04-upstream-9e2aef92.json")).unwrap();
+        for (name,definition) in definitions {
+            assert_eq!(&definition["customKeycodes"].as_array().unwrap()[..60],old[&name]["customKeycodes"].as_array().unwrap());
+            let layout=crate::keyboard::KeyboardLayout::from_vial_json(&definition).unwrap();
+            let mut picker=KeycodePicker::default();
+            picker.custom_keycodes=layout.custom_keycodes.iter().enumerate().map(|(i,k)|(k.name.clone(),k.label.clone(),k.title.clone(),0x7e00+i as u16)).collect();
+            let (board,state)=board(Stored::new(1,1,1));
+            let session=crate::rynk::session::RynkSession::new(link("k04-normal-assignment",&board));
+            for language in [crate::i18n::Language::Russian,crate::i18n::Language::English] {
+                picker.language=language;let rows=picker.custom_keycode_rows(false);
+                let names = ["EH_NORMAL","EH_SNP","EH_SCR","EH_TXT","EH_L_NORMAL","EH_L_SNP","EH_L_SCR","EH_L_TXT","EH_R_NORMAL","EH_USR1","EH_USR2","EH_USR3"];
+                let expected: Vec<_> = names.iter().map(|name| PickerAction::Assign(KeyBinding::Vial(picker.custom_keycodes.iter().find(|(n,_,_,_)| n==name).unwrap().3))).collect();
+                assert_eq!(rows[..12].iter().map(|r|r.action).collect::<Vec<_>>(),expected);
+                for (id,name,anchor) in [(60,"EH_L_NORMAL","EH_TXT"),(61,"EH_NORMAL",""),(62,"EH_R_NORMAL","EH_L_TXT")] {
+                    let code=0x7e00+id;let pos=rows.iter().position(|r|r.action==PickerAction::Assign(KeyBinding::Vial(code))).unwrap();
+                    if anchor.is_empty() { assert_eq!(pos,0); }
+                    else {
+                        let anchor=picker.custom_keycodes.iter().find(|(n,_,_,_)|n==anchor).unwrap().3;
+                        assert_eq!(rows[pos-1].action,PickerAction::Assign(KeyBinding::Vial(anchor)));
+                    }
+                    assert!(rows[pos].matches(&name.to_lowercase(),None));
+                    session.set_key_binding(0,0,0,KeyBinding::Vial(code)).unwrap();
+                    let action=state.lock().unwrap().keymap[0];assert_eq!(action,KeyAction::Single(Action::User(id as u8)));
+                    assert_eq!(crate::rynk::keycode::key_binding(action),KeyBinding::Vial(code));
+                }
+            }
+            let legacy=crate::keyboard::KeyboardLayout::from_vial_json(&old[&name]).unwrap();
+            assert!(!legacy.custom_keycodes.iter().any(|k| k.name=="EH_NORMAL"));
+        }
+    }
+
+    #[test]
     fn approved_normal_descriptor_only_custom_picker_decode_search_and_old_gate() {
         let definition: serde_json::Value = serde_json::from_str(include_str!("../tests/fixtures/phenom-approved-timeout20-normal.json")).unwrap();
         for advertised in [false,true] {
@@ -758,15 +794,13 @@ mod tests {
         picker.custom_keycodes = layout.custom_keycodes.iter().enumerate()
             .map(|(i,k)| (k.name.clone(),k.label.clone(),k.title.clone(),0x7e00+i as u16)).collect();
         let original = picker.custom_keycodes.clone();
-        let original_values: Vec<_> = picker.custom_keycode_rows(false).iter().map(|r| r.action.clone()).collect();
-        let mut expected = original_values.clone();
-        for value in [0x7e49, 0x7e4a, 0x7e4b] {
-            expected.retain(|a| *a != PickerAction::Assign(KeyBinding::Vial(value)));
-        }
-        for (value, anchor) in [(0x7e49,0x7e06),(0x7e4a,0x7e35),(0x7e4b,0x7e3c)] {
-            let position = expected.iter().position(|a| *a == PickerAction::Assign(KeyBinding::Vial(anchor))).unwrap();
-            expected.insert(position+1, PickerAction::Assign(KeyBinding::Vial(value)));
-        }
+        let original_values: Vec<_> = original.iter()
+            .filter(|(n,l,t,_)| !l.trim().is_empty() && picker.custom_keycode_tab(n,l,t)==KeycodeTab::Custom)
+            .map(|(_,_,_,v)|PickerAction::Assign(KeyBinding::Vial(*v))).collect();
+        let names = ["EH_NORMAL","EH_SNP","EH_SCR","EH_TXT","EH_L_NORMAL","EH_L_SNP","EH_L_SCR","EH_L_TXT","EH_R_NORMAL","EH_USR1","EH_USR2","EH_USR3"];
+        let mut expected: Vec<_> = names.iter().map(|name| PickerAction::Assign(KeyBinding::Vial(original.iter().find(|(n,_,_,_)|n==name).unwrap().3))).collect();
+        let mode_actions = expected.clone();
+        expected.extend(original_values.iter().filter(|a| !mode_actions.contains(a)).copied());
         for language in [crate::i18n::Language::Russian, crate::i18n::Language::English] {
             picker.language = language;
             let rows = picker.custom_keycode_rows(false);

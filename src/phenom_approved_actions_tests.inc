@@ -3,13 +3,13 @@ fn phenom_timeout20_portable_all_contracts_roundtrip_and_rejection() {
     let values = [50,100,150,200,250,300,350,400,450,500,750,1000,1250,1500,1750,2000,2250,2500,2750,3000];
     let make = |count: usize, value| {
         let mut app = phenom_settings_app(true);
-        let variants: Vec<String> = if count == 6 { vec![250,500,750,1000,1250,1500] } else { values[..count].to_vec() }.into_iter().map(|v| format!("{v} ms")).collect();
+        let variants: Vec<String> = if count == 6 { vec![250,500,750,1000,1250,1500] } else if count == 12 { vec![250,500,750,1000,1250,1500,1750,2000,2250,2500,2750,3000] } else { values[..count].to_vec() }.into_iter().map(|v| format!("{v} ms")).collect();
         for f in &mut app.module_settings.fields { if f.qsid == 324 { f.variants = variants.clone(); f.max = count as u16 - 1; } }
         for g in &mut app.module_settings.groups { for f in &mut g.fields { if f.qsid == 324 { f.variants = variants.clone(); f.max = count as u16 - 1; } } }
         app.module_settings.values.insert(324, value);
         app
     };
-    for before in [6,14,20] { for after in [6,14,20] { for index in 0..before {
+    for before in [6,12,14,20] { for after in [6,12,14,20] { for index in 0..before {
         let source = make(before, index as u16);
         let mut bundle = roundtrip(&source);
         bundle.data.portable_settings.retain(|s| s.qsid == 324);

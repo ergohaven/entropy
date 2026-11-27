@@ -293,20 +293,22 @@ impl KeycodePicker {
             });
         }
         if tab == KeycodeTab::Custom {
-            // Presentation only: advertised wire slots and descriptor order stay intact.
-            for (name, anchor) in [
-                ("EH_L_NORMAL", "LPREV"),
-                ("EH_NORMAL", "EH_L_TXT"),
-                ("EH_R_NORMAL", "EH_TXT"),
-            ] {
-                if entries.iter().any(|entry| entry.0 == anchor) {
-                    if let Some(index) = entries.iter().position(|entry| entry.0 == name) {
-                        let entry = entries.remove(index);
-                        let after = entries.iter().position(|entry| entry.0 == anchor)
-                            .expect("distinct advertised anchor retained");
-                        entries.insert(after + 1, entry);
-                    }
+            // Presentation only. Require the complete named mode group; legacy
+            // descriptors and same-caption unrelated keys keep their order.
+            let mode_names = [
+                "EH_NORMAL", "EH_SNP", "EH_SCR", "EH_TXT",
+                "EH_L_NORMAL", "EH_L_SNP", "EH_L_SCR", "EH_L_TXT",
+                "EH_R_NORMAL", "EH_USR1", "EH_USR2", "EH_USR3",
+            ];
+            if mode_names.iter().all(|name| entries.iter().any(|entry| entry.0 == *name)) {
+                let mut modes = Vec::with_capacity(mode_names.len());
+                for name in mode_names {
+                    let index = entries.iter().position(|entry| entry.0 == name)
+                        .expect("advertised distinct mode retained");
+                    modes.push(entries.remove(index));
                 }
+                modes.append(&mut entries);
+                entries = modes;
             }
         }
         entries

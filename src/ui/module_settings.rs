@@ -505,6 +505,14 @@ impl EntropyApp {
         } else { None }
     }
 
+    fn k04_threshold_field(&self, kind: ModuleSettingsGroupKind, field: &ModuleSettingField) -> bool {
+        self.module_presentation_model() && !self.phenom_vial_model()
+            && kind == ModuleSettingsGroupKind::AutoLayer && field.qsid == 334
+            && field.title.eq_ignore_ascii_case("Auto layer threshold")
+            && field.kind == ModuleSettingKind::Integer && field.width == 1
+            && field.min == 0 && field.max == 100
+    }
+
     fn phenom_auto_timeout_field(&self, kind: ModuleSettingsGroupKind, field: &ModuleSettingField) -> bool {
         self.module_presentation_model()
             && kind == ModuleSettingsGroupKind::AutoLayer
@@ -519,6 +527,10 @@ impl EntropyApp {
 
     fn module_setting_label(&self, group_kind: ModuleSettingsGroupKind, title: &str) -> String {
         let lang = self.app_settings.language;
+        if self.module_settings.groups.iter().filter(|g| g.kind == group_kind)
+            .flat_map(|g| &g.fields).any(|f| f.title == title && self.k04_threshold_field(group_kind, f)) {
+            return crate::i18n::tr_catalog(lang, "modules_settings.k04_threshold").to_owned();
+        }
         let display_title = group_kind.field_base_title(title);
         if self
             .layout
@@ -549,6 +561,9 @@ impl EntropyApp {
         field: &ModuleSettingField,
     ) -> String {
         let lang = self.app_settings.language;
+        if self.k04_threshold_field(group_kind, field) {
+            return crate::i18n::tr_catalog(lang, "modules_settings.k04_threshold_tooltip").to_owned();
+        }
         let display_title = group_kind.field_base_title(&field.title);
         let base_title = if self
             .layout
@@ -658,7 +673,8 @@ impl EntropyApp {
         let display_label = self.module_setting_label(group_kind, &field_title);
         let old_value = self.module_settings.value(field.qsid);
         let requested = Self::module_setting_transport_value(field, value);
-        if self.phenom_mode_speed_field(group_kind, field) || self.phenom_auto_timeout_field(group_kind, field) {
+        if self.phenom_mode_speed_field(group_kind, field) || self.phenom_auto_timeout_field(group_kind, field)
+            || self.k04_threshold_field(group_kind, field) {
             self.coalesce_pending_module_setting(field.qsid);
         }
 
@@ -758,6 +774,33 @@ impl EntropyApp {
                         }
                     },
                 );
+            }
+            ModuleSettingKind::Integer if self.k04_threshold_field(group_kind, &field) => {
+                let lang = self.app_settings.language;
+                let mut value = raw_value;
+                let (content_width, control_width, left_width, track_width) =
+                    Self::module_slider_columns(ui, self.app_settings.language, metrics, content_width);
+                crate::ui_style::settings_list_row_with_tooltip(
+                    ui, content_width, row_height, label.as_str(), true, tooltip.as_deref(), control_width, |ui| {
+                        ui.horizontal(|ui| {
+                            let height = ui.text_style_height(&egui::TextStyle::Body)
+                                .max(ui.spacing().interact_size.y);
+                            ui.allocate_ui_with_layout(egui::vec2(left_width, height),
+                                egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui.label(crate::i18n::tr_catalog(lang, "modules_settings.k04_threshold_less"));
+                                });
+                            ui.spacing_mut().slider_width = track_width;
+                            let response = ui.add(egui::Slider::new(&mut value, 0..=100)
+                                .clamping(egui::SliderClamping::Never).step_by(1.0).show_value(false).trailing_fill(true));
+                            response.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(value), &label));
+                            // A numeric suffix overflows this fixed control slot and
+                            // expands the centered parent, shifting following rows.
+                            ui.label(crate::i18n::tr_catalog(lang, "modules_settings.k04_threshold_more"));
+                            if response.changed() && value <= 100 && value != raw_value {
+                                self.write_module_setting_value(group_idx, &field, value);
+                            }
+                        });
+                    });
             }
             ModuleSettingKind::Integer if self.phenom_mode_speed_field(group_kind, &field) => {
                 let lang = self.app_settings.language;
@@ -1081,6 +1124,9 @@ impl EntropyApp {
             .enumerate()
             .filter(|(_, field)| {
                 group.field_visible_for_selection(field, selected_module, selected_mode)
+                    && !(self.module_presentation_model() && !self.phenom_vial_model()
+                        && matches!(field.qsid, 325 | 326)
+                        && group.kind.field_base_title(&field.title).eq_ignore_ascii_case("Encoder interval"))
             })
             .map(|(field_idx, _)| ModuleSettingsRow::Field {
                 group_idx,
