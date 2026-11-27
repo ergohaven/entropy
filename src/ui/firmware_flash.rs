@@ -95,7 +95,11 @@ impl Dialog {
     }
 
     fn requires_original_owner(&self) -> bool {
-        self.steps.is_empty() && !(self.profile.qmk && self.retry.is_some())
+        // A retained peripheral attempt has already relinquished the original
+        // editor session, even if no component has finished yet.
+        let retry_after_handoff =
+            self.retry.is_some() && (self.profile.qmk || self.moved_target());
+        self.steps.is_empty() && !retry_after_handoff
     }
 
     fn physical_recovery(&self, app: &EntropyApp, physical_reset: bool) -> bool {
@@ -279,19 +283,20 @@ impl EntropyApp {
         Ok(())
     }
 
-    fn begin_firmware_flash(
+    fn prepare_firmware_flash_attempt(
         &mut self,
-        ctx: &egui::Context,
         dialog: &mut Dialog,
         physical_reset: bool,
-    ) -> anyhow::Result<()> {
+    ) -> anyhow::Result<(Prepared, Option<DeviceSession>)> {
         let Phase::Ready(prepared) = &dialog.phase else {
             anyhow::bail!("Firmware is not prepared");
         };
         anyhow::ensure!(!dialog.profile.qmk || !physical_reset, "Select and unlock the QMK keyboard first");
         let recovery = dialog.physical_recovery(self, physical_reset);
-        let needs_session = !recovery && (dialog.profile.qmk || dialog.steps.is_empty() || !dialog.moved_target());
-        if dialog.requires_original_owner() && !recovery {
+        let requires_original_owner = dialog.requires_original_owner();
+        let needs_session =
+            !recovery && (requires_original_owner || dialog.profile.qmk || !dialog.moved_target());
+        if requires_original_owner && !recovery {
             anyhow::ensure!(
                 self.firmware_flash_owner_matches(dialog),
                 "Keyboard changed; start the update again"
@@ -366,6 +371,16 @@ impl EntropyApp {
             self.selected_device = None;
             self.connect_state = ConnectState::SelectingDevice;
         }
+        Ok((prepared, hid))
+    }
+
+    fn begin_firmware_flash(
+        &mut self,
+        ctx: &egui::Context,
+        dialog: &mut Dialog,
+        physical_reset: bool,
+    ) -> anyhow::Result<()> {
+        let (prepared, hid) = self.prepare_firmware_flash_attempt(dialog, physical_reset)?;
         let (sender, receiver) = mpsc::channel();
         let ctx = ctx.clone();
         std::thread::spawn(move || {
@@ -424,6 +439,8 @@ impl EntropyApp {
         let Some(mut dialog) = self.firmware_flash.dialog.take() else {
             return;
         };
+        let first_rmk_peripheral =
+            !dialog.profile.qmk && dialog.moved_target() && dialog.steps.is_empty();
         let mut replacement = None;
         match &mut dialog.phase {
             Phase::Preparing(receiver) => match receiver.try_recv() {
@@ -461,6 +478,15 @@ impl EntropyApp {
                     }
                 };
                 if let Some(result) = result {
+                    // The first RMK peripheral can retry without the original
+                    // session only once the worker has validated that owner and
+                    // released the USB cable at WaitingComponent.
+                    if result.is_err()
+                        && first_rmk_peripheral
+                        && matches!(stage, Stage::CheckingConnection)
+                    {
+                        dialog.retry = None;
+                    }
                     dialog.post_write_check = result.is_err()
                         && dialog.retry.is_some()
                         && (matches!(stage, Stage::WaitingDisconnect | Stage::WaitingReconnect)
@@ -724,7 +750,7 @@ impl EntropyApp {
                             "Wait for keyboard discovery to finish and leave the target unselected in Entropy.",
                             "Дождитесь завершения поиска клавиатур и не выбирайте эту часть в Entropy.",
                         )).clicked() { action = Some(Action::CheckVersion); }
-                    } else if !dialog.profile.qmk {
+                    } else if !dialog.profile.qmk && dialog.retry.is_some() {
                         ui.label(if dialog.part.rp2040() { text(lang, "No successful update is recorded for this part. Reconnect it before retrying; hold BOOT while reconnecting if it remains in update mode.", "Успешное обновление этой части не подтверждено. Подключите её заново перед повтором; если она осталась в режиме прошивки, удерживайте BOOT при подключении.") } else { text(lang, "No successful update is recorded for this part. Reconnect it before retrying; use physical Reset if it remains in update mode.", "Успешное обновление этой части не подтверждено. Перед повтором подключите её заново; если она осталась в режиме прошивки, используйте Reset.") });
                     }
                     if dialog.retry.is_some() {
@@ -1603,6 +1629,127 @@ mod tests {
         harness.run_steps(2);
         harness.get_by_label("Hold the physical J + K keys to unlock.");
         assert!(recorder.sent().iter().all(|header| header.cmd != Cmd::BootloaderJump));
+    }
+
+    fn first_rmk_peripheral_in_flight() -> (EntropyApp, FakeBoard, mpsc::Sender<Event>, flash::UsbTarget) {
+        let (mut app, recorder) = fixture();
+        let mut layout = KeyboardLayout::from_vial_json(&serde_json::json!({
+            "matrix": {"rows": 1, "cols": 1},
+            "layouts": {"keymap": [["0,0"]]}
+        }))
+        .unwrap();
+        layout.firmware = crate::firmware::FirmwareProtocol::Rynk;
+        layout.layers = vec![vec![crate::keyboard::KeyBinding::Rynk(
+            rmk_types_rynk::action::KeyAction::Single(rmk_types_rynk::action::Action::User(90)),
+        )]];
+        app.layout = Some(layout);
+        app.layer_count = 1;
+
+        let mut dialog = app.firmware_flash.dialog.take().unwrap();
+        let origin = flash::UsbTarget {
+            port: "original-port".into(),
+            vendor: 0xe126,
+            product: 0x52,
+            mounts: vec![],
+        };
+        dialog.phase = Phase::Ready(Prepared {
+            profile: dialog.profile,
+            qmk_serial: None,
+            keyboard_uid: [1; 8],
+            bytes: vec![7],
+            version: "0.3.1".into(),
+            part: PHENOM_PERIPHERAL,
+            remaining: vec![(PHENOM_CENTRAL, vec![9])],
+            origin: origin.clone(),
+        });
+        let (_, original_session) = app.prepare_firmware_flash_attempt(&mut dialog, false).unwrap();
+        assert!(original_session.is_some());
+        drop(original_session);
+        assert!(app.selected_device.is_none());
+        assert!(app.hid_device.is_none());
+        assert!(dialog.backup.as_ref().unwrap().is_file());
+
+        let (tx, rx) = mpsc::channel();
+        dialog.phase = Phase::Flashing {
+            receiver: rx,
+            stage: Stage::CheckingConnection,
+        };
+        app.firmware_flash.dialog = Some(dialog);
+        (app, recorder, tx, origin)
+    }
+
+    #[test]
+    fn firmware_flash_first_rmk_peripheral_can_retry_without_selected_device() {
+        use egui_kittest::kittest::{NodeT, Queryable};
+        let _config = ScopedTempConfig::new();
+        let (mut app, recorder, tx, origin) = first_rmk_peripheral_in_flight();
+        let backup = app.firmware_flash.dialog.as_ref().unwrap().backup.clone().unwrap();
+        tx.send(Event::Progress(Stage::WaitingComponent)).unwrap();
+        tx.send(Event::Progress(Stage::Unlocking(vec![(0, 0)]))).unwrap();
+        tx.send(Event::Finished(Err("unlock timed out".into()))).unwrap();
+        app.poll_firmware_flash(&egui::Context::default());
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(640.0, 700.0))
+            .with_context_setup(crate::keycode_picker::setup_picker_test_fonts)
+            .build_ui_state(|ui, app: &mut EntropyApp| app.draw_firmware_flash(ui.ctx()), app);
+        harness.run();
+        harness.get_by_label("Retry this target").click();
+        harness.run();
+        assert!(!harness
+            .get_by_label("Start transfer: Right half")
+            .accesskit_node()
+            .is_disabled());
+
+        let app = harness.state_mut();
+        let mut dialog = app.firmware_flash.dialog.take().unwrap();
+        assert!(matches!(dialog.phase, Phase::Ready(_)));
+        assert!(dialog.steps.is_empty());
+
+        app.selected_device = Some(0);
+        let error = app.prepare_firmware_flash_attempt(&mut dialog, false).err().unwrap();
+        assert!(error.to_string().contains("Disconnect other keyboard sessions"));
+        app.selected_device = None;
+
+        dialog.backup = None;
+        let error = app.prepare_firmware_flash_attempt(&mut dialog, false).err().unwrap();
+        assert!(error.to_string().contains("Configuration backup is missing"));
+        dialog.backup = Some(backup.clone());
+
+        let (retried, session) = app.prepare_firmware_flash_attempt(&mut dialog, false).unwrap();
+        assert!(session.is_none());
+        assert_eq!(dialog.backup.as_ref(), Some(&backup));
+        assert_eq!(retried.origin, origin);
+        assert_eq!(retried.part, PHENOM_PERIPHERAL);
+        assert_eq!(retried.keyboard_uid, [1; 8]);
+        assert_eq!(retried.bytes, vec![7]);
+        assert_eq!(retried.remaining, vec![(PHENOM_CENTRAL, vec![9])]);
+        assert!(recorder.sent().iter().all(|h| h.cmd != Cmd::BootloaderJump));
+    }
+
+    #[test]
+    fn firmware_flash_first_rmk_peripheral_cannot_retry_without_preflight() {
+        use egui_kittest::kittest::Queryable;
+        let _config = ScopedTempConfig::new();
+        let (mut app, recorder, tx, _) = first_rmk_peripheral_in_flight();
+        // The worker has not confirmed the original component or released the
+        // cable for the peripheral handoff.
+        tx.send(Event::Finished(Err("Keyboard moved to a different USB port; start again".into())))
+            .unwrap();
+        app.poll_firmware_flash(&egui::Context::default());
+
+        let mut harness = egui_kittest::Harness::builder()
+            .with_size(egui::vec2(640.0, 700.0))
+            .with_context_setup(crate::keycode_picker::setup_picker_test_fonts)
+            .build_ui_state(|ui, app: &mut EntropyApp| app.draw_firmware_flash(ui.ctx()), app);
+        harness.run();
+        assert!(harness.query_by_label("Retry this target").is_none());
+        harness.get_by_label("Reconnect and select the primary half or Qube USB dongle, then open About device → Update firmware again to restart the guide.");
+        let dialog = harness.state().firmware_flash.dialog.as_ref().unwrap();
+        assert!(matches!(dialog.phase, Phase::Finished(Err(_))));
+        assert!(dialog.retry.is_none());
+        assert!(dialog.backup.as_ref().unwrap().is_file());
+        assert!(dialog.steps.is_empty());
+        assert!(recorder.sent().iter().all(|h| h.cmd != Cmd::BootloaderJump));
     }
 
     #[test]
