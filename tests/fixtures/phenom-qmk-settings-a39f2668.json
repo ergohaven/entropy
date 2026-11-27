@@ -1,0 +1,59 @@
+{ "settings": [{
+    "name": "Left modules",
+    "fields": [
+        { "type": "select", "title": "Module", "qsid": 372, "variants": ["Encoder", "Trackball", "Touchpad"] },
+        { "type": "select", "title": "Mode", "qsid": 134, "variants": ["Normal", "Sniper", "Scroll", "Text"] },
+        { "type": "select", "title": "Ball axis", "qsid": 130, "variants": ["0°", "90°", "180°", "270°"] },
+        { "type": "select", "title": "Touch axis", "qsid": 132, "variants": ["0°", "90°", "180°", "270°"] },
+        { "type": "select", "title": "Ball DPI", "qsid": 120, "variants": ["200", "400", "600", "800", "1000", "1200", "1400", "1600", "1800", "2000", "2200", "2400", "2600", "2800", "3000", "3200"] },
+        { "type": "select", "title": "Touch DPI", "qsid": 122, "variants": ["100", "200", "300", "400", "500", "600", "700", "800", "900", "1000"] },
+        { "type": "boolean", "title": "Touch gestures", "qsid": 327, "bit": 0 },
+        { "type": "select", "title": "Encoder interval", "qsid": 325, "variants": ["0 ms", "5 ms", "10 ms", "15 ms", "20 ms", "30 ms", "40 ms", "60 ms", "80 ms", "100 ms"] },
+        { "type": "select", "title": "Encoder steps", "qsid": 376, "variants": ["1", "2", "3", "4", "5", "6", "7", "8"] },
+        { "type": "integer", "title": "Scroll sens", "qsid": 125, "min": 1, "max": 255, "width": 1 },
+        { "type": "integer", "title": "Sniper sens", "qsid": 124, "min": 1, "max": 255, "width": 1 },
+        { "type": "integer", "title": "Text sens", "qsid": 126, "min": 1, "max": 255, "width": 1 },
+        { "type": "boolean", "title": "Invert scroll vertical", "qsid": 136, "bit": 0 },
+        { "type": "boolean", "title": "Invert scroll horizontal", "qsid": 149, "bit": 0 },
+        { "type": "boolean", "title": "Invert text vertical", "qsid": 147, "bit": 0 },
+        { "type": "boolean", "title": "Invert text horizontal", "qsid": 151, "bit": 0 },
+        { "type": "boolean", "title": "Acceleration", "qsid": 137, "bit": 0 },
+        { "type": "boolean", "title": "Sticky mode", "qsid": 140, "bit": 0 }
+    ]
+},
+{
+    "name": "Right modules",
+    "fields": [
+        { "type": "select", "title": "Module", "qsid": 373, "variants": ["Encoder", "Trackball", "Touchpad"] },
+        { "type": "select", "title": "Mode", "qsid": 135, "variants": ["Normal", "Sniper", "Scroll", "Text"] },
+        { "type": "select", "title": "Ball axis", "qsid": 131, "variants": ["0°", "90°", "180°", "270°"] },
+        { "type": "select", "title": "Touch axis", "qsid": 133, "variants": ["0°", "90°", "180°", "270°"] },
+        { "type": "select", "title": "Ball DPI", "qsid": 121, "variants": ["200", "400", "600", "800", "1000", "1200", "1400", "1600", "1800", "2000", "2200", "2400", "2600", "2800", "3000", "3200"] },
+        { "type": "select", "title": "Touch DPI", "qsid": 123, "variants": ["100", "200", "300", "400", "500", "600", "700", "800", "900", "1000"] },
+        { "type": "boolean", "title": "Touch gestures", "qsid": 328, "bit": 0 },
+        { "type": "select", "title": "Encoder interval", "qsid": 326, "variants": ["0 ms", "5 ms", "10 ms", "15 ms", "20 ms", "30 ms", "40 ms", "60 ms", "80 ms", "100 ms"] },
+        { "type": "select", "title": "Encoder steps", "qsid": 377, "variants": ["1", "2", "3", "4", "5", "6", "7", "8"] },
+        { "type": "integer", "title": "Scroll sens", "qsid": 128, "min": 1, "max": 255, "width": 1 },
+        { "type": "integer", "title": "Sniper sens", "qsid": 127, "min": 1, "max": 255, "width": 1 },
+        { "type": "integer", "title": "Text sens", "qsid": 129, "min": 1, "max": 255, "width": 1 },
+        { "type": "boolean", "title": "Invert scroll vertical", "qsid": 138, "bit": 0 },
+        { "type": "boolean", "title": "Invert scroll horizontal", "qsid": 150, "bit": 0 },
+        { "type": "boolean", "title": "Invert text vertical", "qsid": 148, "bit": 0 },
+        { "type": "boolean", "title": "Invert text horizontal", "qsid": 152, "bit": 0 },
+        { "type": "boolean", "title": "Acceleration", "qsid": 139, "bit": 0 },
+        { "type": "boolean", "title": "Sticky mode", "qsid": 141, "bit": 0 }
+    ]
+},
+{
+    "name": "Auto layer",
+    "fields": [
+        { "type": "select", "title": "Auto layer", "qsid": 143, "variants": ["0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "10", "11", "12", "13", "14", "15"] },
+        { "type": "select", "title": "Auto layer timeout", "qsid": 324, "variants": ["50 ms", "100 ms", "150 ms", "200 ms", "250 ms", "300 ms", "350 ms", "400 ms", "450 ms", "500 ms", "750 ms", "1000 ms", "1250 ms", "1500 ms"] },
+        { "type": "integer", "title": "Auto layer threshold", "qsid": 374, "min": 1, "max": 127, "width": 1 },
+        { "type": "boolean", "title": "Auto layer deactivate on key", "qsid": 375, "bit": 0 },
+        { "type": "boolean", "title": "Auto layer in Normal", "qsid": 142, "bit": 0 },
+        { "type": "boolean", "title": "Auto layer in Sniper", "qsid": 144, "bit": 0 },
+        { "type": "boolean", "title": "Auto layer in Scroll", "qsid": 145, "bit": 0 },
+        { "type": "boolean", "title": "Auto layer in Text", "qsid": 146, "bit": 0 }
+    ]
+}] }

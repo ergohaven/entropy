@@ -534,6 +534,15 @@ impl EntropyApp {
         }
     }
 
+    // Slider edits supersede unsent values, but never cancel an in-flight SET.
+    // The caller scopes this to the Phenom mode-speed fields; discrete module
+    // selectors retain their existing ordered-write behavior.
+    pub(super) fn coalesce_pending_module_setting(&mut self, qsid: u16) {
+        self.settings_write_queue.pending.retain(|request| {
+            request.qsid != qsid || !matches!(request.target, SettingsWriteTarget::Module { .. })
+        });
+    }
+
     pub(super) fn queue_module_setting_write(
         &mut self,
         group_title: String,

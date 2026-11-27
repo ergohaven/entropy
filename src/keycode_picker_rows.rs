@@ -702,6 +702,91 @@ mod tests {
     }
 
     #[test]
+    fn approved_clear_eeprom_catalog_picker_search_and_assigned_ru_en() {
+        use crate::i18n::{Language, tr_text};
+        for language in [Language::Russian, Language::English] {
+            let mut picker = KeycodePicker::default(); picker.language = language;
+            let rows = picker.special_rows();
+            let row = rows.iter().find(|r| r.action == PickerAction::Assign(KeyBinding::Vial(0x7c03))).expect("Clear EEPROM on Special tab");
+            assert_eq!(row.label.replace('\n', " "), "Clear EEPROM");
+            let group: Vec<_> = rows.iter().filter(|r| r.section == row.section).collect();
+            assert_eq!(group[group.len()-2].action, PickerAction::Assign(KeyBinding::Vial(0x7c7a)));
+            assert_eq!(group.last().unwrap().action, PickerAction::Assign(KeyBinding::Vial(0x7c03)));
+            for query in ["Clear EEPROM", "QK_CLEAR_EEPROM", "EE_CLR"] { assert!(row.matches(&query.to_lowercase(), None), "{query}"); }
+            assert_eq!(crate::keycode::find_keycode(0x7c03).unwrap().name, "QK_CLEAR_EEPROM");
+            let action = crate::rynk::keycode::binding_action(KeyBinding::Vial(0x7c03)).unwrap();
+            assert!(matches!(action, rmk_types_rynk::action::KeyAction::Single(rmk_types_rynk::action::Action::KeyboardControl(rmk_types_rynk::action::KeyboardAction::ClearEeprom))));
+            assert_eq!(crate::rynk::keycode::key_binding(action), KeyBinding::Vial(0x7c03));
+            let serialized = serde_json::to_string(&KeyBinding::Vial(0x7c03)).unwrap();
+            assert_eq!(serde_json::from_str::<KeyBinding>(&serialized).unwrap(),KeyBinding::Vial(0x7c03));
+            assert_eq!(crate::keycode::keycode_label_with_custom(0x7c03, &[]), "Clear\nEEPROM");
+            let tip = tr_text(language, &crate::keycode::keycode_tooltip(0x7c03, &[], &[]));
+            assert_eq!(row.tooltip, tip);
+            if language == Language::Russian { assert_eq!(tip,"Сброс сохранённых назначений клавиш и настроек к заводским с перезапуском клавиатуры"); assert_eq!(row.section,"Специальные клавиши"); }
+            else { assert_eq!(tip,"Reset saved key assignments and settings to factory defaults and restart the keyboard"); }
+        }
+    }
+
+    #[test]
+    fn approved_normal_descriptor_only_custom_picker_decode_search_and_old_gate() {
+        let definition: serde_json::Value = serde_json::from_str(include_str!("../tests/fixtures/phenom-approved-timeout20-normal.json")).unwrap();
+        for advertised in [false,true] {
+            let mut json = definition.clone();
+            if !advertised { json["customKeycodes"].as_array_mut().unwrap().truncate(73); }
+            let layout = crate::keyboard::KeyboardLayout::from_vial_json(&json).unwrap();
+            let mut picker = KeycodePicker::default();
+            picker.custom_keycodes = layout.custom_keycodes.iter().enumerate().map(|(i,k)| (k.name.clone(),k.label.clone(),k.title.clone(),0x7e00+i as u16)).collect();
+            let rows = picker.custom_keycode_rows(false);
+            for (code,label,name) in [(0x7e49,"Left\nNormal","EH_L_NORMAL"),(0x7e4a,"Normal\nmode","EH_NORMAL"),(0x7e4b,"Right\nNormal","EH_R_NORMAL")] {
+                let row = rows.iter().find(|r| r.action == PickerAction::Assign(KeyBinding::Vial(code)));
+                assert_eq!(row.is_some(),advertised);
+                if let Some(row) = row {
+                    assert_eq!(row.tab,KeycodeTab::Custom); assert_eq!(row.label,label);
+                    assert!(row.matches(&name.to_lowercase(),None)); assert!(row.matches("normal",None));
+                    assert_eq!(crate::keycode::keycode_label_with_custom(code,&layout.custom_keycodes),label);
+                    assert_eq!(crate::keycode::keycode_tooltip(code,&layout.custom_keycodes,&[]),row.tooltip);
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn approved_normal_picker_order_moves_only_display_rows_and_keeps_wire_slots() {
+        let definition: serde_json::Value = serde_json::from_str(include_str!("../tests/fixtures/phenom-approved-timeout20-normal.json")).unwrap();
+        let layout = crate::keyboard::KeyboardLayout::from_vial_json(&definition).unwrap();
+        let mut picker = KeycodePicker::default();
+        picker.custom_keycodes = layout.custom_keycodes.iter().enumerate()
+            .map(|(i,k)| (k.name.clone(),k.label.clone(),k.title.clone(),0x7e00+i as u16)).collect();
+        let original = picker.custom_keycodes.clone();
+        let original_values: Vec<_> = picker.custom_keycode_rows(false).iter().map(|r| r.action.clone()).collect();
+        let mut expected = original_values.clone();
+        for value in [0x7e49, 0x7e4a, 0x7e4b] {
+            expected.retain(|a| *a != PickerAction::Assign(KeyBinding::Vial(value)));
+        }
+        for (value, anchor) in [(0x7e49,0x7e06),(0x7e4a,0x7e35),(0x7e4b,0x7e3c)] {
+            let position = expected.iter().position(|a| *a == PickerAction::Assign(KeyBinding::Vial(anchor))).unwrap();
+            expected.insert(position+1, PickerAction::Assign(KeyBinding::Vial(value)));
+        }
+        for language in [crate::i18n::Language::Russian, crate::i18n::Language::English] {
+            picker.language = language;
+            let rows = picker.custom_keycode_rows(false);
+            assert_eq!(rows.iter().map(|r| r.action.clone()).collect::<Vec<_>>(), expected);
+            assert_eq!(picker.custom_keycodes, original, "descriptor slot ownership must not move");
+        }
+        // Legacy descriptors do not acquire phantom entries or change order.
+        picker.custom_keycodes.truncate(73);
+        let legacy: Vec<_> = original_values.into_iter().filter(|a| !matches!(a, PickerAction::Assign(KeyBinding::Vial(0x7e49..=0x7e4b)))).collect();
+        assert_eq!(picker.custom_keycode_rows(false).iter().map(|r| r.action.clone()).collect::<Vec<_>>(),legacy);
+        // Same visible labels from an unrelated descriptor are not sufficient.
+        picker.custom_keycodes = original.iter().map(|(n,l,t,v)| (format!("OTHER_{n}"),l.clone(),t.clone(),*v)).collect();
+        let unrelated: Vec<_> = picker.custom_keycode_rows(false).into_iter().map(|r|r.action).collect();
+        let original_order: Vec<_> = picker.custom_keycodes.iter().filter(|(_,l,_,_)| !l.trim().is_empty())
+            .filter(|(n,l,t,_)| picker.custom_keycode_tab(n,l,t)==KeycodeTab::Custom)
+            .map(|(_,_,_,v)|PickerAction::Assign(KeyBinding::Vial(*v))).collect();
+        assert_eq!(unrelated, original_order);
+    }
+
+    #[test]
     fn aliases_accumulate_and_match_alongside_the_caption() {
         let row = PickerRow::new(
             KeycodeTab::Rgb,

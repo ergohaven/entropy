@@ -1650,6 +1650,12 @@ pub const KEYCODES: &[Keycode] = &[
         category: KeycodeCategory::Special,
     },
     Keycode {
+        value: 0x7C03,
+        name: "QK_CLEAR_EEPROM",
+        label: "Clear\nEEPROM",
+        category: KeycodeCategory::Special,
+    },
+    Keycode {
         value: 0x7C02,
         name: "DB_TOGG",
         label: "🐛\nDebug",
@@ -2732,6 +2738,7 @@ fn simple_key_tooltip(kc: &Keycode) -> String {
                 gui_mod_name()
             )
         }
+        "QK_CLEAR_EEPROM" => "Reset saved key assignments and settings to factory defaults and restart the keyboard",
         "QK_BOOT" => "Bootloader — put device into flash mode",
         "DB_TOGG" => "Debug toggle — enable/disable debug output",
         "QK_LOCK" => "Lock — lock a key in pressed state until pressed again",

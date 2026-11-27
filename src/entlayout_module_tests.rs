@@ -1,4 +1,5 @@
 use super::tests::module_app;
+include!("phenom_approved_actions_tests.inc");
 use super::*;
 
 fn phenom_settings_app(rmk: bool) -> EntropyApp {

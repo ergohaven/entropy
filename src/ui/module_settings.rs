@@ -14,7 +14,7 @@ fn module_setting_catalog_keys(title: &str) -> Option<(&'static str, &'static st
             "modules_settings.display_text_size",
             "modules_settings.display_text_size_tooltip",
         )),
-        "module" => Some(("modules_settings.module", "modules_settings.module_tooltip")),
+        "module" => Some(("modules_settings.phenom_module_type", "modules_settings.phenom_module_type_tooltip")),
         "mode" => Some(("modules_settings.mode", "modules_settings.mode_tooltip")),
         "ball axis" => Some((
             "modules_settings.ball_axis",
@@ -202,6 +202,196 @@ pub(super) fn fixed_encoder_field_number(title: &str, side_size: usize) -> Optio
 }
 
 impl EntropyApp {
+    fn phenom_vial_model(&self) -> bool {
+        let Some(layout) = self.layout.as_ref() else {
+            return false;
+        };
+        let name: String = layout
+            .name
+            .chars()
+            .filter(|c| c.is_ascii_alphanumeric())
+            .flat_map(char::to_lowercase)
+            .collect();
+        if layout.firmware != FirmwareProtocol::Vial
+            || !matches!(
+                name.as_str(),
+                "phenom"
+                    | "ergohavenphenom"
+                    | "phenommini"
+                    | "ergohavenphenommini"
+                    | "phenommicro"
+                    | "ergohavenphenommicro"
+            )
+        {
+            return false;
+        }
+        true
+    }
+
+    fn module_presentation_model(&self) -> bool {
+        if self.phenom_vial_model() { return true; }
+        let Some(layout) = self.layout.as_ref() else { return false; };
+        let name: String = layout.name.chars().filter(|c| c.is_ascii_alphanumeric())
+            .flat_map(char::to_lowercase).collect();
+        layout.firmware == FirmwareProtocol::Rynk && matches!(name.as_str(),
+            "k04" | "ergohavenk04" | "k04mini" | "ergohavenk04mini"
+            | "k04micro" | "ergohavenk04micro" | "k04qube" | "ergohavenk04qube"
+            | "k04miniqube" | "ergohavenk04miniqube" | "k04microqube" | "ergohavenk04microqube"
+            | "k04qubemini" | "ergohavenk04qubemini" | "k04qubemicro" | "ergohavenk04qubemicro")
+    }
+
+    // Presentation parity does not opt RMK into Phenom wire/value projections.
+    fn module_presentation_pointing_group(&self, kind: ModuleSettingsGroupKind) -> bool {
+        if !self.module_presentation_model() { return false; }
+        let Some(idx) = self
+            .module_settings
+            .groups
+            .iter()
+            .position(|g| g.kind == kind)
+        else {
+            return false;
+        };
+        matches!(
+            kind,
+            ModuleSettingsGroupKind::Left | ModuleSettingsGroupKind::Right
+        ) && (self.module_settings.groups[idx]
+            .module_selector_field()
+            .is_none()
+            || matches!(
+                self.selected_module_kind(idx),
+                Some(ModuleDeviceKind::Trackball | ModuleDeviceKind::Touchpad)
+            ))
+    }
+
+    fn phenom_pointing_module_group(&self, kind: ModuleSettingsGroupKind) -> bool {
+        self.phenom_vial_model() && self.module_presentation_pointing_group(kind)
+    }
+
+    fn module_presentation_trackball_group(&self, kind: ModuleSettingsGroupKind) -> bool {
+        self.module_presentation_pointing_group(kind)
+            && self.module_settings.groups.iter().position(|g| g.kind == kind)
+                .is_some_and(|idx| self.module_settings.groups[idx].module_selector_field().is_none()
+                    || self.selected_module_kind(idx) == Some(ModuleDeviceKind::Trackball))
+    }
+
+    fn phenom_trackball_catalog_keys(
+        &self,
+        kind: ModuleSettingsGroupKind,
+        title: &str,
+    ) -> Option<(&'static str, &'static str)> {
+        if !self.module_presentation_pointing_group(kind) {
+            return None;
+        }
+        if self.module_presentation_trackball_group(kind) {
+            let keys = match kind.field_base_title(title).to_ascii_lowercase().as_str() {
+                "module" => Some(("modules_settings.phenom_module_type", "modules_settings.phenom_module_type_tooltip")),
+                "mode" => Some(("modules_settings.phenom_module_mode", "modules_settings.mode_tooltip")),
+                "ball dpi" => Some(("modules_settings.phenom_ball_dpi", "modules_settings.phenom_ball_dpi_tooltip")),
+                "acceleration" => Some(("modules_settings.acceleration", "modules_settings.phenom_acceleration_tooltip")),
+                _ => None,
+            };
+            if keys.is_some() { return keys; }
+        }
+        if !self.module_presentation_trackball_group(kind) {
+            let keys = match kind.field_base_title(title).to_ascii_lowercase().as_str() {
+                "mode" => Some(("modules_settings.phenom_module_mode", "modules_settings.mode_tooltip")),
+                "touch dpi" => Some(("modules_settings.phenom_touch_dpi", "modules_settings.phenom_touch_dpi_tooltip")),
+                "acceleration" => Some(("modules_settings.acceleration", "modules_settings.phenom_touch_acceleration_tooltip")),
+                "touch axis" => Some(("modules_settings.phenom_touch_rotation", "modules_settings.phenom_touch_rotation_tooltip")),
+                "touch gestures" => Some(("modules_settings.touch_gestures", "modules_settings.phenom_touch_gestures_tooltip")),
+                _ => None,
+            };
+            if keys.is_some() { return keys; }
+        }
+        match kind.field_base_title(title).to_ascii_lowercase().as_str() {
+            "ball axis" => Some((
+                "modules_settings.trackball_rotation",
+                "modules_settings.trackball_rotation_tooltip",
+            )),
+            "sniper sens" => Some((
+                "modules_settings.precise_speed",
+                "modules_settings.precise_speed_tooltip",
+            )),
+            "scroll sens" => Some((
+                "modules_settings.trackball_scroll_speed",
+                "modules_settings.trackball_scroll_speed_tooltip",
+            )),
+            "text sens" => Some((
+                "modules_settings.caret_speed",
+                "modules_settings.caret_speed_tooltip",
+            )),
+            _ => None,
+        }
+    }
+
+    fn phenom_ball_rotation_field(
+        &self,
+        kind: ModuleSettingsGroupKind,
+        field: &ModuleSettingField,
+    ) -> bool {
+        // QMK stores an orientation enum, not degrees. Restrict this display
+        // convention to the exact Phenom per-side Ball axis contract.
+        self.phenom_pointing_module_group(kind)
+            && matches!((kind, field.qsid),
+                (ModuleSettingsGroupKind::Left, 130) | (ModuleSettingsGroupKind::Right, 131))
+            && kind.field_base_title(&field.title).eq_ignore_ascii_case("Ball axis")
+            && field.kind == ModuleSettingKind::Select
+            && field.width == 1
+            && field.min == 0
+            && field.max == 3
+            && field.variants == ["0°", "90°", "180°", "270°"]
+    }
+
+    fn phenom_left_touch_rotation_field(
+        &self,
+        kind: ModuleSettingsGroupKind,
+        field: &ModuleSettingField,
+    ) -> bool {
+        // Touch axis uses enum indices 0..3, not degrees. Only the left
+        // touchpad has a 180-degree UI origin; the right remains identity.
+        self.phenom_pointing_module_group(kind)
+            && self.module_settings.groups.iter().position(|g| g.kind == kind)
+                .is_some_and(|idx| self.selected_module_kind(idx) == Some(ModuleDeviceKind::Touchpad))
+            && kind == ModuleSettingsGroupKind::Left
+            && field.qsid == 132
+            && kind.field_base_title(&field.title).eq_ignore_ascii_case("Touch axis")
+            && field.kind == ModuleSettingKind::Select
+            && field.width == 1
+            && field.min == 0
+            && field.max == 3
+            && field.variants == ["0°", "90°", "180°", "270°"]
+    }
+
+    fn phenom_mode_speed_field(
+        &self,
+        kind: ModuleSettingsGroupKind,
+        field: &ModuleSettingField,
+    ) -> bool {
+        let expected = match (
+            kind,
+            kind.field_base_title(&field.title)
+                .to_ascii_lowercase()
+                .as_str(),
+        ) {
+            (ModuleSettingsGroupKind::Left, "sniper sens") => 124,
+            (ModuleSettingsGroupKind::Left, "scroll sens") => 125,
+            (ModuleSettingsGroupKind::Left, "text sens") => 126,
+            (ModuleSettingsGroupKind::Right, "sniper sens") => 127,
+            (ModuleSettingsGroupKind::Right, "scroll sens") => 128,
+            (ModuleSettingsGroupKind::Right, "text sens") => 129,
+            _ => return false,
+        };
+        // K04 RMK uses the same per-side divisor contract, but not Phenom's
+        // independent rotation origins. Keep those predicates separate.
+        self.module_presentation_pointing_group(kind)
+            && field.qsid == expected
+            && field.kind == ModuleSettingKind::Integer
+            && field.width == 1
+            && field.min >= 1
+            && field.min < field.max
+            && field.max <= 255
+    }
+
     pub(super) fn global_encoder_settings_group(&self) -> Option<usize> {
         if !self.module_settings.supported {
             return None;
@@ -258,7 +448,9 @@ impl EntropyApp {
         let Some(layout) = self.layout.as_ref() else {
             return false;
         };
-        if self.global_encoder_settings_group().is_some() || !self.encoder_only_module_settings(layout) {
+        if self.global_encoder_settings_group().is_some()
+            || !self.encoder_only_module_settings(layout)
+        {
             return false;
         }
         let count = fixed_encoder_side_size(layout).unwrap_or(0) * 2;
@@ -294,6 +486,37 @@ impl EntropyApp {
         }
     }
 
+    fn phenom_auto_layer_catalog_keys(&self, kind: ModuleSettingsGroupKind, title: &str) -> Option<(&'static str, &'static str)> {
+        if !self.module_presentation_model() { return None; }
+        let base = kind.field_base_title(title).to_ascii_lowercase();
+        if kind == ModuleSettingsGroupKind::AutoLayer {
+            match base.as_str() {
+                "auto layer in normal" => Some(("modules_settings.phenom_auto_enabled", "modules_settings.phenom_auto_enabled_tooltip")),
+                "auto layer in sniper" => Some(("modules_settings.phenom_auto_sniper", "modules_settings.phenom_auto_sniper_tooltip")),
+                "auto layer in scroll" => Some(("modules_settings.phenom_auto_scroll", "modules_settings.phenom_auto_scroll_tooltip")),
+                "auto layer in text" => Some(("modules_settings.phenom_auto_text", "modules_settings.phenom_auto_text_tooltip")),
+                "auto layer" => Some(("modules_settings.phenom_auto_number", "modules_settings.phenom_auto_number_tooltip")),
+                "auto layer timeout" => Some(("modules_settings.auto_layer_timeout", "modules_settings.phenom_auto_timeout_tooltip")),
+                "auto layer deactivate on key" => Some(("modules_settings.auto_layer_deactivate_on_key", "modules_settings.phenom_auto_key_tooltip")),
+                _ => None,
+            }
+        } else if self.module_presentation_pointing_group(kind) && base == "sticky mode" {
+            Some(("modules_settings.phenom_sticky_mode", "modules_settings.phenom_sticky_mode_tooltip"))
+        } else { None }
+    }
+
+    fn phenom_auto_timeout_field(&self, kind: ModuleSettingsGroupKind, field: &ModuleSettingField) -> bool {
+        self.module_presentation_model()
+            && kind == ModuleSettingsGroupKind::AutoLayer
+            && field.qsid == 324
+            && field.title.eq_ignore_ascii_case("Auto layer timeout")
+            && field.kind == ModuleSettingKind::Select && field.width == 1
+            && field.min == 0 && usize::from(field.max) + 1 == field.variants.len()
+            && field.variants.len() >= 2
+            && field.variants.iter().map(|v| v.strip_suffix(" ms").and_then(|s| s.parse::<u16>().ok())).collect::<Option<Vec<_>>>()
+                .is_some_and(|values| values[0] > 0 && values.windows(2).all(|p| p[0] < p[1]))
+    }
+
     fn module_setting_label(&self, group_kind: ModuleSettingsGroupKind, title: &str) -> String {
         let lang = self.app_settings.language;
         let display_title = group_kind.field_base_title(title);
@@ -313,7 +536,9 @@ impl EntropyApp {
                 return crate::i18n::tr_catalog(lang, key).to_owned();
             }
         }
-        module_setting_catalog_keys(display_title)
+        self.phenom_auto_layer_catalog_keys(group_kind, display_title)
+            .or_else(|| self.phenom_trackball_catalog_keys(group_kind, display_title))
+            .or_else(|| module_setting_catalog_keys(display_title))
             .map(|(label_key, _)| crate::i18n::tr_catalog(lang, label_key).to_owned())
             .unwrap_or_else(|| crate::i18n::tr_text(lang, display_title))
     }
@@ -340,7 +565,10 @@ impl EntropyApp {
         } else {
             display_title
         };
-        let key = module_setting_catalog_keys(base_title)
+        let key = self
+            .phenom_auto_layer_catalog_keys(group_kind, base_title)
+            .or_else(|| self.phenom_trackball_catalog_keys(group_kind, base_title))
+            .or_else(|| module_setting_catalog_keys(base_title))
             .map(|(_, tooltip_key)| tooltip_key)
             .unwrap_or("modules_settings.generic_tooltip");
         let field_label = self.module_setting_label(group_kind, &field.title);
@@ -430,6 +658,9 @@ impl EntropyApp {
         let display_label = self.module_setting_label(group_kind, &field_title);
         let old_value = self.module_settings.value(field.qsid);
         let requested = Self::module_setting_transport_value(field, value);
+        if self.phenom_mode_speed_field(group_kind, field) || self.phenom_auto_timeout_field(group_kind, field) {
+            self.coalesce_pending_module_setting(field.qsid);
+        }
 
         self.queue_module_setting_write(
             group_title,
@@ -441,6 +672,32 @@ impl EntropyApp {
             requested,
         );
         self.sync_firmware_managed_layout_options();
+    }
+
+    // Anchor every module slider to the existing Text navigation track. Reserve
+    // the widest localized endpoint, right-aligned, without moving that track.
+    fn module_slider_columns(
+        ui: &egui::Ui,
+        lang: crate::i18n::Language,
+        metrics: crate::ui_style::ResponsiveMetrics,
+        content_width: f32,
+    ) -> (f32, f32, f32, f32) {
+        let text_width = |key| egui::WidgetText::from(crate::i18n::tr_catalog(lang, key))
+            .into_galley(ui, Some(egui::TextWrapMode::Extend), f32::INFINITY, egui::FontSelection::Default)
+            .size().x;
+        let reference = text_width("modules_settings.speed_slower");
+        let left = reference.max(text_width("modules_settings.speed_more_precise"))
+            .max(text_width("modules_settings.speed_smoother"));
+        let extra = left - reference;
+        // The adaptive list may be wider than a very narrow viewport. Keep
+        // these controls inside the visible row rather than painting past it.
+        let right_edge = ui.clip_rect().right().min(ui.ctx().content_rect().right());
+        let overflow = (ui.max_rect().left() + content_width - right_edge).max(0.0);
+        let control = (metrics.value(250.0) + extra + overflow).min(content_width);
+        let gap = ui.spacing().item_spacing.x;
+        let right = text_width("modules_settings.speed_faster");
+        let track = metrics.value(110.0).min((control - overflow - left - right - 2.0 * gap).max(1.0));
+        (content_width, control, left, track)
     }
 
     pub(super) fn draw_module_settings_field_row(
@@ -502,6 +759,61 @@ impl EntropyApp {
                     },
                 );
             }
+            ModuleSettingKind::Integer if self.phenom_mode_speed_field(group_kind, &field) => {
+                let lang = self.app_settings.language;
+                let (content_width, control_width, left_width, track_width) =
+                    Self::module_slider_columns(ui, lang, metrics, content_width);
+                // Integer reflection is lossless for every advertised divisor, not
+                // a quantized percentage or a new firmware/storage representation.
+                let sum = u32::from(field.min) + u32::from(field.max);
+                let mut speed = (sum - u32::from(raw_value.clamp(field.min, field.max))) as u16;
+                crate::ui_style::settings_list_row_with_tooltip(
+                    ui,
+                    content_width,
+                    row_height,
+                    label.as_str(),
+                    true,
+                    tooltip.as_deref(),
+                    control_width,
+                    |ui| {
+                        ui.horizontal(|ui| {
+                            let height = ui.text_style_height(&egui::TextStyle::Body)
+                                .max(ui.spacing().interact_size.y);
+                            ui.allocate_ui_with_layout(egui::vec2(left_width, height),
+                                egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                                    ui.label(crate::i18n::tr_catalog(lang, match field.qsid {
+                                        124 | 127 => "modules_settings.speed_more_precise",
+                                        125 | 128 => "modules_settings.speed_smoother",
+                                        _ => "modules_settings.speed_slower",
+                                    }));
+                                });
+                            ui.spacing_mut().slider_width = track_width;
+                            let response = ui
+                                .push_id(("phenom_speed", group_idx, field.qsid), |ui| {
+                                    ui.add(
+                                        egui::Slider::new(&mut speed, field.min..=field.max)
+                                            .show_value(false)
+                                            .trailing_fill(true),
+                                    )
+                                })
+                                .inner;
+                            response.widget_info(|| {
+                                egui::WidgetInfo::slider(ui.is_enabled(), f64::from(speed), &label)
+                            });
+                            ui.label(crate::i18n::tr_catalog(
+                                lang,
+                                "modules_settings.speed_faster",
+                            ));
+                            if response.changed() {
+                                let value = (sum - u32::from(speed)) as u16;
+                                if value != raw_value {
+                                    self.write_module_setting_value(group_idx, &field, value);
+                                }
+                            }
+                        });
+                    },
+                );
+            }
             ModuleSettingKind::Integer => {
                 let field_width = metrics.value(86.0);
                 crate::ui_style::settings_list_row_with_tooltip(
@@ -553,15 +865,60 @@ impl EntropyApp {
                     },
                 );
             }
+            ModuleSettingKind::Select if self.phenom_auto_timeout_field(group_kind, &field) => {
+                // Positions are advertised wire indices, not rounded milliseconds.
+                // Keep an unknown loaded index untouched until an explicit edit.
+                let mut index = raw_value;
+                let (content_width, control_width, left_width, track_width) =
+                    Self::module_slider_columns(ui, self.app_settings.language, metrics, content_width);
+                crate::ui_style::settings_list_row_with_tooltip(
+                    ui, content_width, row_height, label.as_str(), true,
+                    tooltip.as_deref(), control_width, |ui| {
+                        ui.horizontal(|ui| {
+                            ui.allocate_exact_size(egui::vec2(left_width, 0.0), egui::Sense::hover());
+                            ui.spacing_mut().slider_width = track_width;
+                            let response = ui.push_id(("phenom_auto_timeout", group_idx, field.qsid), |ui| {
+                                ui.add(egui::Slider::new(&mut index, field.min..=field.max)
+                                    .clamping(egui::SliderClamping::Never)
+                                    .show_value(false).trailing_fill(true))
+                            }).inner;
+                            response.widget_info(|| egui::WidgetInfo::slider(ui.is_enabled(), f64::from(index), &label));
+                            let shown = field.variants.get(usize::from(raw_value)).cloned()
+                                .unwrap_or_else(|| format!("? ({raw_value})"));
+                            ui.label(shown);
+                            if response.changed() && index <= field.max && index != raw_value {
+                                self.write_module_setting_value(group_idx, &field, index);
+                            }
+                        });
+                    },
+                );
+            }
             ModuleSettingKind::Select => {
                 let dropdown_width = metrics.value(120.0);
                 let mixed = self.shared_encoder_values_mixed(field.qsid);
-                let choices = field
+                let rotation_shift = if self.phenom_ball_rotation_field(group_kind, &field) {
+                    3 // UI = (firmware - 90°) mod 360°, both trackball sides.
+                } else if self.phenom_left_touch_rotation_field(group_kind, &field) {
+                    2 // UI = (firmware - 180°) mod 360°, left touchpad only.
+                } else {
+                    0
+                };
+                let mut choices = field
                     .variants
                     .iter()
                     .enumerate()
-                    .filter(|(idx, _)| *idx >= usize::from(field.min) && *idx <= usize::from(field.max))
+                    .filter(|(idx, _)| {
+                        *idx >= usize::from(field.min) && *idx <= usize::from(field.max)
+                    })
+                    .map(|(idx, variant)| {
+                        // Keep the original wire index paired with its projected
+                        // label: a UI choice writes the inverse mapping, never degrees.
+                        (idx, if rotation_shift != 0 { &field.variants[(idx + rotation_shift) % 4] } else { variant })
+                    })
                     .collect::<Vec<_>>();
+                if rotation_shift != 0 {
+                    choices.sort_by_key(|(idx, _)| (idx + rotation_shift) % 4);
+                }
                 let mut selected_idx = choices
                     .iter()
                     .position(|(value, _)| *value == usize::from(raw_value))
@@ -624,8 +981,27 @@ impl EntropyApp {
         if side_groups.len() > 1 {
             rows.push(ModuleSettingsRow::SideSelector);
         }
+        // Placement only: keep the original side group, field and QSID so the
+        // saved value and existing read/write path remain independent of auto-layer flags.
+        let auto_group = self.module_settings.groups.iter().position(|group| {
+            group.kind == ModuleSettingsGroupKind::AutoLayer
+        });
+        let sticky_field = selected_side_group.and_then(|group_idx| {
+            let group = &self.module_settings.groups[group_idx];
+            (auto_group.is_some() && self.module_presentation_pointing_group(group.kind))
+                .then(|| group.fields.iter().position(|field| {
+                    matches!((group.kind, field.qsid),
+                        (ModuleSettingsGroupKind::Left, 140) | (ModuleSettingsGroupKind::Right, 141))
+                        && group.kind.field_base_title(&field.title).eq_ignore_ascii_case("Sticky mode")
+                }))
+                .flatten()
+                .map(|field_idx| (group_idx, field_idx))
+        });
         if let Some(group_idx) = selected_side_group {
-            rows.extend(self.module_settings_field_rows(group_idx, selected_module, selected_mode));
+            rows.extend(self.module_settings_field_rows(group_idx, selected_module, selected_mode)
+                .into_iter().filter(|row| !matches!(row,
+                    ModuleSettingsRow::Field { group_idx, field_idx }
+                        if Some((*group_idx, *field_idx)) == sticky_field)));
         }
         for (group_idx, group) in self.module_settings.groups.iter().enumerate() {
             if Some(group_idx) == self.global_encoder_settings_group() {
@@ -646,7 +1022,28 @@ impl EntropyApp {
                 continue;
             }
             rows.push(ModuleSettingsRow::Section(group_idx));
-            rows.extend(self.module_settings_field_rows(group_idx, selected_module, selected_mode));
+            let mut fields = self.module_settings_field_rows(group_idx, selected_module, selected_mode);
+            if Some(group_idx) == auto_group && self.module_presentation_model() {
+                // Preserve selected-mode visibility and every original field owner.
+                // Hide only the known threshold row; retain it for reads/presets.
+                fields.retain(|row| !matches!(row, ModuleSettingsRow::Field { field_idx, .. }
+                    if self.phenom_vial_model() && group.fields[*field_idx].qsid == 374
+                        && group.fields[*field_idx].title.eq_ignore_ascii_case("Auto layer threshold")));
+                fields.sort_by_key(|row| match row {
+                    ModuleSettingsRow::Field { field_idx, .. } => match group.fields[*field_idx].qsid {
+                        142 | 144 | 145 | 146 => 0,
+                        143 => 1,
+                        324 => 2,
+                        375 => 3,
+                        _ => 4,
+                    },
+                    _ => 4,
+                });
+                if let Some((group_idx, field_idx)) = sticky_field {
+                    fields.push(ModuleSettingsRow::Field { group_idx, field_idx });
+                }
+            }
+            rows.extend(fields);
         }
         rows
     }
@@ -678,7 +1075,7 @@ impl EntropyApp {
         let Some(group) = self.module_settings.groups.get(group_idx) else {
             return Vec::new();
         };
-        group
+        let mut fields = group
             .fields
             .iter()
             .enumerate()
@@ -689,7 +1086,27 @@ impl EntropyApp {
                 group_idx,
                 field_idx,
             })
-            .collect()
+            .collect::<Vec<_>>();
+        if self.module_presentation_pointing_group(group.kind) {
+            // Reorder rendered rows only; descriptor indices, saved values and
+            // QSID ownership remain untouched. Mode-local rows retain their order.
+            let touchpad = !self.module_presentation_trackball_group(group.kind);
+            fields.sort_by_key(|row| match row {
+                ModuleSettingsRow::Field { field_idx, .. } => match group.kind
+                    .field_base_title(&group.fields[*field_idx].title).to_ascii_lowercase().as_str() {
+                    "module" => 0,
+                    "ball dpi" | "touch dpi" => 1,
+                    "acceleration" => 2,
+                    "ball axis" => 3,
+                    "touch gestures" => if touchpad { 3 } else { 4 },
+                    "touch axis" => if touchpad { 4 } else { 3 },
+                    "mode" => 5,
+                    _ => 6,
+                },
+                _ => 5,
+            });
+        }
+        fields
     }
 
     fn module_settings_side_group_indices(&self) -> Vec<usize> {
@@ -752,7 +1169,7 @@ impl EntropyApp {
                 crate::i18n::tr_catalog(lang, "modules_settings.right_half").to_owned()
             }
             ModuleSettingsGroupKind::AutoLayer => {
-                crate::i18n::tr_catalog(lang, "modules_settings.auto_layer_section").to_owned()
+                crate::i18n::tr_catalog(lang, if self.module_presentation_model() { "modules_settings.phenom_auto_section" } else { "modules_settings.auto_layer_section" }).to_owned()
             }
             ModuleSettingsGroupKind::Other if group.title.eq_ignore_ascii_case("Qube display") => {
                 crate::i18n::tr_catalog(lang, "modules_settings.qube_display").to_owned()
@@ -815,9 +1232,13 @@ impl EntropyApp {
         let labels = side_groups
             .iter()
             .filter_map(|group_idx| self.module_settings.groups.get(*group_idx))
-            .map(|group| self.module_settings_group_label(group))
+            .map(|group| {
+                crate::i18n::tr_catalog(lang, if group.kind == ModuleSettingsGroupKind::Left {
+                    "modules_settings.phenom_left"
+                } else { "modules_settings.phenom_right" }).to_owned()
+            })
             .collect::<Vec<_>>();
-        let dropdown_width = metrics.value(156.0);
+        let dropdown_width = metrics.value(120.0);
         let tooltip = (!suppress_tooltips).then(|| {
             crate::i18n::tr_catalog(lang, "modules_settings.module_side_tooltip").to_owned()
         });
@@ -962,7 +1383,17 @@ impl EntropyApp {
 #[cfg(test)]
 mod tests {
     use super::*;
+    include!("module_ui_series_tests.inc");
+    include!("k04_sliders_tests.inc");
     include!("module_scope_regression.inc");
+    include!("phenom_trackball_speed_tests.inc");
+    include!("phenom_auto_layer_tests.inc");
+    include!("phenom_timeout20_tests.inc");
+    include!("phenom_slider_alignment_tests.inc");
+    include!("phenom_sticky_section_tests.inc");
+    include!("phenom_rotation_offset_tests.inc");
+    include!("phenom_trackball_page_tests.inc");
+    include!("module_side_selector_tests.inc");
 
     #[test]
     fn hpd_touchpad_groups_keep_dynamic_fields_and_own_the_touchpad_route() {

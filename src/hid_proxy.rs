@@ -1239,6 +1239,24 @@ mod tests {
                     }
                 }
                 data.resize(MSG_LEN, 0);
+                if mode == "legacy-application-layout-echo" {
+                    // Simulated firmware bytes, real native response matcher and IPC owner.
+                    // The shipped legacy Ergohaven dispatcher echoes unknown E6 probes.
+                    let command = hex_to_bytes(line.trim()).unwrap();
+                    if command.starts_with(&[0xE6]) {
+                        let response: [u8; MSG_LEN] = data.clone().try_into().unwrap();
+                        if !super::super::response_matches_command(&command, &response) {
+                            let error = ProxyResponse { ok: false, data: None,
+                                error: Some("HID timeout after rejected legacy E6 echo".into()) };
+                            writeln!(output, "{}", serde_json::to_string(&error).unwrap()).unwrap();
+                            output.flush().unwrap();
+                            return;
+                        }
+                    } else if command == [0xFE, 0x01] {
+                        data.fill(0);
+                        data[..4].copy_from_slice(&42u32.to_le_bytes());
+                    }
+                }
                 serde_json::to_string(&ProxyResponse {
                     ok: true,
                     data: Some(bytes_to_hex(&data)),
@@ -1253,6 +1271,29 @@ mod tests {
                 return;
             }
         }
+    }
+
+    #[test]
+    fn real_helper_legacy_application_layout_echo_preserves_vial_connection() {
+        let _guard = serial_test();
+        let proxy = Arc::new(start("legacy-application-layout-echo", "legacy-phenom"));
+        let hid = HidDevice {
+            unlock_confirmation_pending: AtomicBool::new(false),
+            native_capabilities: Mutex::new(None),
+            read_only: None,
+            backend: super::super::HidBackend::Proxy(proxy.clone()),
+        };
+        for version in [7, 8, 9] {
+            let geometry = hid.probe_application_layout_geometry(version);
+            assert!(geometry.is_ok(), "legacy probe must report absence, not retire transport: {geometry:?}");
+            assert!(geometry.unwrap().is_none(), "echo must not grant application-layout support");
+            assert!(proxy.is_available());
+            assert_eq!(hid.get_definition_size().unwrap(), 42);
+        }
+        assert_eq!(proxy.slot.submitted.lock().unwrap().len(), 6);
+        drop(hid);
+        drop(proxy);
+        empty_registry();
     }
 
     #[test]

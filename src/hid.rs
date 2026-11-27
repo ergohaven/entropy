@@ -2028,9 +2028,17 @@ fn response_matches_command(command: &[u8], resp: &[u8; MSG_LEN]) -> bool {
                 && resp[4..] == command[4..]
         }
         0xE6 if matches!(command, [0xe6, 7 | 8 | 9, 0xa5, _, _, ..]) => {
-            resp[0] == 0xE6
+            (resp[0] == 0xE6
                 && resp[1] == command[1]
-                && resp[2] == 0x5A
+                && resp[2] == 0x5A)
+                // Legacy Ergohaven firmware echoes unknown custom requests.
+                // Accept only an exact padded read-only capability probe echo;
+                // hid_settings interprets it as absence, never support. Keep
+                // real timeouts/IO errors fatal and event-consuming polls strict.
+                || (is_application_layout_capability_probe(command)
+                    && command.len() <= MSG_LEN
+                    && resp[..command.len()] == *command
+                    && resp[command.len()..].iter().all(|byte| *byte == 0))
         }
         0xD7 => {
             command.len() == MSG_LEN && command[..3] == [0xd7, 0x62, 3]
@@ -2661,6 +2669,38 @@ mod tests {
         assert!(response_matches_command(&request, &response));
         response[2] = 0;
         assert!(!response_matches_command(&request, &response));
+    }
+
+    #[test]
+    fn application_layout_legacy_echo_is_exact_read_only_and_never_a_capability_grant() {
+        for version in [7, 8, 9] {
+            let request = [0xe6, version, 0xa5, 0, 0];
+            let mut echo = [0; MSG_LEN];
+            echo[..request.len()].copy_from_slice(&request);
+            assert!(response_matches_command(&request, &echo));
+            assert_ne!(echo[..3], [0xe6, version, 0x5a]);
+            assert!(response_matches_command(&echo, &echo));
+            // Poll acknowledgements may consume events; never treat their echo as absence.
+            let mut consuming = request;
+            consuming[3] = 1;
+            let mut consuming_echo = [0; MSG_LEN];
+            consuming_echo[..consuming.len()].copy_from_slice(&consuming);
+            assert!(!response_matches_command(&consuming, &consuming_echo));
+            for index in 0..MSG_LEN {
+                let mut unrelated = echo;
+                unrelated[index] ^= 1;
+                assert!(!response_matches_command(&request, &unrelated), "accepted mutated byte {index}");
+            }
+            let mut supported = [0; MSG_LEN];
+            supported[..3].copy_from_slice(&[0xe6, version, 0x5a]);
+            assert!(response_matches_command(&request, &supported));
+            supported[1] = 42;
+            assert!(!response_matches_command(&request, &supported));
+        }
+        let mut unrelated = [0; MSG_LEN];
+        unrelated[..5].copy_from_slice(&[0xe6, 9, 0xa5, 0, 0]);
+        assert!(!response_matches_command(&[CMD_VIA_GET_PROTOCOL_VERSION], &unrelated));
+        assert!(!response_matches_command(&[CMD_VIA_VIAL_PREFIX, CMD_VIAL_GET_SIZE], &unrelated));
     }
 
     #[test]

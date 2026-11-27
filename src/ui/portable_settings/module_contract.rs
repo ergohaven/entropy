@@ -170,7 +170,19 @@ pub(super) fn module_setting_migration_value(
                 .map(String::as_str)
                 .eq(variants.iter().copied())
     };
-    if !((is_variants(field, before) && is_variants(target_field, after))
+    let extended_timeouts = [
+        "50 ms", "100 ms", "150 ms", "200 ms", "250 ms", "300 ms", "350 ms", "400 ms", "450 ms",
+        "500 ms", "750 ms", "1000 ms", "1250 ms", "1500 ms", "1750 ms", "2000 ms", "2250 ms",
+        "2500 ms", "2750 ms", "3000 ms",
+    ];
+    let timeout_extension = source.qsid == 324
+        && source.width == EntPortableSettingWidth::U8
+        && field.width == 1 && target_field.width == 1
+        && [old_timeouts.as_slice(), new_timeouts.as_slice(), extended_timeouts.as_slice()]
+            .iter().any(|variants| is_variants(field, variants))
+        && [old_timeouts.as_slice(), new_timeouts.as_slice(), extended_timeouts.as_slice()]
+            .iter().any(|variants| is_variants(target_field, variants));
+    if !(timeout_extension || (is_variants(field, before) && is_variants(target_field, after))
         || (is_variants(field, after) && is_variants(target_field, before)))
     {
         return None;

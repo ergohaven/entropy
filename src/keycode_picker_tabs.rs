@@ -292,6 +292,23 @@ impl KeycodePicker {
                     .unwrap_or(u16::MAX)
             });
         }
+        if tab == KeycodeTab::Custom {
+            // Presentation only: advertised wire slots and descriptor order stay intact.
+            for (name, anchor) in [
+                ("EH_L_NORMAL", "LPREV"),
+                ("EH_NORMAL", "EH_L_TXT"),
+                ("EH_R_NORMAL", "EH_TXT"),
+            ] {
+                if entries.iter().any(|entry| entry.0 == anchor) {
+                    if let Some(index) = entries.iter().position(|entry| entry.0 == name) {
+                        let entry = entries.remove(index);
+                        let after = entries.iter().position(|entry| entry.0 == anchor)
+                            .expect("distinct advertised anchor retained");
+                        entries.insert(after + 1, entry);
+                    }
+                }
+            }
+        }
         entries
             .into_iter()
             .map(|(name, label, title, value)| {

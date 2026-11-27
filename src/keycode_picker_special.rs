@@ -181,6 +181,7 @@ Repeat"
                 0x7C7A,
                 "Alt repeats the last pressed key".into(),
             ),
+            ("Clear\nEEPROM".into(), 0x7C03, "Reset saved key assignments and settings to factory defaults and restart the keyboard".into()),
         ]
     }
 
@@ -219,7 +220,8 @@ Repeat"
                     continue;
                 }
             }
-            rows.push(self.vial_row(tab, special, value, label, crate::i18n::tr_text(lang, &tip)));
+            let row = self.vial_row(tab, special, value, label, crate::i18n::tr_text(lang, &tip));
+            rows.push(if value == 0x7C03 { row.with_aliases("EE_CLR") } else { row });
         }
 
         if self.supports_mouse_keys {

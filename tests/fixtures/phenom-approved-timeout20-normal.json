@@ -1,0 +1,1688 @@
+{
+  "firmware": {
+    "version": "1.0"
+  },
+  "firmwareVersion": "1.0",
+  "matrix": {
+    "rows": 10,
+    "cols": 8
+  },
+  "keycodes": [
+    "qmk_lighting"
+  ],
+  "customKeycodes": [
+    {
+      "name": "EH_PRINF",
+      "shortName": "Print\nInfo",
+      "title": "Print information about firmware and modes"
+    },
+    {
+      "name": "WRD_NXT",
+      "shortName": "Next\nWord",
+      "title": "Jump to next word"
+    },
+    {
+      "name": "WRD_PRV",
+      "shortName": "Prev\nWord",
+      "title": "Jump to previous word"
+    },
+    {
+      "name": "WNEXT",
+      "shortName": "Next\nWin",
+      "title": "Holds Alt and taps Tab, then waits for 650ms, if the key is tapped again, it will send another Tab; if there is no tap, Alt will turn off. This allows you to cycle through windows with only one key"
+    },
+    {
+      "name": "WPREV",
+      "shortName": "Prev\nWin",
+      "title": "Holds Alt and taps Shift+Tab. See Alt Tab description"
+    },
+    {
+      "name": "LNEXT",
+      "shortName": "Next\nLayer",
+      "title": "Switch to the next layer"
+    },
+    {
+      "name": "LPREV",
+      "shortName": "Prev\nLayer",
+      "title": "Switch to the previous layer"
+    },
+    {
+      "name": "EH_RSRV1",
+      "shortName": "",
+      "title": "Not using"
+    },
+    {
+      "name": "LG_TOGGLE",
+      "shortName": "RuEn\nToggle",
+      "title": "Toggle language"
+    },
+    {
+      "name": "LG_SYNC",
+      "shortName": "RuEn\nSync",
+      "title": "Sync language"
+    },
+    {
+      "name": "LG_SET_EN",
+      "shortName": "RuEn\nEn",
+      "title": "Set English language"
+    },
+    {
+      "name": "LG_SET_RU",
+      "shortName": "RuEn\nRu",
+      "title": "Toggle Russian language"
+    },
+    {
+      "name": "LG_SET_M0",
+      "shortName": "RuEn\nM0",
+      "title": "Set toggle language to Macro 0"
+    },
+    {
+      "name": "LG_SET_M1M2",
+      "shortName": "RuEn\nM1M2",
+      "title": "Set toggle language to Macro 1 for English layout and Macro 2 for Russian layout"
+    },
+    {
+      "name": "LG_SET_DFLT",
+      "shortName": "RuEn\nDflt",
+      "title": "Set toggle language to default (Win+Space for PC and Ctrl+Space for Mac)"
+    },
+    {
+      "name": "LG_DOT",
+      "shortName": "RuEn\n.",
+      "title": "Send ."
+    },
+    {
+      "name": "LG_COMMA",
+      "shortName": "RuEn\n,",
+      "title": "Send ,"
+    },
+    {
+      "name": "LG_SCLN",
+      "shortName": "RuEn\n;",
+      "title": "Send ;"
+    },
+    {
+      "name": "LG_COLON",
+      "shortName": "RuEn\n:",
+      "title": "Send :"
+    },
+    {
+      "name": "LG_DQUO",
+      "shortName": "RuEn\n\"",
+      "title": "Send \""
+    },
+    {
+      "name": "LG_QUES",
+      "shortName": "RuEn\n?",
+      "title": "Send ?"
+    },
+    {
+      "name": "LG_SLASH",
+      "shortName": "RuEn\n/",
+      "title": "Send /"
+    },
+    {
+      "name": "LG_LBR",
+      "shortName": "RuEn\n[",
+      "title": "Send ["
+    },
+    {
+      "name": "LG_RBR",
+      "shortName": "RuEn\n]",
+      "title": "Send ]"
+    },
+    {
+      "name": "LG_LCBR",
+      "shortName": "RuEn\n{",
+      "title": "Send {"
+    },
+    {
+      "name": "LG_RCBR",
+      "shortName": "RuEn\n}",
+      "title": "Send}"
+    },
+    {
+      "name": "LG_LT",
+      "shortName": "RuEn\n<",
+      "title": "Send <"
+    },
+    {
+      "name": "LG_GT",
+      "shortName": "RuEn\n>",
+      "title": "Send >"
+    },
+    {
+      "name": "LG_GRAVE",
+      "shortName": "RuEn\n`",
+      "title": "Send `"
+    },
+    {
+      "name": "LG_TILD",
+      "shortName": "RuEn\n~",
+      "title": "Send ~"
+    },
+    {
+      "name": "LG_AT",
+      "shortName": "RuEn\n@",
+      "title": "Send @"
+    },
+    {
+      "name": "LG_HASH",
+      "shortName": "RuEn\n#",
+      "title": "Send #"
+    },
+    {
+      "name": "LG_DLR",
+      "shortName": "RuEn\n$",
+      "title": "Send $"
+    },
+    {
+      "name": "LG_CIRC",
+      "shortName": "RuEn\n^",
+      "title": "Send ^"
+    },
+    {
+      "name": "LG_AMPR",
+      "shortName": "RuEn\n&",
+      "title": "Send &"
+    },
+    {
+      "name": "LG_PIPE",
+      "shortName": "RuEn\n|",
+      "title": "Send |"
+    },
+    {
+      "name": "LG_QUOTE",
+      "shortName": "RuEn\n'",
+      "title": "Send '"
+    },
+    {
+      "name": "LG_NUM",
+      "shortName": "RuEn\n\u2116",
+      "title": "Send \u2116"
+    },
+    {
+      "name": "LG_WORD",
+      "shortName": "RuEn\nword",
+      "title": "Temporary turn on English layout and back to Russian layout on word's end"
+    },
+    {
+      "name": "LG_MOD",
+      "shortName": "RuEn\nTg/Mod",
+      "title": "Toggle layout on press and release"
+    },
+    {
+      "name": "LG_STORE",
+      "shortName": "RuEn\nStore",
+      "title": "Store current layout (useful for macros)"
+    },
+    {
+      "name": "LG_REVERT",
+      "shortName": "RuEn\nRevert",
+      "title": "Revert to stored layout (useful for macros)"
+    },
+    {
+      "name": "LG_PERC",
+      "shortName": "RuEn\n%",
+      "title": "Send % (differs on MacOS layout)"
+    },
+    {
+      "name": "LG_TG_MAC",
+      "shortName": "RuEn\nMac Tg",
+      "title": "Toggle to use MacOS layout for Russian instead of PC layout"
+    },
+    {
+      "name": "LG_RU_BE",
+      "shortName": "RuEn\n\u0411",
+      "title": "Send \u0411"
+    },
+    {
+      "name": "LG_RU_YU",
+      "shortName": "RuEn\n\u042e",
+      "title": "Send \u042e"
+    },
+    {
+      "name": "LG_RU_ZHE",
+      "shortName": "RuEn\n\u0416",
+      "title": "Send \u0416"
+    },
+    {
+      "name": "LG_RU_E",
+      "shortName": "RuEn\n\u042d",
+      "title": "Send \u042d"
+    },
+    {
+      "name": "LG_RU_KHA",
+      "shortName": "RuEn\n\u0425",
+      "title": "Send \u0425"
+    },
+    {
+      "name": "LG_RU_HRD_SGN",
+      "shortName": "RuEn\n\u042a",
+      "title": "Send \u042a"
+    },
+    {
+      "name": "LG_RU_YO",
+      "shortName": "RuEn\n\u0401",
+      "title": "Send \u0401"
+    },
+    {
+      "name": "EH_L_SNP",
+      "shortName": "Left\nSniper",
+      "title": "Set left pointing device to sniper mode"
+    },
+    {
+      "name": "EH_L_SCR",
+      "shortName": "Left\nScroll",
+      "title": "Set left pointing device to scroll mode"
+    },
+    {
+      "name": "EH_L_TXT",
+      "shortName": "Left\nText",
+      "title": "Set left pointing device to text mode"
+    },
+    {
+      "name": "EH_RSRV5",
+      "shortName": "",
+      "title": "Not using"
+    },
+    {
+      "name": "EH_RSRV6",
+      "shortName": "",
+      "title": "Not using"
+    },
+    {
+      "name": "EH_RSRV7",
+      "shortName": "",
+      "title": "Not using"
+    },
+    {
+      "name": "EH_LED_BL",
+      "shortName": "",
+      "title": "Not using"
+    },
+    {
+      "name": "EH_SNP",
+      "shortName": "Sniper\nmode",
+      "title": "Set both pointing devices to sniper mode"
+    },
+    {
+      "name": "EH_SCR",
+      "shortName": "Scroll\nmode",
+      "title": "Set both pointing devices to scroll mode"
+    },
+    {
+      "name": "EH_TXT",
+      "shortName": "Text\nmode",
+      "title": "Set both pointing devices to text mode"
+    },
+    {
+      "name": "EH_USR1",
+      "shortName": "Right\nSniper",
+      "title": "Set right pointing device to sniper mode"
+    },
+    {
+      "name": "EH_USR2",
+      "shortName": "Right\nScroll",
+      "title": "Set right pointing device to scroll mode"
+    },
+    {
+      "name": "EH_USR3",
+      "shortName": "Right\nText",
+      "title": "Set right pointing device to text mode"
+    },
+    {
+      "name": "EH_STK_TG",
+      "shortName": "Sticky\nToggle",
+      "title": "Toggle sticky mode for both pointing devices"
+    },
+    {
+      "name": "EH_STK_ON",
+      "shortName": "Sticky\nOn",
+      "title": "Enable sticky mode for both pointing devices"
+    },
+    {
+      "name": "EH_STK_OFF",
+      "shortName": "Sticky\nOff",
+      "title": "Disable sticky mode for both pointing devices"
+    },
+    {
+      "name": "EH_L_STK_TG",
+      "shortName": "L Sticky\nToggle",
+      "title": "Toggle sticky mode for the left pointing device"
+    },
+    {
+      "name": "EH_L_STK_ON",
+      "shortName": "L Sticky\nOn",
+      "title": "Enable sticky mode for the left pointing device"
+    },
+    {
+      "name": "EH_L_STK_OFF",
+      "shortName": "L Sticky\nOff",
+      "title": "Disable sticky mode for the left pointing device"
+    },
+    {
+      "name": "EH_R_STK_TG",
+      "shortName": "R Sticky\nToggle",
+      "title": "Toggle sticky mode for the right pointing device"
+    },
+    {
+      "name": "EH_R_STK_ON",
+      "shortName": "R Sticky\nOn",
+      "title": "Enable sticky mode for the right pointing device"
+    },
+    {
+      "name": "EH_R_STK_OFF",
+      "shortName": "R Sticky\nOff",
+      "title": "Disable sticky mode for the right pointing device"
+    },
+    {
+      "name": "EH_L_NORMAL",
+      "shortName": "Left\nNormal",
+      "title": "Set left pointing device to normal mode"
+    },
+    {
+      "name": "EH_NORMAL",
+      "shortName": "Normal\nmode",
+      "title": "Set both pointing devices to normal mode"
+    },
+    {
+      "name": "EH_R_NORMAL",
+      "shortName": "Right\nNormal",
+      "title": "Set right pointing device to normal mode"
+    }
+  ],
+  "settings": [
+    {
+      "name": "Left modules",
+      "fields": [
+        {
+          "type": "select",
+          "title": "Module",
+          "qsid": 372,
+          "variants": [
+            "Encoder",
+            "Trackball",
+            "Touchpad"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Mode",
+          "qsid": 134,
+          "variants": [
+            "Normal",
+            "Sniper",
+            "Scroll",
+            "Text"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Ball axis",
+          "qsid": 130,
+          "variants": [
+            "0\u00b0",
+            "90\u00b0",
+            "180\u00b0",
+            "270\u00b0"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Touch axis",
+          "qsid": 132,
+          "variants": [
+            "0\u00b0",
+            "90\u00b0",
+            "180\u00b0",
+            "270\u00b0"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Ball DPI",
+          "qsid": 120,
+          "variants": [
+            "200",
+            "400",
+            "600",
+            "800",
+            "1000",
+            "1200",
+            "1400",
+            "1600",
+            "1800",
+            "2000",
+            "2200",
+            "2400",
+            "2600",
+            "2800",
+            "3000",
+            "3200"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Touch DPI",
+          "qsid": 122,
+          "variants": [
+            "100",
+            "200",
+            "300",
+            "400",
+            "500",
+            "600",
+            "700",
+            "800",
+            "900",
+            "1000"
+          ]
+        },
+        {
+          "type": "boolean",
+          "title": "Touch gestures",
+          "qsid": 327,
+          "bit": 0
+        },
+        {
+          "type": "select",
+          "title": "Encoder steps",
+          "qsid": 376,
+          "variants": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8"
+          ]
+        },
+        {
+          "type": "integer",
+          "title": "Scroll sens",
+          "qsid": 125,
+          "min": 1,
+          "max": 255,
+          "width": 1
+        },
+        {
+          "type": "integer",
+          "title": "Sniper sens",
+          "qsid": 124,
+          "min": 1,
+          "max": 255,
+          "width": 1
+        },
+        {
+          "type": "integer",
+          "title": "Text sens",
+          "qsid": 126,
+          "min": 1,
+          "max": 255,
+          "width": 1
+        },
+        {
+          "type": "boolean",
+          "title": "Invert scroll vertical",
+          "qsid": 136,
+          "bit": 0
+        },
+        {
+          "type": "boolean",
+          "title": "Invert scroll horizontal",
+          "qsid": 149,
+          "bit": 0
+        },
+        {
+          "type": "boolean",
+          "title": "Invert text vertical",
+          "qsid": 147,
+          "bit": 0
+        },
+        {
+          "type": "boolean",
+          "title": "Invert text horizontal",
+          "qsid": 151,
+          "bit": 0
+        },
+        {
+          "type": "boolean",
+          "title": "Acceleration",
+          "qsid": 137,
+          "bit": 0
+        },
+        {
+          "type": "boolean",
+          "title": "Sticky mode",
+          "qsid": 140,
+          "bit": 0
+        }
+      ]
+    },
+    {
+      "name": "Right modules",
+      "fields": [
+        {
+          "type": "select",
+          "title": "Module",
+          "qsid": 373,
+          "variants": [
+            "Encoder",
+            "Trackball",
+            "Touchpad"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Mode",
+          "qsid": 135,
+          "variants": [
+            "Normal",
+            "Sniper",
+            "Scroll",
+            "Text"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Ball axis",
+          "qsid": 131,
+          "variants": [
+            "0\u00b0",
+            "90\u00b0",
+            "180\u00b0",
+            "270\u00b0"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Touch axis",
+          "qsid": 133,
+          "variants": [
+            "0\u00b0",
+            "90\u00b0",
+            "180\u00b0",
+            "270\u00b0"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Ball DPI",
+          "qsid": 121,
+          "variants": [
+            "200",
+            "400",
+            "600",
+            "800",
+            "1000",
+            "1200",
+            "1400",
+            "1600",
+            "1800",
+            "2000",
+            "2200",
+            "2400",
+            "2600",
+            "2800",
+            "3000",
+            "3200"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Touch DPI",
+          "qsid": 123,
+          "variants": [
+            "100",
+            "200",
+            "300",
+            "400",
+            "500",
+            "600",
+            "700",
+            "800",
+            "900",
+            "1000"
+          ]
+        },
+        {
+          "type": "boolean",
+          "title": "Touch gestures",
+          "qsid": 328,
+          "bit": 0
+        },
+        {
+          "type": "select",
+          "title": "Encoder steps",
+          "qsid": 377,
+          "variants": [
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8"
+          ]
+        },
+        {
+          "type": "integer",
+          "title": "Scroll sens",
+          "qsid": 128,
+          "min": 1,
+          "max": 255,
+          "width": 1
+        },
+        {
+          "type": "integer",
+          "title": "Sniper sens",
+          "qsid": 127,
+          "min": 1,
+          "max": 255,
+          "width": 1
+        },
+        {
+          "type": "integer",
+          "title": "Text sens",
+          "qsid": 129,
+          "min": 1,
+          "max": 255,
+          "width": 1
+        },
+        {
+          "type": "boolean",
+          "title": "Invert scroll vertical",
+          "qsid": 138,
+          "bit": 0
+        },
+        {
+          "type": "boolean",
+          "title": "Invert scroll horizontal",
+          "qsid": 150,
+          "bit": 0
+        },
+        {
+          "type": "boolean",
+          "title": "Invert text vertical",
+          "qsid": 148,
+          "bit": 0
+        },
+        {
+          "type": "boolean",
+          "title": "Invert text horizontal",
+          "qsid": 152,
+          "bit": 0
+        },
+        {
+          "type": "boolean",
+          "title": "Acceleration",
+          "qsid": 139,
+          "bit": 0
+        },
+        {
+          "type": "boolean",
+          "title": "Sticky mode",
+          "qsid": 141,
+          "bit": 0
+        }
+      ]
+    },
+    {
+      "name": "Auto layer",
+      "fields": [
+        {
+          "type": "select",
+          "title": "Auto layer",
+          "qsid": 143,
+          "variants": [
+            "0",
+            "1",
+            "2",
+            "3",
+            "4",
+            "5",
+            "6",
+            "7",
+            "8",
+            "9",
+            "10",
+            "11",
+            "12",
+            "13",
+            "14",
+            "15"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Auto layer timeout",
+          "qsid": 324,
+          "variants": [
+            "50 ms",
+            "100 ms",
+            "150 ms",
+            "200 ms",
+            "250 ms",
+            "300 ms",
+            "350 ms",
+            "400 ms",
+            "450 ms",
+            "500 ms",
+            "750 ms",
+            "1000 ms",
+            "1250 ms",
+            "1500 ms",
+            "1750 ms",
+            "2000 ms",
+            "2250 ms",
+            "2500 ms",
+            "2750 ms",
+            "3000 ms"
+          ]
+        },
+        {
+          "type": "integer",
+          "title": "Auto layer threshold",
+          "qsid": 374,
+          "min": 1,
+          "max": 127,
+          "width": 1
+        },
+        {
+          "type": "boolean",
+          "title": "Auto layer deactivate on key",
+          "qsid": 375,
+          "bit": 0
+        },
+        {
+          "type": "boolean",
+          "title": "Auto layer in Normal",
+          "qsid": 142,
+          "bit": 0
+        },
+        {
+          "type": "boolean",
+          "title": "Auto layer in Sniper",
+          "qsid": 144,
+          "bit": 0
+        },
+        {
+          "type": "boolean",
+          "title": "Auto layer in Scroll",
+          "qsid": 145,
+          "bit": 0
+        },
+        {
+          "type": "boolean",
+          "title": "Auto layer in Text",
+          "qsid": 146,
+          "bit": 0
+        }
+      ]
+    },
+    {
+      "name": "LEDs settings",
+      "fields": [
+        {
+          "type": "integer",
+          "title": "LED brightness",
+          "qsid": 316,
+          "min": 0,
+          "max": 255,
+          "width": 2
+        },
+        {
+          "type": "select",
+          "title": "LED timeout",
+          "qsid": 317,
+          "variants": [
+            "Never",
+            "1 min",
+            "2 min",
+            "5 min",
+            "10 min",
+            "15 min",
+            "30 min",
+            "60 min"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Layer 0 color",
+          "qsid": 300,
+          "variants": [
+            "Off",
+            "White",
+            "Red",
+            "Orange",
+            "Goldenrod",
+            "Gold",
+            "Yellow",
+            "Chartreuse",
+            "Lime",
+            "Green",
+            "Spring Green",
+            "Turquoise",
+            "Teal",
+            "Cyan",
+            "Azure",
+            "Sky",
+            "Blue",
+            "Indigo",
+            "Purple",
+            "Magenta",
+            "Pink",
+            "Coral",
+            "Salmon",
+            "Warm White",
+            "Amber"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Layer 1 color",
+          "qsid": 301,
+          "variants": [
+            "Off",
+            "White",
+            "Red",
+            "Orange",
+            "Goldenrod",
+            "Gold",
+            "Yellow",
+            "Chartreuse",
+            "Lime",
+            "Green",
+            "Spring Green",
+            "Turquoise",
+            "Teal",
+            "Cyan",
+            "Azure",
+            "Sky",
+            "Blue",
+            "Indigo",
+            "Purple",
+            "Magenta",
+            "Pink",
+            "Coral",
+            "Salmon",
+            "Warm White",
+            "Amber"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Layer 2 color",
+          "qsid": 302,
+          "variants": [
+            "Off",
+            "White",
+            "Red",
+            "Orange",
+            "Goldenrod",
+            "Gold",
+            "Yellow",
+            "Chartreuse",
+            "Lime",
+            "Green",
+            "Spring Green",
+            "Turquoise",
+            "Teal",
+            "Cyan",
+            "Azure",
+            "Sky",
+            "Blue",
+            "Indigo",
+            "Purple",
+            "Magenta",
+            "Pink",
+            "Coral",
+            "Salmon",
+            "Warm White",
+            "Amber"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Layer 3 color",
+          "qsid": 303,
+          "variants": [
+            "Off",
+            "White",
+            "Red",
+            "Orange",
+            "Goldenrod",
+            "Gold",
+            "Yellow",
+            "Chartreuse",
+            "Lime",
+            "Green",
+            "Spring Green",
+            "Turquoise",
+            "Teal",
+            "Cyan",
+            "Azure",
+            "Sky",
+            "Blue",
+            "Indigo",
+            "Purple",
+            "Magenta",
+            "Pink",
+            "Coral",
+            "Salmon",
+            "Warm White",
+            "Amber"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Layer 4 color",
+          "qsid": 304,
+          "variants": [
+            "Off",
+            "White",
+            "Red",
+            "Orange",
+            "Goldenrod",
+            "Gold",
+            "Yellow",
+            "Chartreuse",
+            "Lime",
+            "Green",
+            "Spring Green",
+            "Turquoise",
+            "Teal",
+            "Cyan",
+            "Azure",
+            "Sky",
+            "Blue",
+            "Indigo",
+            "Purple",
+            "Magenta",
+            "Pink",
+            "Coral",
+            "Salmon",
+            "Warm White",
+            "Amber"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Layer 5 color",
+          "qsid": 305,
+          "variants": [
+            "Off",
+            "White",
+            "Red",
+            "Orange",
+            "Goldenrod",
+            "Gold",
+            "Yellow",
+            "Chartreuse",
+            "Lime",
+            "Green",
+            "Spring Green",
+            "Turquoise",
+            "Teal",
+            "Cyan",
+            "Azure",
+            "Sky",
+            "Blue",
+            "Indigo",
+            "Purple",
+            "Magenta",
+            "Pink",
+            "Coral",
+            "Salmon",
+            "Warm White",
+            "Amber"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Layer 6 color",
+          "qsid": 306,
+          "variants": [
+            "Off",
+            "White",
+            "Red",
+            "Orange",
+            "Goldenrod",
+            "Gold",
+            "Yellow",
+            "Chartreuse",
+            "Lime",
+            "Green",
+            "Spring Green",
+            "Turquoise",
+            "Teal",
+            "Cyan",
+            "Azure",
+            "Sky",
+            "Blue",
+            "Indigo",
+            "Purple",
+            "Magenta",
+            "Pink",
+            "Coral",
+            "Salmon",
+            "Warm White",
+            "Amber"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Layer 7 color",
+          "qsid": 307,
+          "variants": [
+            "Off",
+            "White",
+            "Red",
+            "Orange",
+            "Goldenrod",
+            "Gold",
+            "Yellow",
+            "Chartreuse",
+            "Lime",
+            "Green",
+            "Spring Green",
+            "Turquoise",
+            "Teal",
+            "Cyan",
+            "Azure",
+            "Sky",
+            "Blue",
+            "Indigo",
+            "Purple",
+            "Magenta",
+            "Pink",
+            "Coral",
+            "Salmon",
+            "Warm White",
+            "Amber"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Layer 8 color",
+          "qsid": 308,
+          "variants": [
+            "Off",
+            "White",
+            "Red",
+            "Orange",
+            "Goldenrod",
+            "Gold",
+            "Yellow",
+            "Chartreuse",
+            "Lime",
+            "Green",
+            "Spring Green",
+            "Turquoise",
+            "Teal",
+            "Cyan",
+            "Azure",
+            "Sky",
+            "Blue",
+            "Indigo",
+            "Purple",
+            "Magenta",
+            "Pink",
+            "Coral",
+            "Salmon",
+            "Warm White",
+            "Amber"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Layer 9 color",
+          "qsid": 309,
+          "variants": [
+            "Off",
+            "White",
+            "Red",
+            "Orange",
+            "Goldenrod",
+            "Gold",
+            "Yellow",
+            "Chartreuse",
+            "Lime",
+            "Green",
+            "Spring Green",
+            "Turquoise",
+            "Teal",
+            "Cyan",
+            "Azure",
+            "Sky",
+            "Blue",
+            "Indigo",
+            "Purple",
+            "Magenta",
+            "Pink",
+            "Coral",
+            "Salmon",
+            "Warm White",
+            "Amber"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Layer 10 color",
+          "qsid": 310,
+          "variants": [
+            "Off",
+            "White",
+            "Red",
+            "Orange",
+            "Goldenrod",
+            "Gold",
+            "Yellow",
+            "Chartreuse",
+            "Lime",
+            "Green",
+            "Spring Green",
+            "Turquoise",
+            "Teal",
+            "Cyan",
+            "Azure",
+            "Sky",
+            "Blue",
+            "Indigo",
+            "Purple",
+            "Magenta",
+            "Pink",
+            "Coral",
+            "Salmon",
+            "Warm White",
+            "Amber"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Layer 11 color",
+          "qsid": 311,
+          "variants": [
+            "Off",
+            "White",
+            "Red",
+            "Orange",
+            "Goldenrod",
+            "Gold",
+            "Yellow",
+            "Chartreuse",
+            "Lime",
+            "Green",
+            "Spring Green",
+            "Turquoise",
+            "Teal",
+            "Cyan",
+            "Azure",
+            "Sky",
+            "Blue",
+            "Indigo",
+            "Purple",
+            "Magenta",
+            "Pink",
+            "Coral",
+            "Salmon",
+            "Warm White",
+            "Amber"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Layer 12 color",
+          "qsid": 312,
+          "variants": [
+            "Off",
+            "White",
+            "Red",
+            "Orange",
+            "Goldenrod",
+            "Gold",
+            "Yellow",
+            "Chartreuse",
+            "Lime",
+            "Green",
+            "Spring Green",
+            "Turquoise",
+            "Teal",
+            "Cyan",
+            "Azure",
+            "Sky",
+            "Blue",
+            "Indigo",
+            "Purple",
+            "Magenta",
+            "Pink",
+            "Coral",
+            "Salmon",
+            "Warm White",
+            "Amber"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Layer 13 color",
+          "qsid": 313,
+          "variants": [
+            "Off",
+            "White",
+            "Red",
+            "Orange",
+            "Goldenrod",
+            "Gold",
+            "Yellow",
+            "Chartreuse",
+            "Lime",
+            "Green",
+            "Spring Green",
+            "Turquoise",
+            "Teal",
+            "Cyan",
+            "Azure",
+            "Sky",
+            "Blue",
+            "Indigo",
+            "Purple",
+            "Magenta",
+            "Pink",
+            "Coral",
+            "Salmon",
+            "Warm White",
+            "Amber"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Layer 14 color",
+          "qsid": 314,
+          "variants": [
+            "Off",
+            "White",
+            "Red",
+            "Orange",
+            "Goldenrod",
+            "Gold",
+            "Yellow",
+            "Chartreuse",
+            "Lime",
+            "Green",
+            "Spring Green",
+            "Turquoise",
+            "Teal",
+            "Cyan",
+            "Azure",
+            "Sky",
+            "Blue",
+            "Indigo",
+            "Purple",
+            "Magenta",
+            "Pink",
+            "Coral",
+            "Salmon",
+            "Warm White",
+            "Amber"
+          ]
+        },
+        {
+          "type": "select",
+          "title": "Layer 15 color",
+          "qsid": 315,
+          "variants": [
+            "Off",
+            "White",
+            "Red",
+            "Orange",
+            "Goldenrod",
+            "Gold",
+            "Yellow",
+            "Chartreuse",
+            "Lime",
+            "Green",
+            "Spring Green",
+            "Turquoise",
+            "Teal",
+            "Cyan",
+            "Azure",
+            "Sky",
+            "Blue",
+            "Indigo",
+            "Purple",
+            "Magenta",
+            "Pink",
+            "Coral",
+            "Salmon",
+            "Warm White",
+            "Amber"
+          ]
+        }
+      ]
+    },
+    {
+      "name": "RuEn",
+      "fields": [
+        {
+          "type": "select",
+          "title": "RuEn Toggle Mode",
+          "qsid": 100,
+          "variants": [
+            "Default",
+            "M0",
+            "M1M2"
+          ]
+        },
+        {
+          "type": "boolean",
+          "title": "RuEn MacOS Layout",
+          "qsid": 101,
+          "bit": 0
+        },
+        {
+          "type": "select",
+          "title": "Unicode Input Mode",
+          "qsid": 102,
+          "variants": [
+            "MacOS",
+            "Linux",
+            "Windows",
+            "WinCompose"
+          ]
+        }
+      ]
+    }
+  ],
+  "menus": [],
+  "layouts": {
+    "labels": [
+      "Hide left encoder",
+      "Hide right encoder"
+    ],
+    "keymap": [
+      [
+        {
+          "y": 0.4
+        },
+        "0,5",
+        "0,4",
+        {
+          "y": -0.45
+        },
+        "0,3",
+        {
+          "y": -0.1
+        },
+        "0,2",
+        {
+          "y": 0.1
+        },
+        "0,1",
+        "0,0"
+      ],
+      [
+        {
+          "y": 0.45
+        },
+        "1,5",
+        "1,4",
+        {
+          "y": -0.45
+        },
+        "1,3",
+        {
+          "y": -0.1
+        },
+        "1,2",
+        {
+          "y": 0.1
+        },
+        "1,1",
+        "1,0"
+      ],
+      [
+        {
+          "y": 0.45
+        },
+        "2,5",
+        "2,4",
+        {
+          "y": -0.45
+        },
+        "2,3",
+        {
+          "y": -0.1
+        },
+        "2,2",
+        {
+          "y": 0.1
+        },
+        "2,1",
+        "2,0"
+      ],
+      [
+        {
+          "y": 0.45
+        },
+        "3,5",
+        "3,4",
+        {
+          "y": -0.45
+        },
+        "3,3",
+        {
+          "y": -0.1
+        },
+        "3,2",
+        {
+          "y": 0.1
+        },
+        "3,1",
+        "3,0"
+      ],
+      [
+        {
+          "x": 2
+        },
+        "4,3",
+        {
+          "y": -0.1
+        },
+        "4,2"
+      ],
+      [
+        {
+          "r": 8,
+          "rx": 4.7,
+          "ry": 4.65,
+          "x": -0.5,
+          "y": -0.5
+        },
+        "2,7"
+      ],
+      [
+        {
+          "r": 16,
+          "rx": 5.7,
+          "ry": 4.85,
+          "x": -0.5,
+          "y": -0.5
+        },
+        "1,7"
+      ],
+      [
+        {
+          "r": 24,
+          "rx": 6.7,
+          "ry": 5.25,
+          "x": -0.5,
+          "y": -0.5
+        },
+        "0,7"
+      ],
+      [
+        {
+          "r": 0,
+          "rx": 11.5,
+          "ry": -0.05
+        },
+        "5,0",
+        "5,1",
+        {
+          "y": -0.1
+        },
+        "5,2",
+        {
+          "y": 0.1
+        },
+        "5,3",
+        {
+          "y": 0.45
+        },
+        "5,4",
+        "5,5"
+      ],
+      [
+        {
+          "y": -0.45
+        },
+        "6,0",
+        "6,1",
+        {
+          "y": -0.1
+        },
+        "6,2",
+        {
+          "y": 0.1
+        },
+        "6,3",
+        {
+          "y": 0.45
+        },
+        "6,4",
+        "6,5"
+      ],
+      [
+        {
+          "y": -0.45
+        },
+        "7,0",
+        "7,1",
+        {
+          "y": -0.1
+        },
+        "7,2",
+        {
+          "y": 0.1
+        },
+        "7,3",
+        {
+          "y": 0.45
+        },
+        "7,4",
+        "7,5"
+      ],
+      [
+        {
+          "y": -0.45
+        },
+        "8,0",
+        "8,1",
+        {
+          "y": -0.1
+        },
+        "8,2",
+        {
+          "y": 0.1
+        },
+        "8,3",
+        {
+          "y": 0.45
+        },
+        "8,4",
+        "8,5"
+      ],
+      [
+        {
+          "r": -24,
+          "rx": 10.8,
+          "ry": 5.25,
+          "x": -0.5,
+          "y": -0.5
+        },
+        "5,7"
+      ],
+      [
+        {
+          "r": -16,
+          "rx": 11.8,
+          "ry": 4.85,
+          "x": -0.5,
+          "y": -0.5
+        },
+        "6,7"
+      ],
+      [
+        {
+          "r": -8,
+          "rx": 12.8,
+          "ry": 4.65,
+          "x": -0.5,
+          "y": -0.5
+        },
+        "7,7"
+      ],
+      [
+        {
+          "r": 0,
+          "rx": 13.5,
+          "ry": 3.85
+        },
+        "9,2",
+        {
+          "y": 0.1
+        },
+        "9,3"
+      ],
+      [
+        {
+          "r": 0,
+          "rx": 6.5,
+          "ry": 2.95
+        },
+        "4,7\n\n\n0,0",
+        {
+          "y": -0.5
+        },
+        "0,1\n\n\n0,0\n\n\n\n\n\ne",
+        {
+          "y": 1.0,
+          "x": -1
+        },
+        "0,0\n\n\n0,0\n\n\n\n\n\ne"
+      ],
+      [
+        {
+          "r": 0,
+          "rx": 10.0,
+          "ry": 2.95
+        },
+        "9,7\n\n\n1,0",
+        {
+          "y": -0.5,
+          "x": -2
+        },
+        "1,1\n\n\n1,0\n\n\n\n\n\ne",
+        {
+          "y": 1.0,
+          "x": -1
+        },
+        "1,0\n\n\n1,0\n\n\n\n\n\ne"
+      ]
+    ]
+  }
+}
