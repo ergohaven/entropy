@@ -2754,6 +2754,12 @@ pub(crate) const CLOCK_INFO_OPACITY_QSID: u16 = 351;
 pub(crate) const CLOCK_MODIFIERS_VISIBLE_QSID: u16 = 352;
 pub(crate) const CLOCK_MODIFIERS_COLOR_QSIDS: [u16; 3] = [353, 354, 355];
 pub(crate) const CLOCK_MODIFIERS_OPACITY_QSID: u16 = 356;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) const CLOCK_COLORS_FOLLOWING_ACCENT: [[u16; 3]; 3] = [
+    CLOCK_TEXT_COLOR_QSIDS,
+    CLOCK_INFO_COLOR_QSIDS,
+    CLOCK_MODIFIERS_COLOR_QSIDS,
+];
 
 pub(crate) const DATE_QSIDS: [u16; 15] = [
     357, 358, 359, 360, 361, 362, 363, 364, 365, 366, 367, 368, 369, 370, 371,
@@ -2763,6 +2769,7 @@ pub(crate) const DATE_DEFAULT: [u8; 15] =
 
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub(crate) struct DisplaySettingsState {
+    pub(crate) unconfirmed_qsids: std::collections::BTreeSet<u16>,
     pub(crate) sm62_supported: bool,
     pub(crate) sm62_values: [u8; 10],
     pub(crate) confirmed_sm62_values: [u8; 10],
@@ -2862,9 +2869,147 @@ pub(crate) struct DisplaySettingsState {
     pub(crate) pictograms: PictogramSettingsState,
 }
 
+impl DisplaySettingsState {
+    pub(in crate::app) fn reconcile_display_readback(&mut self, qsid: u16, readback: u16) {
+        self.unconfirmed_qsids.remove(&qsid);
+        if (246..=247).contains(&qsid) && self.sm62_stars_supported {
+            let side = (qsid - 246) as usize;
+            self.sm62_stars_values[side] = readback.min(1) as u8;
+            self.confirmed_sm62_stars_values[side] = readback.min(1) as u8;
+            return;
+        }
+        if (248..=249).contains(&qsid) && self.sm62_screens_off_supported {
+            let side = (qsid - 248) as usize;
+            self.sm62_screens_off_values[side] = readback.min(1) as u8;
+            self.confirmed_sm62_screens_off_values[side] = readback.min(1) as u8;
+            return;
+        }
+        if (244..=245).contains(&qsid) && self.sm62_language_supported {
+            let side = (qsid - 244) as usize;
+            self.sm62_language_values[side] = readback.min(1) as u8;
+            self.confirmed_sm62_language_values[side] = readback.min(1) as u8;
+            return;
+        }
+        if (242..=243).contains(&qsid) && self.sm62_hold_supported {
+            let side = (qsid - 242) as usize;
+            self.sm62_hold_ms[side] = readback.min(10_000);
+            self.confirmed_sm62_hold_ms[side] = readback.min(10_000);
+            return;
+        }
+        if (240..=241).contains(&qsid) && self.sm62_date_supported {
+            let side = (qsid - 240) as usize;
+            self.sm62_date_values[side] = readback.min(1) as u8;
+            self.confirmed_sm62_date_values[side] = readback.min(1) as u8;
+            return;
+        }
+        if (230..=239).contains(&qsid) && self.sm62_supported {
+            let index = (qsid - 230) as usize;
+            self.sm62_values[index] = readback.min(255) as u8;
+            self.confirmed_sm62_values[index] = readback.min(255) as u8;
+            return;
+        }
+        let value = readback.min(u8::MAX as u16) as u8;
+        if let Some(index) = DATE_QSIDS.iter().position(|q| *q == qsid) {
+            self.date[index] = value;
+            self.confirmed_date[index] = value;
+        } else if let Some(index) = DISPLAY_COLOR_QSIDS
+            .iter()
+            .position(|candidate| *candidate == qsid)
+        {
+            self.color[index] = value;
+            self.confirmed_color[index] = value;
+        } else if let Some(index) = DISPLAY_BACKGROUND_COLOR_QSIDS
+            .iter()
+            .position(|candidate| *candidate == qsid)
+        {
+            self.background_color[index] = value;
+            self.confirmed_background_color[index] = value;
+        } else if qsid == DISPLAY_BRIGHTNESS_QSID {
+            self.brightness = value.min(100);
+            self.confirmed_brightness = value.min(100);
+        } else if qsid == DISPLAY_BUTTON_STYLE_QSID {
+            self.button_style = value.min(32);
+            self.confirmed_button_style = value.min(32);
+        } else if let Some(index) = CLOCK_TEXT_COLOR_QSIDS
+            .iter()
+            .position(|candidate| *candidate == qsid)
+        {
+            self.clock_text_color[index] = value;
+            self.confirmed_clock_text_color[index] = value;
+        } else if let Some(index) = CLOCK_BACKGROUND_COLOR_QSIDS
+            .iter()
+            .position(|candidate| *candidate == qsid)
+        {
+            self.clock_background_color[index] = value;
+            self.confirmed_clock_background_color[index] = value;
+        } else if let Some(index) = CLOCK_INFO_COLOR_QSIDS
+            .iter()
+            .position(|candidate| *candidate == qsid)
+        {
+            self.clock_info_color[index] = value;
+            self.confirmed_clock_info_color[index] = value;
+        } else if let Some(index) = CLOCK_MODIFIERS_COLOR_QSIDS
+            .iter()
+            .position(|candidate| *candidate == qsid)
+        {
+            self.clock_modifiers_color[index] = value;
+            self.confirmed_clock_modifiers_color[index] = value;
+        } else if qsid == CLOCK_VISIBLE_QSID {
+            self.clock_visible = value != 0;
+            self.confirmed_clock_visible = value != 0;
+        } else if qsid == CLOCK_OPACITY_QSID {
+            self.clock_opacity = value.min(100);
+            self.confirmed_clock_opacity = value.min(100);
+        } else if qsid == CLOCK_INFO_VISIBLE_QSID {
+            self.clock_info_visible = value != 0;
+            self.confirmed_clock_info_visible = value != 0;
+        } else if qsid == CLOCK_INFO_OPACITY_QSID {
+            self.clock_info_opacity = value.min(100);
+            self.confirmed_clock_info_opacity = value.min(100);
+        } else if qsid == CLOCK_MODIFIERS_VISIBLE_QSID {
+            self.clock_modifiers_visible = value != 0;
+            self.confirmed_clock_modifiers_visible = value != 0;
+        } else if qsid == CLOCK_MODIFIERS_OPACITY_QSID {
+            self.clock_modifiers_opacity = value.min(100);
+            self.confirmed_clock_modifiers_opacity = value.min(100);
+        } else if qsid == CLOCK_STYLE_QSID {
+            self.clock_style = value.min(9);
+            self.confirmed_clock_style = value.min(9);
+        } else if qsid == CLOCK_SIZE_QSID {
+            self.clock_size = value.min(3);
+            self.confirmed_clock_size = value.min(3);
+        } else if qsid == CLOCK_ALIGNMENT_QSID {
+            self.clock_alignment = value.min(2);
+            self.confirmed_clock_alignment = value.min(2);
+        } else if qsid == CLOCK_DELAY_QSID {
+            self.clock_delay = value.min(7);
+            self.confirmed_clock_delay = value.min(7);
+        } else if qsid == CLOCK_COLON_BLINK_QSID {
+            self.clock_colon_blink = value != 0;
+            self.confirmed_clock_colon_blink = value != 0;
+        } else if qsid == CLOCK_BACKGROUND_DIM_QSID {
+            self.clock_background_dim = value.min(100);
+            self.confirmed_clock_background_dim = value.min(100);
+        } else if qsid == DISPLAY_TIMEOUT_QSID {
+            self.display_timeout = value.min(7);
+            self.confirmed_display_timeout = value.min(7);
+        }
+    }
+
+    #[cfg(not(target_arch = "wasm32"))]
+    pub(in crate::app) fn invalidate_macropad_accent_dependents(&mut self, accent_qsid: u16) {
+        if let Some(channel) = DISPLAY_COLOR_QSIDS.iter().position(|&qsid| qsid == accent_qsid) {
+            self.unconfirmed_qsids.extend(
+                CLOCK_COLORS_FOLLOWING_ACCENT.iter().map(|qsids| qsids[channel]),
+            );
+        }
+    }
+}
+
 impl Default for DisplaySettingsState {
     fn default() -> Self {
         Self {
+            unconfirmed_qsids: Default::default(),
             sm62_supported: false,
             sm62_values: [0, 0, 20, 1, 1, 2, 1, 20, 1, 1],
             confirmed_sm62_values: [0, 0, 20, 1, 1, 2, 1, 20, 1, 1],
@@ -3259,6 +3404,7 @@ pub(crate) fn load_display_settings(
         }
     }
     let mut state = DisplaySettingsState {
+        unconfirmed_qsids: Default::default(),
         sm62_supported: false,
         sm62_values: [0, 0, 20, 1, 1, 2, 1, 20, 1, 1],
         confirmed_sm62_values: [0, 0, 20, 1, 1, 2, 1, 20, 1, 1],

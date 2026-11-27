@@ -1,3 +1,5 @@
+#[cfg(not(target_arch = "wasm32"))]
+use super::portable_settings::macropad_clock_color_accent_qsid;
 use super::portable_settings::{
     ent_portable_setting_contracts_match, ent_portable_setting_import_value,
     ent_portable_setting_is_known, ent_portable_setting_is_valid, ent_portable_setting_spec,
@@ -509,6 +511,7 @@ fn plan_confirmed_entlayout_portable_settings_import(
             continue;
         }
         if ((setting.module.is_some()
+            || setting.is_macropad_display_setting()
             || setting.is_layer_led_color()
             || setting.is_indication_setting())
             && settings
@@ -1973,6 +1976,8 @@ impl EntropyApp {
         check()?;
         self.prepare_entlayout_pictograms()?;
         check()?;
+        self.confirm_entlayout_macropad_display()?;
+        check()?;
         let sm62 = self.selected_device.and_then(|i| self.device_manager.devices().get(i))
             .is_some_and(|d| d.application_layout_protocol_version() == Some(8));
         if !sm62 { return Ok(self.entlayout_snapshot()); }
@@ -2029,6 +2034,7 @@ impl EntropyApp {
         // not serialize a last-known cache as confirmed after a failed SET/GET.
         #[cfg(not(target_arch = "wasm32"))]
         if !self.entlayout_lighting_complete()
+            || !self.entlayout_macropad_display_confirmed()
             || self.selected_layer_names_uncertain()
             || self.deferred_device_load.has_unconfirmed_import_data()
             || (self.keycode_picker.macro_count > 0
@@ -2364,6 +2370,7 @@ impl EntropyApp {
         let resident = self.selected_device.and_then(|i| self.device_manager.devices().get(i))
             .is_some_and(|d| d.application_layout_protocol_version() == Some(8));
         if !resident {
+            self.confirm_entlayout_macropad_display()?;
             return self.write_entlayout_auto_backup()
                 .map(backup_durability::PublishedBackup::from_legacy_backup);
         }
@@ -4197,14 +4204,27 @@ impl EntropyApp {
                 .flat_map(|color| color.all_qsids()),
         );
         let EntPortableSettingsImportPlan {
-            compatible: portable_settings,
+            compatible: mut portable_settings,
             report: mut portable_settings_report,
         } = plan_confirmed_entlayout_portable_settings_import(
             &bundle.data.portable_settings,
             &target_portable_settings,
-            |setting| !unconfirmed_qsids.contains(&setting.qsid)
-                && !self.deferred_device_load.import_section_unconfirmed(setting.import_section()),
+            |setting| {
+                if setting.is_macropad_display_setting() {
+                    let accent_in_file = macropad_clock_color_accent_qsid(setting.qsid)
+                        .is_some_and(|accent| bundle.data.portable_settings.iter()
+                            .any(|entry| entry.qsid == accent && entry.is_macropad_display_setting()));
+                    return !accent_in_file && !self.display_settings.unconfirmed_qsids.contains(&setting.qsid);
+                }
+                !unconfirmed_qsids.contains(&setting.qsid)
+                    && !self.deferred_device_load.import_section_unconfirmed(setting.import_section())
+            },
         );
+        // Accent writes can update clock colors that still follow the accent.
+        // Restore their explicit values after the accent, even in reordered files.
+        portable_settings.sort_by_key(|setting| {
+            if setting.is_macropad_display_setting() { setting.qsid } else { 0 }
+        });
         let mut verified_portable_settings = Vec::new();
         let mut failed_indication_settings = Vec::new();
         let unconfirmed_layers: Vec<bool> = (0..self.layer_count)
@@ -4351,7 +4371,19 @@ impl EntropyApp {
         }
 
         for setting in portable_settings {
-            if complete_entlayout_document(&bundle) && !setting.is_layer_led_color() {
+            if setting.is_macropad_display_setting() {
+                if macropad_clock_color_accent_qsid(setting.qsid).is_some()
+                    && hid.get_qmk_setting_u8(setting.qsid).ok().map(u16::from) == Some(setting.value)
+                {
+                    // Skip SET when the color already matches. SET would detach
+                    // a clock color that still follows the accent in firmware.
+                    portable_settings_report.record_imported();
+                    verified_portable_settings.push(setting);
+                    continue;
+                }
+                self.display_settings.unconfirmed_qsids.insert(setting.qsid);
+                self.display_settings.invalidate_macropad_accent_dependents(setting.qsid);
+            } else if complete_entlayout_document(&bundle) && !setting.is_layer_led_color() {
                 // The peer may accept SET even when its acknowledgement or GET
                 // fails. Preserve drafts, but revoke their snapshot authority
                 // before touching hardware (also blocks stale equality skips).
