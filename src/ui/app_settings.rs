@@ -87,6 +87,110 @@ impl EntropyApp {
         }
     }
 
+    fn draw_app_layout_setting(
+        &mut self,
+        ui: &mut egui::Ui,
+        row: usize,
+        width: f32,
+        height: f32,
+        metrics: crate::ui_style::ResponsiveMetrics,
+        suppress_tooltips: bool,
+    ) {
+        let lang = self.app_settings.language;
+        let current = self.app_settings.key_legend_layout;
+        let (label_key, tooltip_key, choices, labels, selected, enabled) = match row {
+            1 => (
+                "ui.primary_layout_label",
+                "ui.primary_layout_tooltip",
+                vec![KeyLegendLayout::English],
+                vec![crate::i18n::tr_catalog(lang, "ui.key_legends_english").to_owned()],
+                0,
+                false,
+            ),
+            2 => {
+                let choices = KeyLegendLayout::secondary_layouts();
+                let labels = choices
+                    .iter()
+                    .map(|choice| choice.secondary_label(lang))
+                    .collect();
+                let selected = choices
+                    .iter()
+                    .position(|choice| choice.same_family(current))
+                    .unwrap_or(0);
+                (
+                    "ui.secondary_layout_label",
+                    "ui.secondary_layout_tooltip",
+                    choices,
+                    labels,
+                    selected,
+                    true,
+                )
+            }
+            3 => {
+                let variants = current.variants();
+                let enabled = !variants.is_empty();
+                let choices = if enabled {
+                    variants
+                } else {
+                    vec![KeyLegendLayout::English]
+                };
+                let labels = choices
+                    .iter()
+                    .map(|choice| choice.variant_label(lang))
+                    .collect();
+                let selected = choices
+                    .iter()
+                    .position(|choice| choice.variant_id() == current.variant_id())
+                    .unwrap_or(0);
+                (
+                    "ui.layout_variant_label",
+                    "ui.layout_variant_tooltip",
+                    choices,
+                    labels,
+                    selected,
+                    enabled,
+                )
+            }
+            _ => return,
+        };
+        let mut picked = None;
+        crate::ui_style::settings_list_row_with_tooltip(
+            ui,
+            width,
+            height,
+            crate::i18n::tr_catalog(lang, label_key),
+            true,
+            (!suppress_tooltips).then_some(crate::i18n::tr_catalog(lang, tooltip_key)),
+            metrics.settings_control_width(),
+            |ui| {
+                ui.add_enabled_ui(enabled, |ui| {
+                    let id = ui.make_persistent_id(("app_layout_dropdown", row));
+                    picked = crate::ui_style::modern_dropdown_select_sized(
+                        ui,
+                        id,
+                        &labels,
+                        selected,
+                        metrics.settings_control_width(),
+                        metrics.settings_control_height(),
+                        metrics.settings_control_font_size(),
+                    )
+                    .1;
+                });
+            },
+        );
+        if let Some(target) = picked.and_then(|index| choices.get(index)).copied() {
+            let updated = match row {
+                2 => current.select_secondary(target),
+                3 => current.select_variant(target),
+                _ => current,
+            };
+            if updated != current {
+                self.app_settings.key_legend_layout = updated;
+                save_app_settings(&self.app_settings);
+            }
+        }
+    }
+
     pub(super) fn draw_app_settings_page(&mut self, ui: &mut egui::Ui, content_rect: egui::Rect) {
         use crate::i18n::Key as TrKey;
 
@@ -205,7 +309,7 @@ impl EntropyApp {
 
         for row_idx in row_range {
             #[cfg(target_os = "linux")]
-            if row_idx == 5 {
+            if row_idx == 7 {
                 self.draw_linux_device_udev_rules_row(
                     ui,
                     content_width,
@@ -218,11 +322,11 @@ impl EntropyApp {
             }
 
             let row_idx = app_settings_base_row_index(row_idx);
-            if row_idx == 5 {
+            if row_idx == 7 {
                 self.draw_startup_device_setting(ui, content_width, row_height, metrics);
                 continue;
             }
-            let row_idx = if row_idx > 5 { row_idx - 1 } else { row_idx };
+            let row_idx = if row_idx > 7 { row_idx - 1 } else { row_idx };
             match row_idx {
                 0 => {
                     let mut selected_language = self.app_settings.language;
@@ -303,93 +407,17 @@ impl EntropyApp {
                         save_app_settings(&self.app_settings);
                     }
                 }
-                1 => {
-                    let mut selected_key_legend_layout = self.app_settings.key_legend_layout;
-                    crate::ui_style::settings_list_row_with_tooltip(
+                1 | 2 | 3 => {
+                    self.draw_app_layout_setting(
                         ui,
+                        row_idx,
                         content_width,
                         row_height,
-                        crate::i18n::tr_catalog(lang, "ui.key_legends_label"),
-                        true,
-                        tooltip(crate::i18n::tr_catalog(lang, "ui.key_legends_tooltip")),
-                        metrics.settings_control_width(),
-                        |ui| {
-                            let dropdown_id = ui.make_persistent_id("app_key_legends_dropdown");
-                            let dropdown_resp = crate::ui_style::modern_dropdown_button_sized(
-                                ui,
-                                dropdown_id,
-                                crate::i18n::tr_catalog(
-                                    lang,
-                                    selected_key_legend_layout.i18n_key(),
-                                ),
-                                ui.visuals().text_color(),
-                                metrics.settings_control_width(),
-                                metrics.settings_control_height(),
-                                metrics.settings_control_font_size(),
-                            );
-                            crate::ui_style::popup_below_widget(
-                                ui,
-                                dropdown_id,
-                                &dropdown_resp,
-                                egui::PopupCloseBehavior::CloseOnClickOutside,
-                                |ui| {
-                                    ui.set_min_width(metrics.settings_control_width());
-                                    ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
-                                    for key_legend_layout in KeyLegendLayout::ALL {
-                                        let selected =
-                                            key_legend_layout == selected_key_legend_layout;
-                                        let (option_rect, option_resp) = ui.allocate_exact_size(
-                                            metrics.size(168.0, 28.0),
-                                            Sense::click(),
-                                        );
-                                        if option_resp.hovered() {
-                                            ui.ctx()
-                                                .set_cursor_icon(egui::CursorIcon::PointingHand);
-                                        }
-                                        let option_fill = if selected {
-                                            if dark {
-                                                Color32::from_rgb(58, 58, 61)
-                                            } else {
-                                                Color32::from_rgb(236, 236, 238)
-                                            }
-                                        } else if option_resp.hovered() {
-                                            crate::ui_style::hover_fill(dark)
-                                        } else {
-                                            Color32::TRANSPARENT
-                                        };
-                                        ui.painter().rect_filled(option_rect, 7.0, option_fill);
-                                        ui.painter().text(
-                                            egui::pos2(
-                                                option_rect.left() + metrics.value(10.0),
-                                                option_rect.center().y,
-                                            ),
-                                            egui::Align2::LEFT_CENTER,
-                                            crate::i18n::tr_catalog(
-                                                lang,
-                                                key_legend_layout.i18n_key(),
-                                            ),
-                                            FontId::proportional(metrics.value(12.0)),
-                                            if selected {
-                                                ui.visuals().text_color()
-                                            } else {
-                                                app_muted_text(dark)
-                                            },
-                                        );
-                                        if option_resp.clicked() {
-                                            selected_key_legend_layout = key_legend_layout;
-                                            egui::Popup::close_all(ui.ctx());
-                                        }
-                                    }
-                                },
-                            );
-                        },
+                        metrics,
+                        suppress_tooltips,
                     );
-                    if selected_key_legend_layout != self.app_settings.key_legend_layout {
-                        self.app_settings.key_legend_layout = selected_key_legend_layout;
-                        save_app_settings(&self.app_settings);
-                    }
                 }
-                2 => {
+                4 => {
                     let close_in_background_before = self.app_settings.minimize_to_tray_on_close
                         || matches!(
                             self.app_settings.close_to_tray_behavior,
@@ -443,7 +471,7 @@ impl EntropyApp {
                         save_app_settings(&self.app_settings);
                     }
                 }
-                3 => {
+                5 => {
                     let mut launch_at_startup = self.app_settings.launch_at_startup;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
@@ -474,7 +502,7 @@ impl EntropyApp {
                         }
                     }
                 }
-                4 => {
+                6 => {
                     let mut launch_minimized = self.app_settings.launch_minimized;
                     #[cfg(target_os = "windows")]
                     let (launch_background_label, launch_background_tooltip) = (
@@ -514,7 +542,7 @@ impl EntropyApp {
                         }
                     }
                 }
-                5 => {
+                7 => {
                     let mut show_shifted_symbols = self.app_settings.show_shifted_number_symbols;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
@@ -538,7 +566,7 @@ impl EntropyApp {
                         save_app_settings(&self.app_settings);
                     }
                 }
-                6 => {
+                8 => {
                     let mut layer_hover_preview = self.app_settings.layer_hover_preview;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
@@ -565,7 +593,7 @@ impl EntropyApp {
                         save_app_settings(&self.app_settings);
                     }
                 }
-                7 => {
+                9 => {
                     let mut encoder_hover_enlarge = self.app_settings.encoder_hover_enlarge;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
@@ -589,7 +617,7 @@ impl EntropyApp {
                         save_app_settings(&self.app_settings);
                     }
                 }
-                8 => {
+                10 => {
                     let mut selected_accent = self.app_settings.accent_color;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
@@ -642,7 +670,7 @@ impl EntropyApp {
                         save_app_settings(&self.app_settings);
                     }
                 }
-                9 => {
+                11 => {
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
                         content_width,
@@ -668,7 +696,7 @@ impl EntropyApp {
                         },
                     );
                 }
-                10 => {
+                12 => {
                     let mut diagnostics_enabled = self.app_settings.diagnostics_enabled;
                     let diagnostics_log_path = crate::diagnostics::active_log_path_display();
                     let diagnostics_tooltip = crate::i18n::tr_catalog_format(
@@ -704,7 +732,7 @@ impl EntropyApp {
                         save_app_settings(&self.app_settings);
                     }
                 }
-                11 => {
+                13 => {
                     let mut show_signature = self.app_settings.show_made_by_signature;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
@@ -731,7 +759,7 @@ impl EntropyApp {
                         save_app_settings(&self.app_settings);
                     }
                 }
-                12 => {
+                14 => {
                     let mut assign_transparent = self.app_settings.middle_click_assigns_transparent;
                     crate::ui_style::settings_list_row_with_tooltip(
                         ui,
@@ -759,7 +787,7 @@ impl EntropyApp {
                     }
                 }
                 #[cfg(not(target_arch = "wasm32"))]
-                13 | 14 => {
+                15 | 16 => {
                     let firmware = row_idx == 14;
                     let setting = if firmware {
                         &mut self.app_settings.firmware_update_notifications
@@ -810,8 +838,10 @@ impl EntropyApp {
         suppress_tooltips: bool,
     ) {
         let lang = self.app_settings.language;
-        let tooltip = (!suppress_tooltips)
-            .then_some(crate::i18n::tr_catalog(lang, "ui.device_udev_rules_tooltip"));
+        let tooltip = (!suppress_tooltips).then_some(crate::i18n::tr_catalog(
+            lang,
+            "ui.device_udev_rules_tooltip",
+        ));
 
         crate::ui_style::settings_list_row_with_tooltip(
             ui,
@@ -864,7 +894,10 @@ impl EntropyApp {
             Ok(output) => {
                 let details = command_output_summary(&output.stderr, &output.stdout);
                 if details.is_empty() {
-                    format!("Entropy device access rules install failed: {}", output.status)
+                    format!(
+                        "Entropy device access rules install failed: {}",
+                        output.status
+                    )
                 } else {
                     format!("Entropy device access rules install failed: {details}")
                 }
@@ -875,7 +908,7 @@ impl EntropyApp {
 }
 
 fn total_app_settings_rows() -> usize {
-    let rows = 14;
+    let rows = 16;
     #[cfg(not(target_arch = "wasm32"))]
     let rows = rows
         + if super::update_notifications::SUPPORTED {
@@ -896,7 +929,7 @@ fn total_app_settings_rows() -> usize {
 fn app_settings_base_row_index(row_idx: usize) -> usize {
     #[cfg(target_os = "linux")]
     {
-        if row_idx > 5 {
+        if row_idx > 7 {
             return row_idx - 1;
         }
     }

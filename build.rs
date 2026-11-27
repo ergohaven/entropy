@@ -4,11 +4,15 @@ use std::{
     process::Command,
 };
 
+#[path = "src/key_legends_build.rs"]
+mod key_legends_build;
+
 const WINDOWS_ICON_PATH: &str = "assets/entropy.ico";
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
     record_source_revision();
+    key_legends_build::generate();
     println!("cargo:rerun-if-changed={WINDOWS_ICON_PATH}");
 
     // rmk-types takes its constants, the combo, morse and bulk sizes among

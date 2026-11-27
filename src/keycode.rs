@@ -24,46 +24,7 @@ pub fn gui_mod_name() -> &'static str {
     gui_name_for_target_os(std::env::consts::OS)
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, serde::Serialize, serde::Deserialize)]
-#[serde(rename_all = "snake_case")]
-#[derive(Default)]
-pub enum KeyLegendLayout {
-    #[default]
-    English,
-    Russian,
-    RussianPrimary,
-}
-
-impl KeyLegendLayout {
-    pub const ALL: [KeyLegendLayout; 2] = [KeyLegendLayout::English, KeyLegendLayout::Russian];
-
-    pub fn i18n_key(self) -> &'static str {
-        match self {
-            KeyLegendLayout::English => "ui.key_legends_english",
-            KeyLegendLayout::Russian | KeyLegendLayout::RussianPrimary => "ui.key_legends_russian",
-        }
-    }
-
-    pub fn is_multilingual(self) -> bool {
-        !matches!(self, KeyLegendLayout::English)
-    }
-
-    pub fn order_i18n_key(self) -> Option<&'static str> {
-        match self {
-            KeyLegendLayout::English => None,
-            KeyLegendLayout::Russian => Some("main_menu.key_legends_english_first"),
-            KeyLegendLayout::RussianPrimary => Some("main_menu.key_legends_russian_first"),
-        }
-    }
-
-    pub fn toggled_order(self) -> Self {
-        match self {
-            KeyLegendLayout::English => KeyLegendLayout::English,
-            KeyLegendLayout::Russian => KeyLegendLayout::RussianPrimary,
-            KeyLegendLayout::RussianPrimary => KeyLegendLayout::Russian,
-        }
-    }
-}
+pub use crate::key_legends::KeyLegendLayout;
 
 fn osm_mod_bits(value: u16) -> Option<u16> {
     (0x52A0..=0x52BF).contains(&value).then_some(value & 0x1F)
@@ -2242,125 +2203,7 @@ fn apply_key_legend_layout(
     label: String,
     key_legend_layout: KeyLegendLayout,
 ) -> String {
-    match key_legend_layout {
-        KeyLegendLayout::English => label,
-        KeyLegendLayout::Russian => russian_key_legend(value, false).unwrap_or(label),
-        KeyLegendLayout::RussianPrimary => russian_key_legend(value, true).unwrap_or(label),
-    }
-}
-
-fn dual_legend(primary: &str, secondary: &str) -> String {
-    format!("{}\n{}", primary, secondary)
-}
-
-fn symbol_legend(base: &str, english: &str, russian: &str, russian_primary: bool) -> String {
-    let shifted = if english == russian {
-        english.to_string()
-    } else if russian_primary {
-        format!("{}  {}", russian, english)
-    } else {
-        format!("{}  {}", english, russian)
-    };
-    format!("{}\n{}", shifted, base)
-}
-
-fn shifted_symbol_legend(english: &str, russian: &str, russian_primary: bool) -> String {
-    if english == russian {
-        english.to_string()
-    } else if russian_primary {
-        format!("{}\n{}", russian, english)
-    } else {
-        format!("{}\n{}", english, russian)
-    }
-}
-
-fn russian_key_legend(value: u16, russian_primary: bool) -> Option<String> {
-    // Physical-style legends: both English and Russian legends are shown in the
-    // same key-position system. The app setting controls which one is primary.
-    let pair = |english: &str, russian: &str| {
-        if russian_primary {
-            dual_legend(russian, english)
-        } else {
-            dual_legend(english, russian)
-        }
-    };
-    let symbol = |base: &str, english: &str, russian: &str| {
-        symbol_legend(base, english, russian, russian_primary)
-    };
-    let shifted_symbol =
-        |english: &str, russian: &str| shifted_symbol_legend(english, russian, russian_primary);
-
-    match value {
-        0x0004 => Some(pair("A", "Ф")),
-        0x0005 => Some(pair("B", "И")),
-        0x0006 => Some(pair("C", "С")),
-        0x0007 => Some(pair("D", "В")),
-        0x0008 => Some(pair("E", "У")),
-        0x0009 => Some(pair("F", "А")),
-        0x000A => Some(pair("G", "П")),
-        0x000B => Some(pair("H", "Р")),
-        0x000C => Some(pair("I", "Ш")),
-        0x000D => Some(pair("J", "О")),
-        0x000E => Some(pair("K", "Л")),
-        0x000F => Some(pair("L", "Д")),
-        0x0010 => Some(pair("M", "Ь")),
-        0x0011 => Some(pair("N", "Т")),
-        0x0012 => Some(pair("O", "Щ")),
-        0x0013 => Some(pair("P", "З")),
-        0x0014 => Some(pair("Q", "Й")),
-        0x0015 => Some(pair("R", "К")),
-        0x0016 => Some(pair("S", "Ы")),
-        0x0017 => Some(pair("T", "Е")),
-        0x0018 => Some(pair("U", "Г")),
-        0x0019 => Some(pair("V", "М")),
-        0x001A => Some(pair("W", "Ц")),
-        0x001B => Some(pair("X", "Ч")),
-        0x001C => Some(pair("Y", "Н")),
-        0x001D => Some(pair("Z", "Я")),
-
-        0x001E => Some("1".into()),
-        0x001F => Some("2".into()),
-        0x0020 => Some("3".into()),
-        0x0021 => Some("4".into()),
-        0x0022 => Some("5".into()),
-        0x0023 => Some("6".into()),
-        0x0024 => Some("7".into()),
-        0x0025 => Some("8".into()),
-        0x0026 => Some("9".into()),
-        0x0027 => Some("0".into()),
-        0x002D => Some(symbol("-", "_", "_")),
-        0x002E => Some(symbol("=", "+", "+")),
-        0x002F => Some(symbol("[", "{", "Х")),
-        0x0030 => Some(symbol("]", "}", "Ъ")),
-        0x0033 => Some(symbol(";", ":", "Ж")),
-        0x0034 => Some(symbol("'", "\"", "Э")),
-        0x0035 => Some(symbol("`", "~", "Ё")),
-        0x0036 => Some(symbol(",", "<", "Б")),
-        0x0037 => Some(symbol(".", ">", "Ю")),
-        0x0038 => Some(symbol("/", "?", ".")),
-
-        0x021E => Some(shifted_symbol("!", "!")),
-        0x021F => Some(shifted_symbol("@", "\"")),
-        0x0220 => Some(shifted_symbol("#", "№")),
-        0x0221 => Some(shifted_symbol("$", ";")),
-        0x0222 => Some(shifted_symbol("%", "%")),
-        0x0223 => Some(shifted_symbol("^", ":")),
-        0x0224 => Some(shifted_symbol("&", "?")),
-        0x0225 => Some(shifted_symbol("*", "*")),
-        0x0226 => Some(shifted_symbol("(", "(")),
-        0x0227 => Some(shifted_symbol(")", ")")),
-        0x022D => Some(shifted_symbol("_", "_")),
-        0x022E => Some(shifted_symbol("+", "+")),
-        0x022F => Some(shifted_symbol("{", "Х")),
-        0x0230 => Some(shifted_symbol("}", "Ъ")),
-        0x0233 => Some(shifted_symbol(":", "Ж")),
-        0x0234 => Some(shifted_symbol("\"", "Э")),
-        0x0235 => Some(shifted_symbol("~", "Ё")),
-        0x0236 => Some(shifted_symbol("<", "Б")),
-        0x0237 => Some(shifted_symbol(">", "Ю")),
-        0x0238 => Some(shifted_symbol("?", ".")),
-        _ => None,
-    }
+    crate::key_legends::label(value, &label, key_legend_layout).unwrap_or(label)
 }
 
 /// Keyboard layout selected in the operating system, i.e. what the host
@@ -2378,9 +2221,15 @@ pub enum KeyOutputLayout {
 
 impl From<KeyLegendLayout> for KeyOutputLayout {
     fn from(legend: KeyLegendLayout) -> Self {
-        match legend {
-            KeyLegendLayout::English => Self::English,
-            KeyLegendLayout::Russian | KeyLegendLayout::RussianPrimary => Self::Russian,
+        // Display catalogs do not define host input. Preserve this legacy
+        // conversion only for the two input layouts supported by this type.
+        if matches!(
+            legend,
+            KeyLegendLayout::Russian | KeyLegendLayout::RussianPrimary
+        ) {
+            Self::Russian
+        } else {
+            Self::English
         }
     }
 }

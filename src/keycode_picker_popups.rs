@@ -191,27 +191,7 @@ pub(super) fn picker_shifted_number_label(
     value: u16,
     key_legend_layout: KeyLegendLayout,
 ) -> Option<String> {
-    let (digit, english, russian) = match value {
-        0x001E => ("1", "!", "!"),
-        0x001F => ("2", "@", "\""),
-        0x0020 => ("3", "#", "№"),
-        0x0021 => ("4", "$", ";"),
-        0x0022 => ("5", "%", "%"),
-        0x0023 => ("6", "^", ":"),
-        0x0024 => ("7", "&", "?"),
-        0x0025 => ("8", "*", "*"),
-        0x0026 => ("9", "(", "("),
-        0x0027 => ("0", ")", ")"),
-        _ => return None,
-    };
-    let shifted = match key_legend_layout {
-        KeyLegendLayout::English => english.to_string(),
-        KeyLegendLayout::Russian if english == russian => english.to_string(),
-        KeyLegendLayout::Russian => format!("{}  {}", english, russian),
-        KeyLegendLayout::RussianPrimary if english == russian => russian.to_string(),
-        KeyLegendLayout::RussianPrimary => format!("{}  {}", russian, english),
-    };
-    Some(format!("{}\n{}", shifted, digit))
+    crate::key_legends::number_row_label(value, key_legend_layout)
 }
 
 pub(super) fn show_grouped_popup_key_buttons(

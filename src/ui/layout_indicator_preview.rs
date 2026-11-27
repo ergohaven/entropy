@@ -451,6 +451,7 @@ impl EntropyApp {
                 ),
                 show_shifted_number_symbols,
                 key_legend_layout,
+                label_binding,
             );
             draw_sticky_key_label(
                 &painter,

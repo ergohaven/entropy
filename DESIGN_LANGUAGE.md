@@ -103,6 +103,16 @@ Use the adaptive settings viewport where it applies, and render only the visible
 
 Scrollbars use the shared floating handle with a reserved gutter. Do not add a permanent framed scrollbar or reclaim its gutter when the handle is hidden. Preserve pointer, wheel and popup interaction when changing layout.
 
+## Built-in key legends
+
+Application keycap legends are separate from interface translations, operating-system input and firmware display settings. The repository's [key_legends](key_legends/README.md) catalog contains the reviewed additional display layouts; English remains the base. Adding a profile is a source pull request followed by an application build, not a runtime import or a user-directory lookup.
+
+Use [src/key_legends.rs](src/key_legends.rs) for profile selection, legend order, labels and number-row symbols. Settings, the device menu, canvas, picker/search and image export consume this same owner. Do not add per-language enums, page-local symbol tables or copied painters for a new profile. [src/key_legends_build.rs](src/key_legends_build.rs) discovers and validates repository TOML at build time; invalid profiles fail the build instead of silently changing captions.
+
+App Settings presents Primary layout (fixed English), Secondary layout (None or a catalog family) and Layout variant (only that family's contributed variants). Keep these as three standard settings rows, with the variant disabled when Secondary is None. Do not offer placeholder variants without key data. A family has one declared default and consistent metadata across its profiles; choosing a family resolves that default, while reselecting the current family preserves its chosen variant.
+
+Persist the stable concrete profile ID and independent legend order, not a catalog index or parallel primary/family/variant settings. Preserve historical English/Russian selections and their order when reading existing settings. Missing key entries retain the existing English/action caption. A profile changes display strings only: do not derive the active OS input method, trainer language or SM62 firmware capabilities from its presence.
+
 ## SM62 display page
 
 Keep the display preview and settings as one bounded responsive group.

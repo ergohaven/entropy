@@ -21,6 +21,7 @@ mod i18n;
 mod integration_icons;
 mod keyboard;
 mod keycode;
+mod key_legends;
 mod keycode_picker;
 #[cfg(test)]
 mod layouts;

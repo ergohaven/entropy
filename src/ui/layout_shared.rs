@@ -656,45 +656,12 @@ pub(crate) fn number_row_shifted_label(
     label: String,
     enabled: bool,
     key_legend_layout: KeyLegendLayout,
+    binding: crate::keyboard::KeyBinding,
 ) -> String {
     if !enabled {
         return label;
     }
-
-    let Some((digit, english, russian)) = (match label.as_str() {
-        "1" => Some(("1", "!", "!")),
-        "2" => Some(("2", "@", "\"")),
-        "3" => Some(("3", "#", "№")),
-        "4" => Some(("4", "$", ";")),
-        "5" => Some(("5", "%", "%")),
-        "6" => Some(("6", "^", ":")),
-        "7" => Some(("7", "&", "?")),
-        "8" => Some(("8", "*", "*")),
-        "9" => Some(("9", "(", "(")),
-        "0" => Some(("0", ")", ")")),
-        _ => None,
-    }) else {
-        return label;
-    };
-
-    let shifted = match key_legend_layout {
-        KeyLegendLayout::English => english.to_string(),
-        KeyLegendLayout::Russian => {
-            if english == russian {
-                english.to_string()
-            } else {
-                format!("{}  {}", english, russian)
-            }
-        }
-        KeyLegendLayout::RussianPrimary => {
-            if english == russian {
-                russian.to_string()
-            } else {
-                format!("{}  {}", russian, english)
-            }
-        }
-    };
-    format!("{}\n{}", shifted, digit)
+    crate::key_legends::number_row_binding_label(binding, key_legend_layout).unwrap_or(label)
 }
 
 pub(crate) fn draw_key_label(

@@ -519,6 +519,7 @@ impl EntropyApp {
                         label,
                         self.app_settings.show_shifted_number_symbols,
                         self.app_settings.key_legend_layout,
+                        fallback_binding,
                     );
                     draw_key_label_dimmed(
                         painter,
@@ -543,6 +544,7 @@ impl EntropyApp {
                     ),
                     self.app_settings.show_shifted_number_symbols,
                     self.app_settings.key_legend_layout,
+                    binding,
                 );
                 draw_key_label(painter, draw_rect, &label, dark, key.rotation.to_radians());
             }

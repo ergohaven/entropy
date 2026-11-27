@@ -99,8 +99,8 @@ impl EntropyApp {
                     .collect()
             };
             if show_key_legend_switcher {
-                if let Some(order_key) = self.app_settings.key_legend_layout.order_i18n_key() {
-                    device_menu_labels.push(crate::i18n::tr_catalog(lang, order_key).to_owned());
+                if let Some(order_label) = self.app_settings.key_legend_layout.order_label(lang) {
+                    device_menu_labels.push(order_label);
                 }
             }
             device_menu_labels.push(crate::i18n::tr_catalog(lang, "layer_actions.menu").to_owned());
@@ -237,15 +237,14 @@ impl EntropyApp {
 
                     top_dropdown_divider(ui, dropdown_size.x - 16.0);
                     if show_key_legend_switcher {
-                        if let Some(order_key) =
-                            self.app_settings.key_legend_layout.order_i18n_key()
+                        if let Some(order_label) =
+                            self.app_settings.key_legend_layout.order_label(lang)
                         {
-                            let order_label = crate::i18n::tr_catalog(lang, order_key);
                             if top_dropdown_icon_item(
                                 ui,
                                 dropdown_size.x - 16.0,
                                 TopMenuIcon::KeyLegendOrder,
-                                order_label,
+                                &order_label,
                                 true,
                                 false,
                             )

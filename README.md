@@ -358,6 +358,54 @@ Not in scope for this release:
 - Browser-only configuration
 - Mobile platforms
 
+## Contributing display layouts
+
+Want Entropy to show another language's key legends, or a variant such as
+Russian Typewriter? Contribute a TOML profile through a pull request. Accepted
+profiles are built into the next application build; installed apps do not import
+or load external TOML files.
+
+In **App Settings**, **Primary layout** is always English. **Secondary layout**
+selects an additional layout family, or **None** for English only. **Layout
+variant** selects a concrete variant within that family. Currently, the additional
+profile is **Russian → Standard**; other choices appear only when their real key
+tables are contributed.
+
+### Add a layout or variant
+
+1. Fork this repository and copy [key_legends/ru.toml](key_legends/ru.toml) to
+   `key_legends/<stable-id>.toml`. Each file describes one concrete variant
+2. Keep `schema_version = 2` and set a unique `id` matching the filename without
+   `.toml`. Use lowercase ASCII letters, digits, hyphens or underscores, starting
+   with a letter. Keep IDs stable after publication
+3. Choose the family and variant:
+   - **New secondary layout:** set a new `family_id`, localized family names
+     (`name_en`, `name_ru`) and `short_name`. Give its first variant a unique
+     `variant_id`, localized variant names and `default_variant = true`
+   - **New variant of an existing family:** keep that family's `family_id`,
+     names and `short_name`, but choose a new `variant_id` and variant names.
+     Set `default_variant = false` unless deliberately changing the default.
+     Exactly one profile per family must be the default
+4. Remove the copied `[legacy]` section. Replace the `[keys]` entries with the
+   actual legends and Shift symbols for the intended layout. Entries refer to
+   HID usage IDs, not physical positions on a particular keyboard
+5. Build and run Entropy using the [development instructions](#development).
+   The build discovers profiles automatically and rejects invalid data. No Rust
+   or menu-list edits are needed for an ordinary new profile
+6. Select the family and variant in App Settings. Check the keyboard view,
+   picker/search, Shift-number symbols and image export, including font coverage
+   for the proposed script
+7. Open a pull request describing the exact layout and OS variant, with a source
+   for the mapping and screenshots of App Settings, the keyboard view, picker
+   and number-row symbols
+
+See the [profile format and contributor guide](key_legends/README.md) for required
+metadata, entry kinds, validation rules and compatibility details.
+
+These profiles change **displayed legends only**. They do not change OS input,
+translate the interface, reprogram the keyboard or add layouts to firmware
+screens. A TOML profile does not provide a font or implement an input method.
+
 ## Development
 
 Install a stable Rust toolchain, then build the desktop app:

@@ -20,6 +20,7 @@ include = [
     "assets/**",
     "build.rs",
     "i18n/**",
+    "key_legends/**",
     "linux/**",
     "src/**",
 ]
@@ -30,6 +31,8 @@ path = "src/main.rs"
 
 [build-dependencies]
 winresource = "0.1"
+serde = { version = "1", features = ["derive"] }
+toml = "=0.8.2"
 
 [dependencies]
 eframe = { version = "0.37.0", default-features = false, features = ["accesskit", "clipboard", "default_fonts", "glow", "links", "persistence", "wayland", "web_screen_reader", "x11"] }

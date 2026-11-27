@@ -129,15 +129,8 @@ fn export_theme_label(lang: crate::i18n::Language, theme: LayoutImageExportTheme
 fn export_key_legend_label(
     lang: crate::i18n::Language,
     key_legend_layout: KeyLegendLayout,
-) -> &'static str {
-    match (lang, key_legend_layout) {
-        (crate::i18n::Language::Russian, KeyLegendLayout::English) => "English",
-        (crate::i18n::Language::English, KeyLegendLayout::English) => "English",
-        (crate::i18n::Language::Russian, KeyLegendLayout::Russian) => "Русская: EN сверху",
-        (crate::i18n::Language::English, KeyLegendLayout::Russian) => "Russian: EN first",
-        (crate::i18n::Language::Russian, KeyLegendLayout::RussianPrimary) => "Русская: RU сверху",
-        (crate::i18n::Language::English, KeyLegendLayout::RussianPrimary) => "Russian: RU first",
-    }
+) -> String {
+    key_legend_layout.export_label(lang)
 }
 
 fn layer_export_label(
@@ -371,7 +364,7 @@ fn draw_key_legend_dropdown(
     let dropdown_resp = crate::ui_style::modern_dropdown_button_sized(
         ui,
         dropdown_id,
-        export_key_legend_label(lang, *selected_layout),
+        &export_key_legend_label(lang, *selected_layout),
         ui.visuals().text_color(),
         metrics.settings_control_width(),
         metrics.settings_control_height(),
@@ -385,11 +378,7 @@ fn draw_key_legend_dropdown(
         |ui| {
             ui.set_min_width(metrics.settings_control_width());
             ui.spacing_mut().item_spacing = Vec2::new(0.0, 2.0);
-            for layout in [
-                KeyLegendLayout::English,
-                KeyLegendLayout::Russian,
-                KeyLegendLayout::RussianPrimary,
-            ] {
+            for layout in KeyLegendLayout::all_with_orders() {
                 let selected = layout == *selected_layout;
                 let (option_rect, option_resp) =
                     ui.allocate_exact_size(metrics.size(168.0, 28.0), Sense::click());
@@ -1040,8 +1029,8 @@ impl EntropyApp {
             write_rotated_rect_svg(svg, rect, key.rotation, palette)?;
 
             let binding = layout.get_key_binding(layer_idx, key_idx);
-            let (label, dimmed) = if binding.is_no() {
-                (String::new(), false)
+            let (label, dimmed, label_binding) = if binding.is_no() {
+                (String::new(), false, binding)
             } else if binding.is_transparent() {
                 let fallback = (0..layer_idx)
                     .rev()
@@ -1058,8 +1047,9 @@ impl EntropyApp {
                             self.app_settings.layout_image_export.key_legend_layout,
                         ),
                         true,
+                        fallback_binding,
                     ),
-                    None => (String::new(), false),
+                    None => (String::new(), false, binding),
                 }
             } else {
                 (
@@ -1072,6 +1062,7 @@ impl EntropyApp {
                         self.app_settings.layout_image_export.key_legend_layout,
                     ),
                     false,
+                    binding,
                 )
             };
             if !label.is_empty() {
@@ -1079,6 +1070,7 @@ impl EntropyApp {
                     label,
                     self.app_settings.show_shifted_number_symbols,
                     self.app_settings.layout_image_export.key_legend_layout,
+                    label_binding,
                 );
                 write_key_label_svg(
                     svg,
@@ -1223,8 +1215,8 @@ impl EntropyApp {
             );
 
             let binding = layout.get_key_binding(layer_idx, key_idx);
-            let (label, dimmed) = if binding.is_no() {
-                (String::new(), false)
+            let (label, dimmed, label_binding) = if binding.is_no() {
+                (String::new(), false, binding)
             } else if binding.is_transparent() {
                 let fallback = (0..layer_idx)
                     .rev()
@@ -1241,8 +1233,9 @@ impl EntropyApp {
                             self.app_settings.layout_image_export.key_legend_layout,
                         ),
                         true,
+                        fallback_binding,
                     ),
-                    None => (String::new(), false),
+                    None => (String::new(), false, binding),
                 }
             } else {
                 (
@@ -1255,6 +1248,7 @@ impl EntropyApp {
                         self.app_settings.layout_image_export.key_legend_layout,
                     ),
                     false,
+                    binding,
                 )
             };
             if !label.is_empty() {
@@ -1262,6 +1256,7 @@ impl EntropyApp {
                     label,
                     self.app_settings.show_shifted_number_symbols,
                     self.app_settings.layout_image_export.key_legend_layout,
+                    label_binding,
                 );
                 draw_key_label_export(
                     image,
