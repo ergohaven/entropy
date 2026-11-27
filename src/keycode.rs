@@ -1788,6 +1788,36 @@ pub const KEYCODES: &[Keycode] = &[
         category: KeycodeCategory::Special,
     },
     Keycode {
+        value: 0x7C53,
+        name: "DM_REC1",
+        label: "DM1\nRec",
+        category: KeycodeCategory::Special,
+    },
+    Keycode {
+        value: 0x7C54,
+        name: "DM_REC2",
+        label: "DM2\nRec",
+        category: KeycodeCategory::Special,
+    },
+    Keycode {
+        value: 0x7C55,
+        name: "DM_RSTP",
+        label: "DM Rec\nStop",
+        category: KeycodeCategory::Special,
+    },
+    Keycode {
+        value: 0x7C56,
+        name: "DM_PLY1",
+        label: "DM1\nPlay",
+        category: KeycodeCategory::Special,
+    },
+    Keycode {
+        value: 0x7C57,
+        name: "DM_PLY2",
+        label: "DM2\nPlay",
+        category: KeycodeCategory::Special,
+    },
+    Keycode {
         value: 0x7C73,
         name: "QK_CAPS_WORD_TOGGLE",
         label: "Caps\nWord",
@@ -2764,6 +2794,25 @@ fn simple_key_tooltip(kc: &Keycode) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dynamic_macro_keycodes_have_vial_labels() {
+        for (value, label) in [
+            (0x7C53, "DM1\nRec"),
+            (0x7C54, "DM2\nRec"),
+            (0x7C55, "DM Rec\nStop"),
+            (0x7C56, "DM1\nPlay"),
+            (0x7C57, "DM2\nPlay"),
+        ] {
+            assert_eq!(keycode_label(value), label);
+            for layout in [KeyLegendLayout::English, KeyLegendLayout::RussianPrimary] {
+                assert_eq!(
+                    keycode_label_with_names_and_layout(value, &[], &[], layout),
+                    label
+                );
+            }
+        }
+    }
 
     #[test]
     fn tri_layer_legends_recognize_legacy_and_current_vial_assignments() {

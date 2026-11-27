@@ -1,0 +1,66 @@
+# Secondary display legends only; never changes host input or firmware
+# Source: xkeyboard-config 2.41, symbols/ru, ru(ruchey_ru)
+# Resolved with libxkbcommon from Ubuntu xkb-data 2.41-2ubuntu1.1
+# https://gitlab.freedesktop.org/xkeyboard-config/xkeyboard-config/-/blob/xkeyboard-config-2.41/symbols/ru
+# Normal and Shift levels only; letters use uppercase keycap legends
+# AltGr/third/fourth-level symbols are outside the current display schema
+schema_version = 2
+id = "ru-engineering"
+family_id = "ru"
+variant_id = "engineering"
+variant_name_en = "Engineering"
+variant_name_ru = "Инженерный"
+default_variant = false
+name_en = "Russian"
+name_ru = "русская"
+short_name = "RU"
+
+[keys]
+"0x0004" = { kind = "pair", normal = "Ф" }
+"0x0005" = { kind = "pair", normal = "И" }
+"0x0006" = { kind = "pair", normal = "С" }
+"0x0007" = { kind = "pair", normal = "В" }
+"0x0008" = { kind = "pair", normal = "У" }
+"0x0009" = { kind = "pair", normal = "А" }
+"0x000A" = { kind = "pair", normal = "П" }
+"0x000B" = { kind = "pair", normal = "Р" }
+"0x000C" = { kind = "pair", normal = "Ш" }
+"0x000D" = { kind = "pair", normal = "О" }
+"0x000E" = { kind = "pair", normal = "Л" }
+"0x000F" = { kind = "pair", normal = "Д" }
+"0x0010" = { kind = "pair", normal = "Ь" }
+"0x0011" = { kind = "pair", normal = "Т" }
+"0x0012" = { kind = "pair", normal = "Щ" }
+"0x0013" = { kind = "pair", normal = "З" }
+"0x0014" = { kind = "pair", normal = "Й" }
+"0x0015" = { kind = "pair", normal = "К" }
+"0x0016" = { kind = "pair", normal = "Ы" }
+"0x0017" = { kind = "pair", normal = "Е" }
+"0x0018" = { kind = "pair", normal = "Г" }
+"0x0019" = { kind = "pair", normal = "М" }
+"0x001A" = { kind = "pair", normal = "Ц" }
+"0x001B" = { kind = "pair", normal = "Ч" }
+"0x001C" = { kind = "pair", normal = "Н" }
+"0x001D" = { kind = "pair", normal = "Я" }
+"0x001E" = { kind = "number", normal = "1", shift = "!" }
+"0x001F" = { kind = "number", normal = "2", shift = "\"" }
+"0x0020" = { kind = "number", normal = "3", shift = "№" }
+"0x0021" = { kind = "number", normal = "4", shift = ";" }
+"0x0022" = { kind = "number", normal = "5", shift = "%" }
+"0x0023" = { kind = "number", normal = "6", shift = ":" }
+"0x0024" = { kind = "number", normal = "7", shift = "?" }
+"0x0025" = { kind = "number", normal = "8", shift = "*" }
+"0x0026" = { kind = "number", normal = "9", shift = "(" }
+"0x0027" = { kind = "number", normal = "0", shift = ")" }
+"0x002D" = { kind = "symbol", normal = "-", shift = "_" }
+"0x002E" = { kind = "symbol", normal = "=", shift = "+" }
+"0x002F" = { kind = "symbol", normal = "Х", shift = "Х" }
+"0x0030" = { kind = "symbol", normal = "Ъ", shift = "Ъ" }
+"0x0031" = { kind = "symbol", normal = "/", shift = "\\" }
+"0x0033" = { kind = "symbol", normal = "Ж", shift = "Ж" }
+"0x0034" = { kind = "symbol", normal = "Э", shift = "Э" }
+"0x0035" = { kind = "symbol", normal = "Ё", shift = "Ё" }
+"0x0036" = { kind = "symbol", normal = "Б", shift = "Б" }
+"0x0037" = { kind = "symbol", normal = "Ю", shift = "Ю" }
+"0x0038" = { kind = "symbol", normal = ".", shift = "," }
+"0x0064" = { kind = "symbol", normal = "/", shift = "\\" }

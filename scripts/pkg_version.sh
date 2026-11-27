@@ -26,19 +26,12 @@ base="${version%%-*}"
 pre="${version#"$base"}"
 pre="${pre#-}"
 
-case "$base" in
-[0-9]*.[0-9]*.[0-9]*) ;;
-*)
-	echo "pkg_version: '$version' is not X.Y.Z[-PRERELEASE]" >&2
+# Accept the public MAJOR.MINOR scheme and historical MAJOR.MINOR.PATCH tags
+# without appending a patch component to the package version.
+if ! printf '%s\n' "$base" | LC_ALL=C grep -Eq '^[0-9]+\.[0-9]+(\.[0-9]+)?$'; then
+	echo "pkg_version: '$version' is not X.Y[-PRERELEASE] or X.Y.Z[-PRERELEASE]" >&2
 	exit 1
-	;;
-esac
-case "$base" in
-*[!0-9.]*)
-	echo "pkg_version: '$version' is not X.Y.Z[-PRERELEASE]" >&2
-	exit 1
-	;;
-esac
+fi
 
 if [ -n "$pre" ]; then
 	case "$pre" in

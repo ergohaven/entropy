@@ -113,6 +113,39 @@ class ManualWorkflow(unittest.TestCase):
             '', workflow, count=1, flags=re.S)
         unchanged = unchanged.replace('          pattern: release-assets-*\n', '', 1)
         unchanged = unchanged.replace('          draft: true\n', '          draft: false\n', 1)
+        # Reverse the exact Linux asset/notes delta, not an arbitrary job body.
+        # Keep the original digest so signing, gates and publication stay frozen.
+        linux_artifacts = """      - name: Package Linux artifacts
+        if: matrix.kind == 'linux'
+        shell: bash
+        run: |
+          prefix="entropy-${GITHUB_REF_NAME}"
+          VERSION="${GITHUB_REF_NAME#v}" task docker:linux
+          mkdir -p dist/release
+          cp "dist/linux/$prefix-x86_64.AppImage" dist/release/
+          cp dist/linux/*.deb "dist/release/$prefix-amd64.deb"
+          cp dist/linux/*.rpm "dist/release/$prefix-x86_64.rpm"
+          cp dist/linux/*.pkg.tar.zst "dist/release/$prefix-x86_64.pkg.tar.zst"
+          printf 'Release Linux artifacts glibc requirement: '
+          scripts/glibc_baseline.sh target/release/entropy
+"""
+        linux_appimage = """      - name: Package Linux artifact
+        if: matrix.kind == 'linux'
+        shell: bash
+        run: |
+          asset="entropy-${GITHUB_REF_NAME}-x86_64.AppImage"
+          VERSION="${GITHUB_REF_NAME#v}" task docker:appimage
+          mkdir -p dist/release
+          cp "dist/linux/$asset" "dist/release/$asset"
+          printf 'Release AppImage glibc requirement: '
+          scripts/glibc_baseline.sh target/release/entropy
+"""
+        self.assertEqual(unchanged.count(linux_artifacts), 1)
+        unchanged = unchanged.replace(linux_artifacts, linux_appimage, 1)
+        linux_downloads = '- Linux: install the `.deb` (Debian/Ubuntu), `.rpm` (Fedora/openSUSE) or `.pkg.tar.zst` (Arch) with your package manager, or make the portable `.AppImage` executable and run it.'
+        self.assertEqual(unchanged.count(linux_downloads), 1)
+        unchanged = unchanged.replace(linux_downloads,
+                                      '- Linux: download the `.AppImage`, make it executable, and run it.', 1)
         # Frozen workflow after routing Linux through the existing pinned
         # container owner; all non-Linux gates, signing and manual flow remain.
         self.assertEqual(hashlib.sha256(unchanged.encode()).hexdigest(),

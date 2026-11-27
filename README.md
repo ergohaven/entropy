@@ -50,7 +50,7 @@ and firmware settings from one coherent interface.
 
 | Platform | Status | Package |
 | --- | --- | --- |
-| Linux x86_64 | Primary target | AppImage |
+| Linux x86_64 | Primary target | AppImage, deb, rpm, Arch package |
 | Windows x86_64 | Release target | Portable EXE |
 | macOS arm64 (Apple Silicon) | Release target | DMG |
 | macOS x86_64 (Intel) | Release target | DMG |
@@ -65,14 +65,23 @@ the stable identity applies only to releases built with this workflow.
 Release builds are published on the
 [GitHub Releases](https://github.com/ergohaven/entropy/releases) page:
 
-- `entropy-v0.5.0-x86_64.AppImage`
-- `entropy-v0.5.0-windows-x86_64.exe`
-- `entropy-v0.5.0-macos-arm64.dmg`
-- `entropy-v0.5.0-macos-x86_64.dmg`
+Tagged releases prepared with the current workflow provide these files
+(`VERSION` is the release number, for example `0.6`):
 
-Stable tags such as `v0.4.0` publish a regular GitHub release and mark it as
-latest. Tags with a suffix, such as `v0.4.0-rc.1`, publish the same artifacts as
-a GitHub prerelease.
+- `entropy-vVERSION-x86_64.AppImage` — portable Linux app
+- `entropy-vVERSION-amd64.deb` — Debian/Ubuntu package
+- `entropy-vVERSION-x86_64.rpm` — Fedora/openSUSE package
+- `entropy-vVERSION-x86_64.pkg.tar.zst` — Arch package
+- `entropy-vVERSION-windows-x86_64.exe`
+- `entropy-vVERSION-macos-arm64.dmg`
+- `entropy-vVERSION-macos-x86_64.dmg`
+
+Older releases may not include the Linux packages. Install packages with your
+system package manager; the in-app updater continues to select the AppImage.
+
+Stable tags such as `v0.6` prepare a regular GitHub release as a draft for
+maintainer verification before publication. Tags with a suffix, such as
+`v0.6-rc.1`, prepare the same artifacts as a prerelease draft.
 
 Windows builds are unsigned for now, so Windows SmartScreen may warn before
 launching the app.

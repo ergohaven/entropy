@@ -40,7 +40,20 @@ expect archlinux 0.3.21-rc.1 '0.3.21rc.1'
 expect archlinux 0.3.21 '0.3.21'
 expect archlinux 1.0.0-beta.2 '1.0.0beta.2'
 
-expect_reject deb 0.3
+# Public releases retain exactly two numeric components; old tags still work.
+expect deb 0.6 '0.6'
+expect rpm 0.6 '0.6'
+expect archlinux 0.6 '0.6'
+expect deb 0.6-rc.1 '0.6~rc.1'
+expect rpm 0.6-rc.1 '0.6~rc.1'
+expect archlinux 0.6-rc.1 '0.6rc.1'
+expect deb 1.0 '1.0'
+expect archlinux 1.0-beta.2 '1.0beta.2'
+expect_reject deb 0
+expect_reject deb 0..6
+expect_reject deb .0.6
+expect_reject deb 0.6.
+expect_reject deb 0.6.0.1
 expect_reject deb 'v0.3.21'
 expect_reject deb '0.3.21; rm -rf /'
 expect_reject archlinux '0.3.21-1'

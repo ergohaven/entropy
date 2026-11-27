@@ -337,6 +337,29 @@ Repeat"
             ));
         }
 
+        let dynamic_macros = crate::i18n::tr_catalog(lang, "key_picker_text.dynamic_macros");
+        for (value, tooltip_key) in [
+            (0x7C53, "key_picker_text.dynamic_macro_record_1"),
+            (0x7C54, "key_picker_text.dynamic_macro_record_2"),
+            (0x7C55, "key_picker_text.dynamic_macro_stop"),
+            (0x7C56, "key_picker_text.dynamic_macro_play_1"),
+            (0x7C57, "key_picker_text.dynamic_macro_play_2"),
+        ] {
+            let Some(kc) = crate::keycode::find_keycode(value) else {
+                continue;
+            };
+            if !self.vial_keycode_supported(kc) {
+                continue;
+            }
+            rows.push(self.vial_row(
+                tab,
+                dynamic_macros,
+                value,
+                kc.label,
+                crate::i18n::tr_catalog(lang, tooltip_key),
+            ));
+        }
+
         rows
     }
 

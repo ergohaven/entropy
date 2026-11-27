@@ -411,12 +411,22 @@ pub(crate) fn number_row_label(usage: u16, selection: KeyLegendLayout) -> Option
     }
     let (base, shift) = english::symbols(usage)?;
     let entry = selection.profile().and_then(|profile| profile.entry(usage));
-    let top = entry
-        .and_then(|entry| entry.shift)
+    // Keep the same keycap arrangement as Standard: symbols above one digit.
+    // Some layouts put the digit on Shift; normalize only this presentation,
+    // leaving their actual normal/Shift data and explicit shifted bindings intact.
+    let (secondary_base, secondary_symbol) = match entry {
+        Some(entry) if entry.shift == Some(base) => (Some(base), Some(entry.normal)),
+        _ => (
+            entry.map(|entry| entry.normal),
+            entry.and_then(|entry| entry.shift),
+        ),
+    };
+    let top = secondary_symbol
+        .filter(|secondary| *secondary != base)
         .map(|secondary| ordered(shift, secondary, selection, "  "))
         .unwrap_or_else(|| shift.to_owned());
-    let bottom = entry
-        .map(|entry| ordered(base, entry.normal, selection, "  "))
+    let bottom = secondary_base
+        .map(|secondary| ordered(base, secondary, selection, "  "))
         .unwrap_or_else(|| base.to_owned());
     Some(format!("{top}\n{bottom}"))
 }
@@ -511,6 +521,34 @@ mod tests {
             Some("\"  @\n2")
         );
         assert!(label(0x00E0, "Ctrl", KeyLegendLayout::Russian).is_none());
+    }
+
+    #[test]
+    fn number_row_keeps_one_digit_below_symbols_for_every_profile() {
+        for selection in KeyLegendLayout::all_with_orders() {
+            for usage in 0x001E..=0x0027 {
+                let (digit, _) = english::symbols(usage).unwrap();
+                let caption = number_row_label(usage, selection).unwrap();
+                let (top, bottom) = caption.split_once('\n').unwrap();
+                assert_eq!(bottom, digit, "{}: {usage:#06X}", selection.id);
+                assert!(!top.contains(digit), "{}: {usage:#06X}", selection.id);
+            }
+        }
+        for (order, first_symbols) in [
+            (LegendOrder::EnglishFirst, "!  №"),
+            (LegendOrder::SecondaryFirst, "№  !"),
+        ] {
+            let typewriter = KeyLegendLayout::from_id("ru-typewriter", order).unwrap();
+            assert_eq!(
+                number_row_label(0x001E, typewriter).unwrap(),
+                format!("{first_symbols}\n1")
+            );
+            // An explicitly shifted action still describes its actual Shift level.
+            assert_eq!(
+                label(0x021E, "!", typewriter).unwrap(),
+                ordered("!", "1", typewriter, "\n")
+            );
+        }
     }
 
     #[test]

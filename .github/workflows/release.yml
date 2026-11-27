@@ -76,15 +76,18 @@ jobs:
         if: matrix.kind == 'windows'
         run: cargo build --release
 
-      - name: Package Linux artifact
+      - name: Package Linux artifacts
         if: matrix.kind == 'linux'
         shell: bash
         run: |
-          asset="entropy-${GITHUB_REF_NAME}-x86_64.AppImage"
-          VERSION="${GITHUB_REF_NAME#v}" task docker:appimage
+          prefix="entropy-${GITHUB_REF_NAME}"
+          VERSION="${GITHUB_REF_NAME#v}" task docker:linux
           mkdir -p dist/release
-          cp "dist/linux/$asset" "dist/release/$asset"
-          printf 'Release AppImage glibc requirement: '
+          cp "dist/linux/$prefix-x86_64.AppImage" dist/release/
+          cp dist/linux/*.deb "dist/release/$prefix-amd64.deb"
+          cp dist/linux/*.rpm "dist/release/$prefix-x86_64.rpm"
+          cp dist/linux/*.pkg.tar.zst "dist/release/$prefix-x86_64.pkg.tar.zst"
+          printf 'Release Linux artifacts glibc requirement: '
           scripts/glibc_baseline.sh target/release/entropy
 
       - name: Package Windows artifact
@@ -242,7 +245,7 @@ jobs:
           # shellcheck disable=SC2016
           {
             printf '\n## Downloads\n\n'
-            printf '%s\n' '- Linux: download the `.AppImage`, make it executable, and run it.'
+            printf '%s\n' '- Linux: install the `.deb` (Debian/Ubuntu), `.rpm` (Fedora/openSUSE) or `.pkg.tar.zst` (Arch) with your package manager, or make the portable `.AppImage` executable and run it.'
             printf '%s\n' '- Windows: download and run the portable `.exe`.'
             printf '%s\n' '- macOS: download the `.dmg` for your Mac (`arm64` for Apple Silicon, `x86_64` for Intel). See README for installation and Open Anyway instructions (self-signed, not notarized).'
           } >> RELEASE_NOTES.md

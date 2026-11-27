@@ -37,10 +37,29 @@ only actual profiles in a PR; examples and documentation do not need TOML files.
 App Settings has three rows: the fixed English **Primary layout**, a **Secondary
 layout** family (`None`, Russian, and future contributed families), and a **Layout
 variant** filtered to that family. With no secondary family, the variant is None
-and disabled. The current Russian profile is Standard; Typewriter, Engineering
-and other variants appear only after their actual TOML data is contributed.
+and disabled. Russian includes Standard, Typewriter and Engineering variants.
 
-A family groups concrete profiles such as `ru` and a future `ru-typewriter`.
+Built-in Russian variants:
+
+- `ru` / Standard preserves the historical Entropy legends and saved selections
+- `ru-typewriter` / Typewriter (Машинописный) follows XKB `ru(typewriter)`, not
+  `ru(typewriter-legacy)`; punctuation occupies the unshifted number row and
+  digits its Shift level, while Ё is at the slash-key position
+- `ru-engineering` / Engineering (Инженерный) follows XKB `ru(ruchey_ru)`
+  (Ручей, Russian base), not `ru(ruchey_en)`; its slash/backslash position and
+  normal/Shift legends follow that variant
+
+The two additional profiles use resolved normal/Shift levels from
+[xkeyboard-config 2.41, symbols/ru](https://gitlab.freedesktop.org/xkeyboard-config/xkeyboard-config/-/blob/xkeyboard-config-2.41/symbols/ru)
+(Ubuntu `xkb-data 2.41-2ubuntu1.1`). Letters are uppercase keycap legends,
+including letters on punctuation positions. These profiles include the ANSI
+backslash and ISO extra-key positions. AltGr/third/fourth-level symbols, including
+Engineering's extra typographic characters, are not represented by the current
+schema and are not claimed as displayed. Selecting a profile does not install or
+activate its OS input layout.
+
+A family groups concrete profiles such as `ru`, `ru-typewriter` and
+`ru-engineering`.
 Exactly one profile per family is its default, and variant IDs must be unique
 within the family. Family names and `short_name` must agree across its profiles.
 Selecting the same family preserves its variant; switching families selects the
