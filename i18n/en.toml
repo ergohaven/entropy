@@ -2,9 +2,9 @@
 layout_tooltip = "Device layout and connected devices"
 advanced_tooltip = "Advanced device features"
 settings_tooltip = "Application and device settings"
-key_legends_english_first = "Legends: EN / RU"
-key_legends_russian_first = "Legends: RU / EN"
-key_legends_order = "Legends: {first} / {second}"
+key_legends_english_first = "Layout order: EN / RU"
+key_legends_russian_first = "Layout order: RU / EN"
+key_legends_order = "Layout order: {first} / {second}"
 show_hide_keys = "Show/Hide Keys"
 
 [key_hints]

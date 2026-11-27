@@ -2,9 +2,9 @@
 layout_tooltip = "Раскладка устройства и подключённые устройства"
 advanced_tooltip = "Дополнительные функции устройства"
 settings_tooltip = "Настройки приложения и устройства"
-key_legends_english_first = "Легенды: EN / RU"
-key_legends_russian_first = "Легенды: RU / EN"
-key_legends_order = "Легенды: {first} / {second}"
+key_legends_english_first = "Порядок раскладок: EN / RU"
+key_legends_russian_first = "Порядок раскладок: RU / EN"
+key_legends_order = "Порядок раскладок: {first} / {second}"
 show_hide_keys = "Показать/скрыть клавиши"
 
 [key_hints]
