@@ -25,6 +25,7 @@ jobs:
     steps:
       - uses: actions/checkout@v7
         with:
+          fetch-depth: 0
           persist-credentials: false
       - name: Test workflow contracts
         run: python3 -m unittest discover -s .github/scripts -p 'test_*.py' -v
