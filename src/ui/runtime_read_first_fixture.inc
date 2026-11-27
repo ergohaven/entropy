@@ -57,6 +57,10 @@ fn runtime_fixture_hid_identity(
                     3 => { r[8..].fill(0);r[3]=if let Some(k)=key {r[8..].copy_from_slice(&k);0}else{1}; },
                     6 => { let raw=&record.expect("READ of absent slot").1;let offset=u16::from_le_bytes([p[8],p[9]]) as usize;let n=raw.len().saturating_sub(offset).min(20);r[10]=n as u8;r[11]=0;r[12..].fill(0);r[12..12+n].copy_from_slice(&raw[offset..offset+n]); },
                     0|2 => { r[3]=if key.as_ref().is_some_and(|k|k[..]==p[8..32]) {0}else{1}; },
+                    // This schema2 peer predates compact CATALOG. An exact,
+                    // correlated BAD_ARGUMENT selects the real ENUM fallback;
+                    // opcode 7 is a read-only query, not STORE or DELETE.
+                    7 => { r[3]=2;r[8..].fill(0); },
                     _ => panic!("read-first fixture must not STORE/DELETE: {}",p[2]),
                 }
             },
@@ -191,6 +195,63 @@ fn runtime_fixture_adopt(app: &mut EntropyApp, path: &str, key: &str, id: &str, 
     assert!(requests.iter().any(|p|p[..3]==[0xef,9,6]));
     assert!(!requests.iter().any(|p|p[0]==5||p[..2]==[0xfe,0x0b]||p[..2]==[0xef,9]&&matches!(p[2],1|4)),"adoption mutated device data");
     adopted_id
+}
+// Host-managed firmware never SELECTs archive slots. Require a fresh, complete
+// mode1 RAM transfer of the exact adopted FULL instead, not merely a BEGIN/CRC.
+fn runtime_fixture_wait_ram(rec: &crate::hid::TestHidRecorder, cursor: usize, raw: &[u8]) {
+    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(5);
+    loop {
+        let requests=rec.requests();
+        let packets=&requests[cursor..];
+        assert!(!packets.iter().any(|p|p[..2]==[0xef,9]&&matches!(p[2],1|2|4)),
+            "host-managed activation mutated or selected an archive slot");
+        for (start,begin) in packets.iter().enumerate().filter(|(_,p)|p[..3]==[0xec,8,1]) {
+            if begin[16..20]!=runtime_fixture_crc(raw).to_le_bytes() {continue;}
+            let size=usize::from(u16::from_le_bytes([begin[8],begin[9]]));
+            let count=usize::from(u16::from_le_bytes([begin[12],begin[13]]));
+            if usize::from(u16::from_le_bytes([begin[10],begin[11]]))!=raw.len()
+                || count!=size.div_ceil(24) {continue;}
+            let mut data=Vec::new();
+            let mut committed=false;
+            for p in &packets[start+1..] {
+                if p[..2]==[0xed,8]&&p[2..6]==begin[4..8] {
+                    if usize::from(u16::from_le_bytes([p[6],p[7]]))!=data.len()/24 {break;}
+                    data.extend_from_slice(&p[8..]);
+                } else if p[..2]==[0xee,8]&&p[2..6]==begin[4..8] {
+                    committed=usize::from(u16::from_le_bytes([p[6],p[7]]))==count
+                        && p[8..12]==begin[20..24] && data.len()==count*24;
+                    break;
+                }
+            }
+            if !committed || data.len()<size {continue;}
+            data.truncate(size);
+            if runtime_fixture_crc(&data).to_le_bytes()!=begin[20..24] {continue;}
+            let decoded=if begin[3]==0 {data} else if begin[3]==1 {
+                let mut decoded=Vec::new();
+                let mut pos=0;
+                let mut valid=true;
+                while pos<data.len() {
+                    let tag=data[pos];pos+=1;
+                    if tag<128 {
+                        let n=usize::from(tag)+1;
+                        if pos+n>data.len() || decoded.len()+n>raw.len() {valid=false;break;}
+                        decoded.extend_from_slice(&data[pos..pos+n]);pos+=n;
+                    } else {
+                        let n=usize::from(tag)-128+3;
+                        if pos+2>data.len() || decoded.len()+n>raw.len() {valid=false;break;}
+                        let distance=usize::from(u16::from_le_bytes([data[pos],data[pos+1]]));pos+=2;
+                        if distance==0 || distance>decoded.len() {valid=false;break;}
+                        for _ in 0..n {decoded.push(decoded[decoded.len()-distance]);}
+                    }
+                }
+                if !valid || pos!=data.len() {continue;}
+                decoded
+            } else {continue;};
+            if decoded==raw {return;}
+        }
+        assert!(std::time::Instant::now()<deadline,"no fresh mode1 RAM COMMIT for confirmed device FULL");
+        std::thread::sleep(std::time::Duration::from_millis(5));
+    }
 }
 fn runtime_fixture_wait_select(rec: &crate::hid::TestHidRecorder, cursor: usize, raw: &[u8]) {
     let deadline=std::time::Instant::now()+std::time::Duration::from_secs(5);

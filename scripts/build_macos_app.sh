@@ -23,9 +23,7 @@ fi
 MACOSX_DEPLOYMENT_TARGET="${MACOSX_DEPLOYMENT_TARGET:-10.15}"
 export MACOSX_DEPLOYMENT_TARGET
 
-VERSION="$(
-	awk -F '"' '/^version = / { print $2; exit }' "$ROOT/Cargo.toml"
-)"
+VERSION="$(sh "$ROOT/scripts/public_version.sh")"
 
 target_arch_label() {
 	case "$1" in

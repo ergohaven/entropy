@@ -1871,16 +1871,19 @@ mod tests {
             app.selected_layer = 3;
             app.selected_key = Some((1, 0));
             let original_layout = app.layout.as_ref().unwrap().layers.clone();
-            app.update_application_layout_runtime_with(
-                crate::app_discovery::ApplicationDiscoverySnapshot {
+            let discovery = crate::app_discovery::ApplicationDiscoverySnapshot {
                     foreground: Some(foreground.clone()),
                     foreground_status: crate::app_discovery::ForegroundStatus {
                         backend: "synthetic OS boundary".into(),
                         state: crate::app_discovery::ForegroundState::Focused(foreground),
                     },
                     ..Default::default()
-                },
-            );
+                };
+            // The real owner completes archive negotiation asynchronously,
+            // including after selected-to-background HID handoff. Keep ticking
+            // the real runtime within the original transmission deadline.
+            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
+            app.update_application_layout_runtime_with(discovery.clone());
             assert_eq!(
                 app.app_settings.application_layouts[&key].active_layout_id, profile,
                 "connected Macropad must follow foreground with K04 selected={select_k04}"
@@ -1894,6 +1897,12 @@ mod tests {
                 // Application mappings are stable, not fixed Firefox/user roles.
                 expected.resident_slot = app.app_settings.application_layouts[&key].resident_slots.get(&profile).copied();
             }
+            while sm62 && app.qmk_hid_hosts[&macropad.path].test_application_layout_snapshot() != expected {
+                assert!(std::time::Instant::now() < deadline,
+                    "real SM62 owner did not publish resolved profile after archive negotiation");
+                std::thread::sleep(std::time::Duration::from_millis(10));
+                app.update_application_layout_runtime_with(discovery.clone());
+            }
             assert_eq!(
                 app.qmk_hid_hosts[&macropad.path].test_application_layout_snapshot(),
                 expected
@@ -1904,7 +1913,6 @@ mod tests {
             );
             assert_eq!(app.layout.as_ref().unwrap().layers, original_layout);
             let expected_packets = expected.packets();
-            let deadline = std::time::Instant::now() + std::time::Duration::from_secs(3);
             while !expected_packets.iter().all(|packet| {
                 macro_packets.requests().iter().any(|request| {
                     request.starts_with(if packet[0] == 0xe3 {
@@ -2016,7 +2024,7 @@ mod tests {
         let cursor=packets.requests().len();
         app.update_application_layout_runtime_with(discovery.clone());
         assert_eq!(app.app_settings.application_layouts[&key].active_layout_id,id);
-        runtime_fixture_wait_select(&packets,cursor,&raw);
+        runtime_fixture_wait_ram(&packets,cursor,&raw);
         app.app_settings=crate::app::app_storage::load_app_settings();
         assert_eq!(app.app_settings.application_layout_bindings[&key],(device.vendor_id,device.product_id,device.serial_number.clone()));
         let archived=serde_json::to_value(&app.app_settings.application_layouts[&key].layouts).unwrap();
@@ -2065,7 +2073,7 @@ mod tests {
                 profile.executable="firefox".into();
                 profile.automatic_switching=true;
                 app.update_application_layout_runtime_with(discovery.clone());
-                runtime_fixture_wait_select(&rec,cursor,&own_raw);
+                runtime_fixture_wait_ram(&rec,cursor,&own_raw);
                 let mut alias=fresh.clone();alias.path=format!("{}/src/device.rs",env!("CARGO_MANIFEST_DIR"));
                 let mut devices=app.device_manager.devices().to_vec();devices.push(alias);
                 let cursor=rec.requests().len();

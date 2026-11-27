@@ -229,6 +229,9 @@ jobs:
           pattern: release-assets-*
           path: artifacts/
 
+      - name: Verify release inventory and write checksums
+        run: python3 scripts/prepare_release_assets.py --source artifacts --destination dist/release --tag "$GITHUB_REF_NAME"
+
       - name: Write release notes
         shell: bash
         run: |
@@ -241,21 +244,23 @@ jobs:
             END { if (!capturing) exit 1 }
           ' CHANGELOG.md > RELEASE_NOTES.md
 
-          # Markdown backticks are literal installation text, not shell commands.
-          # shellcheck disable=SC2016
-          {
-            printf '\n## Downloads\n\n'
-            printf '%s\n' '- Linux: install the `.deb` (Debian/Ubuntu), `.rpm` (Fedora/openSUSE) or `.pkg.tar.zst` (Arch) with your package manager, or make the portable `.AppImage` executable and run it.'
-            printf '%s\n' '- Windows: download and run the portable `.exe`.'
-            printf '%s\n' '- macOS: download the `.dmg` for your Mac (`arm64` for Apple Silicon, `x86_64` for Intel). See README for installation and Open Anyway instructions (self-signed, not notarized).'
-          } >> RELEASE_NOTES.md
+      - name: Verify release publisher
+        env:
+          GH_TOKEN: ${{ secrets.ERGOHAVEN_RELEASE_TOKEN }}
+        run: |
+          test -n "$GH_TOKEN"
+          test "$(gh api user --jq .login)" = kissetfall
 
       - name: Create GitHub Release
         uses: softprops/action-gh-release@v2
         with:
+          token: ${{ secrets.ERGOHAVEN_RELEASE_TOKEN }}
+          tag_name: ${{ github.ref_name }}
+          target_commitish: ${{ github.sha }}
           name: Entropy ${{ github.ref_name }}
           draft: true
           prerelease: ${{ contains(github.ref_name, '-') }}
-          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}
+          make_latest: 'false'
           body_path: RELEASE_NOTES.md
-          files: artifacts/**/*
+          fail_on_unmatched_files: true
+          files: dist/release/*

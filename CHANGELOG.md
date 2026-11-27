@@ -5,6 +5,32 @@ All notable public changes to Entropy are tracked here.
 Entropy uses public release versions for GitHub releases and internal build versions
 for development history. The first public beta is `v0.1.0-beta.1`.
 
+## v0.7
+
+Application layouts for more QMK keyboards, new display legends, and improved device settings and backups.
+
+### What's new
+- Application-aware layouts now work across more compatible QMK keyboards, not just Macropad: switching applications changes key and encoder assignments automatically.
+- Choose a preferred startup keyboard when several devices are connected. A single connected keyboard opens automatically, and connection handling better distinguishes keyboard families.
+- Phenom and K:04 module pages gain speed sliders and clearer rotation/auto-layer controls; shared encoder controls are easier to find. SM62 adds per-half Off selection and shared English/Russian display choices.
+- Choose Standard, Typewriter or Engineering Russian key legends, with consistent labels in the editor, picker and exported images. QMK Universal Symbols now use the same categories as RMK. Legend profiles change displayed labels, not the computer's input language.
+- Special adds dynamic macro recording/playback and Clear EEPROM. Supported Phenom firmware exposes Normal assignments; Magic actions and extended Russian letters appear only when the firmware supports them.
+- Layout files now include Macropad v2/v3 display settings. Phenom imports better preserve module settings, LED durations and Phenom Micro home-row Tap-Hold assignments across compatible QMK/RMK firmware.
+- Firmware downloads recognize native RMK packages and restore Phenom QMK selection. Update checks handle firmware numbering resets and two-component release labels; macOS UF2 restart guidance helps distinguish a normal restart from a failed copy.
+
+### Download
+When upgrading from Entropy 0.6.0, download and replace the application manually; its updater does not recognize this release's two-component tag.
+
+- Linux x86_64: AppImage, Debian/Ubuntu `.deb`, Fedora/openSUSE `.rpm`, or Arch `.pkg.tar.zst`. Make the AppImage executable; install native packages with your package manager. The in-app updater selects the AppImage.
+- Windows x86_64: portable `.exe`; Microsoft Visual C++ v14 x64 Redistributable may be required.
+- macOS: choose Apple Silicon (`arm64`) or Intel (`x86_64`), then drag the app into Applications. If blocked, use Privacy & Security → Open Anyway. The app is self-signed, not notarized.
+
+Feature availability depends on your keyboard and firmware. Clear EEPROM erases device settings. Before updating firmware or clearing settings, save your current layout to a `.entlayout` file in Entropy so you can restore it. When migrating from RMK 0.2.0 to the native RMK series, follow your model's reset/pairing instructions and update every component with its matching image.
+
+Thanks to @D19ital and @IgorArkhipov.
+
+[Full changelog](https://github.com/ergohaven/entropy/compare/v0.6.0...v0.7)
+
 ## v0.6.0
 
 ### Main Features

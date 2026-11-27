@@ -4,7 +4,7 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="${1:-${GITHUB_REF_NAME:-}}"
 if [[ -z "$VERSION" ]]; then
-  VERSION="v$(awk -F '"' '/^version = / { print $2; exit }' "$ROOT/Cargo.toml")"
+  VERSION="v$(sh "$ROOT/scripts/public_version.sh")"
 fi
 
 OUT="${2:-$ROOT/dist/release/entropy-${VERSION}-x86_64.AppImage}"

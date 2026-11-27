@@ -22,9 +22,9 @@
       ];
       forAllSystems = nixpkgs.lib.genAttrs supportedSystems;
 
-      # Read version from Cargo.toml so the flake never drifts from the crate.
+      # Share the public package label with the other release formats.
       cargoToml = fromTOML (builtins.readFile ./Cargo.toml);
-      version = cargoToml.package.version;
+      version = cargoToml.package.metadata.entropy.public-version or cargoToml.package.version;
 
       # Compile-time native deps, resolved through pkg-config.
       #   gtk3/glib  - rfd 0.15 uses the GTK3 backend for file dialogs

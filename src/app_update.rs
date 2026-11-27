@@ -14,8 +14,8 @@ pub(crate) fn current_build_commit() -> Option<&'static str> {
 
 pub(crate) fn current_build_label() -> String {
     match current_build_commit() {
-        Some(commit) => format!("{} ({})", env!("CARGO_PKG_VERSION"), &commit[..8]),
-        None => env!("CARGO_PKG_VERSION").to_owned(),
+        Some(commit) => format!("{} ({})", env!("ENTROPY_PUBLIC_VERSION"), &commit[..8]),
+        None => env!("ENTROPY_PUBLIC_VERSION").to_owned(),
     }
 }
 
@@ -824,8 +824,14 @@ fn parse_entropy_release_url(url: &str) -> Result<String, String> {
 }
 
 fn parse_canonical_entropy_release_tag(tag: &str) -> Option<semver::Version> {
-    let version = semver::Version::parse(tag.strip_prefix('v')?).ok()?;
-    if !version.pre.is_empty() || !version.build.is_empty() || format!("v{version}") != tag {
+    let label = tag.strip_prefix('v')?;
+    let version = parse_semver(label)?;
+    let canonical = if label.split('.').count() == 2 {
+        format!("v{}.{}", version.major, version.minor)
+    } else {
+        format!("v{version}")
+    };
+    if !version.pre.is_empty() || !version.build.is_empty() || canonical != tag {
         return None;
     }
     Some(version)
@@ -1118,6 +1124,11 @@ fn compare_firmware_versions(current: &str, latest: &str) -> VersionRelation {
 fn parse_semver(version: &str) -> Option<semver::Version> {
     let version = version.trim();
     let version = version.strip_prefix('v').unwrap_or(version);
+    // Two-component release labels compare as SemVer, without changing their
+    // displayed tag or historical three-component labels.
+    if version.split('.').count() == 2 {
+        return semver::Version::parse(&format!("{version}.0")).ok();
+    }
     semver::Version::parse(version).ok()
 }
 
@@ -1225,7 +1236,7 @@ mod tests {
             "https://github.com/ergohaven/entropy/releases/tag/v0.3.21-rc.1",
             "https://github.com/ergohaven/entropy/releases/tag/v0.3.21+build.1",
             "https://github.com/ergohaven/entropy/releases/tag/v0.03.21",
-            "https://github.com/ergohaven/entropy/releases/tag/v0.3",
+            "https://github.com/ergohaven/entropy/releases/tag/v0",
             "https://github.com/ergohaven/entropy/releases/tag/0.3.21",
             "https://github.com/ergohaven/entropy/releases/tag/v0.3.21?source=update",
             "https://github.com/ergohaven/entropy/releases/tag/",
@@ -1353,6 +1364,31 @@ mod tests {
         assert_eq!(
             compare_entropy_versions("0.3.21+local", "v0.3.21"),
             VersionRelation::UpToDate
+        );
+    }
+
+    #[test]
+    fn public_release_labels_match_internal_semver_and_development_identity() {
+        assert_eq!(
+            parse_entropy_release_url("https://github.com/ergohaven/entropy/releases/tag/v0.7")
+                .unwrap(),
+            "v0.7"
+        );
+        assert_eq!(
+            parse_canonical_entropy_release_tag("v0.7"),
+            Some(semver::Version::new(0, 7, 0))
+        );
+        assert_eq!(
+            compare_local_build_to_release("0.7.0", "v0.7", false),
+            VersionRelation::UpToDate
+        );
+        assert_eq!(
+            compare_local_build_to_release("0.7.0", "v0.7", true),
+            VersionRelation::DevelopmentBuild
+        );
+        assert_eq!(
+            compare_entropy_versions("0.6.0", "v0.7"),
+            VersionRelation::UpdateAvailable
         );
     }
 
@@ -1658,7 +1694,7 @@ mod tests {
     }
 
     #[test]
-    fn firmware_labels_accept_two_components_without_changing_app_semver() {
+    fn firmware_and_application_labels_accept_two_components() {
         for (label, expected) in [
             ("1.0", (1, 0, 0)),
             ("v1.10", (1, 10, 0)),
@@ -1672,10 +1708,7 @@ mod tests {
         for invalid in ["1", "1.0.0.0", "01.0", "1.-1", "unknown"] {
             assert!(parse_firmware_version(invalid).is_none(), "{invalid}");
         }
-        assert!(
-            parse_semver("1.0").is_none(),
-            "application SemVer is unchanged"
-        );
+        assert_eq!(parse_semver("1.0"), Some(semver::Version::new(1, 0, 0)));
         assert_eq!(
             compare_firmware_versions("1.0", "1.0.0"),
             VersionRelation::UpToDate

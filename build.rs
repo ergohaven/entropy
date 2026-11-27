@@ -11,7 +11,10 @@ const WINDOWS_ICON_PATH: &str = "assets/entropy.ico";
 
 fn main() {
     println!("cargo:rerun-if-changed=build.rs");
-    record_source_revision();
+    println!("cargo:rerun-if-changed=Cargo.toml");
+    let public_version = public_version();
+    println!("cargo:rustc-env=ENTROPY_PUBLIC_VERSION={public_version}");
+    record_source_revision(&public_version);
     key_legends_build::generate();
     println!("cargo:rerun-if-changed={WINDOWS_ICON_PATH}");
 
@@ -45,6 +48,8 @@ fn main() {
 
     res.set_icon(WINDOWS_ICON_PATH);
     res.set("ProductName", "Entropy");
+    res.set("FileVersion", &public_version);
+    res.set("ProductVersion", &public_version);
     res.set("FileDescription", "Entropy");
     res.set("CompanyName", "Ergohaven");
     res.set("LegalCopyright", "© Ergohaven");
@@ -52,6 +57,31 @@ fn main() {
     res.compile().expect(
         "failed to embed Windows resources; refusing to build a Windows binary without an icon",
     );
+}
+
+fn public_version() -> String {
+    let manifest: toml::Value =
+        toml::from_str(include_str!("Cargo.toml")).expect("invalid Cargo.toml");
+    let package = &manifest["package"];
+    let internal = package["version"]
+        .as_str()
+        .expect("missing package version");
+    let public = package
+        .get("metadata")
+        .and_then(|value| value.get("entropy"))
+        .and_then(|value| value.get("public-version"))
+        .map(|value| value.as_str().expect("public-version must be a string"))
+        .unwrap_or(internal);
+    let normalized = if public.split('.').count() == 2 {
+        format!("{public}.0")
+    } else {
+        public.to_owned()
+    };
+    assert_eq!(
+        normalized, internal,
+        "public-version must match Cargo version"
+    );
+    public.to_owned()
 }
 
 fn git(args: &[&str]) -> Option<String> {
@@ -62,7 +92,7 @@ fn git(args: &[&str]) -> Option<String> {
         .then(|| String::from_utf8_lossy(&output.stdout).trim().to_owned())
 }
 
-fn record_source_revision() {
+fn record_source_revision(public_version: &str) {
     // Source archives can be built inside another repository. Never embed
     // that enclosing repository's revision as Entropy's identity.
     let source_root =
@@ -90,7 +120,7 @@ fn record_source_revision() {
         .filter(|s| s.len() == 40 && s.bytes().all(|b| b.is_ascii_hexdigit()))
     {
         println!("cargo:rustc-env=ENTROPY_BUILD_COMMIT={commit}");
-        let release_tag = format!("v{}", env::var("CARGO_PKG_VERSION").unwrap_or_default());
+        let release_tag = format!("v{public_version}");
         let tagged = git(&["tag", "--points-at", "HEAD"])
             .is_some_and(|tags| tags.lines().any(|tag| tag == release_tag));
         println!("cargo:rustc-env=ENTROPY_BUILD_DEVELOPMENT={}", !tagged);

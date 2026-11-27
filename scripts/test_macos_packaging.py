@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
 """Secret-free packaging regressions; platform tools are stand-ins on Linux."""
 import os
+import plistlib
 from pathlib import Path
 import shutil
 import subprocess
@@ -189,6 +190,19 @@ fi
             self.assertTrue(any('--requirements =designated => anchor = H"50b8a2614631d0ee1705213d19d07a52c921d665" and identifier "com.ergohaven.entropy"' in line and line.endswith(path)
                                 for line in calls.splitlines()))
         self.assertFalse((self.root / 'dist/macos/dmg-staging').exists())
+
+    def test_public_version_is_preserved_in_plist_and_dmg_name(self):
+        manifest = self.root / 'Cargo.toml'
+        manifest.write_text('[package]\nversion = "0.7.0"\n'
+                            '[package.metadata.entropy]\npublic-version = "0.7"\n')
+        result = self.run_package()
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        with (self.root / 'dist/macos/Entropy.app/Contents/Info.plist').open('rb') as handle:
+            info = plistlib.load(handle)
+        self.assertEqual(info['CFBundleShortVersionString'], '0.7')
+        self.assertEqual(info['CFBundleVersion'], '0.7')
+        self.assertEqual([path.name for path in (self.root / 'dist/macos').glob('*.dmg')],
+                         ['entropy-v0.7-macos-arm64.dmg'])
 
 
 class ReleaseSigning(unittest.TestCase):

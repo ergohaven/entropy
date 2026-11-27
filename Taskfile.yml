@@ -11,23 +11,15 @@ vars:
   # артефактов и версии пакетов совпадали с релизным тегом, а не с ещё не
   # поднятой версией крейта. Всё, что приезжает снаружи, проверяется в
   # linux:validate до того, как попадёт в имя файла или в пакет.
-  # Разбор Cargo.toml без awk/sed: встроенный интерпретатор go-task внешних утилит
-  # не подменяет, и на хосте без них не читался бы весь Taskfile, включая `task build`.
+  # Public release label and tool-required Cargo SemVer share one manifest;
+  # the reader also supports historical manifests without public metadata.
   VERSION:
     sh: |
       if [ -n "${VERSION:-}" ]; then
         printf '%s\n' "$VERSION"
         exit 0
       fi
-      while read -r line; do
-        case "$line" in
-        version\ =\ *)
-          v="${line#*\"}"
-          printf '%s\n' "${v%%\"*}"
-          break
-          ;;
-        esac
-      done < Cargo.toml
+      sh scripts/public_version.sh
   # Арка берётся у хоста, а не считается равной amd64: пакет с меткой amd64 и
   # arm64-бинарником внутри ставится и не запускается.
   HOST_ARCH:
