@@ -176,17 +176,31 @@ pub(super) fn module_setting_migration_value(
         "2500 ms", "2750 ms", "3000 ms",
     ];
     let qube_extended_timeouts = [
-        "250 ms", "500 ms", "750 ms", "1000 ms", "1250 ms", "1500 ms",
-        "1750 ms", "2000 ms", "2250 ms", "2500 ms", "2750 ms", "3000 ms",
+        "250 ms", "500 ms", "750 ms", "1000 ms", "1250 ms", "1500 ms", "1750 ms", "2000 ms",
+        "2250 ms", "2500 ms", "2750 ms", "3000 ms",
     ];
     let timeout_extension = source.qsid == 324
         && source.width == EntPortableSettingWidth::U8
-        && field.width == 1 && target_field.width == 1
-        && [old_timeouts.as_slice(), new_timeouts.as_slice(), extended_timeouts.as_slice(), qube_extended_timeouts.as_slice()]
-            .iter().any(|variants| is_variants(field, variants))
-        && [old_timeouts.as_slice(), new_timeouts.as_slice(), extended_timeouts.as_slice(), qube_extended_timeouts.as_slice()]
-            .iter().any(|variants| is_variants(target_field, variants));
-    if !(timeout_extension || (is_variants(field, before) && is_variants(target_field, after))
+        && field.width == 1
+        && target_field.width == 1
+        && [
+            old_timeouts.as_slice(),
+            new_timeouts.as_slice(),
+            extended_timeouts.as_slice(),
+            qube_extended_timeouts.as_slice(),
+        ]
+        .iter()
+        .any(|variants| is_variants(field, variants))
+        && [
+            old_timeouts.as_slice(),
+            new_timeouts.as_slice(),
+            extended_timeouts.as_slice(),
+            qube_extended_timeouts.as_slice(),
+        ]
+        .iter()
+        .any(|variants| is_variants(target_field, variants));
+    if !(timeout_extension
+        || (is_variants(field, before) && is_variants(target_field, after))
         || (is_variants(field, after) && is_variants(target_field, before)))
     {
         return None;

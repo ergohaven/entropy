@@ -15,13 +15,19 @@ fn phenom_speed_app() -> EntropyApp {
 
 #[test]
 fn phenom_precise_copy_painted_endpoint_and_hover_ru_en_both_sides() {
-    use crate::i18n::Language::{Russian, English};
+    use crate::i18n::Language::{English, Russian};
     for lang in [Russian, English] {
         for side in 0..=1 {
             for module in [1, 2] {
                 let mut app = phenom_speed_app();
-                let json = serde_json::from_str(include_str!("../../tests/fixtures/phenom-qmk-settings-a39f2668.json")).unwrap();
-                app.module_settings = EntropyApp::module_settings_from_definition(&json, &(120..400).collect::<Vec<_>>());
+                let json = serde_json::from_str(include_str!(
+                    "../../tests/fixtures/phenom-qmk-settings-a39f2668.json"
+                ))
+                .unwrap();
+                app.module_settings = EntropyApp::module_settings_from_definition(
+                    &json,
+                    &(120..400).collect::<Vec<_>>(),
+                );
                 app.app_settings.language = lang;
                 app.module_settings.set_selected_module_group(side);
                 app.module_settings.set_value(372 + side as u16, module);
@@ -43,13 +49,31 @@ fn phenom_precise_copy_painted_endpoint_and_hover_ru_en_both_sides() {
                 for mode in 1..=3 {
                     app.module_settings.set_value(134 + side as u16, mode);
                     let mut text = Vec::new();
-                    for _ in 0..6 { text = phenom_page_frame(&mut app, &ctx, vec![egui::Event::PointerGone]); }
-                    let left = match mode { 1 => precise, 2 => smoother, _ => slower };
-                    let left_rect = text.iter().find(|(s, _)| s == left).unwrap_or_else(|| panic!("module {module} side {side} mode {mode}: missing {left}")).1;
-                    let right_rect = text.iter().find(|(s, _)| s == faster).expect("right endpoint unchanged").1;
+                    for _ in 0..6 {
+                        text = phenom_page_frame(&mut app, &ctx, vec![egui::Event::PointerGone]);
+                    }
+                    let left = match mode {
+                        1 => precise,
+                        2 => smoother,
+                        _ => slower,
+                    };
+                    let left_rect = text
+                        .iter()
+                        .find(|(s, _)| s == left)
+                        .unwrap_or_else(|| {
+                            panic!("module {module} side {side} mode {mode}: missing {left}")
+                        })
+                        .1;
+                    let right_rect = text
+                        .iter()
+                        .find(|(s, _)| s == faster)
+                        .expect("right endpoint unchanged")
+                        .1;
                     assert!(left_rect.center().x < right_rect.center().x);
                     for other in [precise, smoother, slower] {
-                        if other != left { assert!(!text.iter().any(|(s, _)| s == other)); }
+                        if other != left {
+                            assert!(!text.iter().any(|(s, _)| s == other));
+                        }
                     }
                     if mode != 3 {
                         let label = match (lang, mode) {
@@ -59,11 +83,35 @@ fn phenom_precise_copy_painted_endpoint_and_hover_ru_en_both_sides() {
                             _ => "Scroll speed",
                         };
                         let expected_hint = if mode == 1 { hint } else { scroll_hint };
-                        let pos = text.iter().find(|(s, _)| s == label).expect("unchanged field name").1.center();
-                        for _ in 0..12 { text = phenom_page_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(pos)]); }
-                        assert!(text.iter().any(|(s, _)| s == expected_hint), "module {module} side {side}: missing exact tooltip {expected_hint}");
+                        let pos = text
+                            .iter()
+                            .find(|(s, _)| s == label)
+                            .expect("unchanged field name")
+                            .1
+                            .center();
+                        for _ in 0..12 {
+                            text = phenom_page_frame(
+                                &mut app,
+                                &ctx,
+                                vec![egui::Event::PointerMoved(pos)],
+                            );
+                        }
+                        assert!(
+                            text.iter().any(|(s, _)| s == expected_hint),
+                            "module {module} side {side}: missing exact tooltip {expected_hint}"
+                        );
                     }
-                    assert_eq!(app.module_settings.values.iter().filter(|(id, _)| **id != 134 + side as u16).collect::<std::collections::BTreeMap<_, _>>(), before.iter().filter(|(id, _)| **id != 134 + side as u16).collect::<std::collections::BTreeMap<_, _>>());
+                    assert_eq!(
+                        app.module_settings
+                            .values
+                            .iter()
+                            .filter(|(id, _)| **id != 134 + side as u16)
+                            .collect::<std::collections::BTreeMap<_, _>>(),
+                        before
+                            .iter()
+                            .filter(|(id, _)| **id != 134 + side as u16)
+                            .collect::<std::collections::BTreeMap<_, _>>()
+                    );
                     assert!(app.settings_write_task.is_none());
                     assert!(recorder.requests().is_empty());
                 }
@@ -74,7 +122,7 @@ fn phenom_precise_copy_painted_endpoint_and_hover_ru_en_both_sides() {
 
 #[test]
 fn phenom_text_copy_painted_labels_and_hover_ru_en_both_sides() {
-    use crate::i18n::Language::{Russian, English};
+    use crate::i18n::Language::{English, Russian};
     for lang in [Russian, English] {
         let expected = if lang == Russian {
             [("Перемещение в тексте", "Регулировка скорости указателя в режиме текста: передвиньте влево для уменьшения скорости, вправо - для увеличения скорости"),
@@ -88,8 +136,14 @@ fn phenom_text_copy_painted_labels_and_hover_ru_en_both_sides() {
         for side in 0..=1 {
             for module in [1, 2] {
                 let mut app = phenom_speed_app();
-                let json = serde_json::from_str(include_str!("../../tests/fixtures/phenom-qmk-settings-a39f2668.json")).unwrap();
-                app.module_settings = EntropyApp::module_settings_from_definition(&json, &(120..400).collect::<Vec<_>>());
+                let json = serde_json::from_str(include_str!(
+                    "../../tests/fixtures/phenom-qmk-settings-a39f2668.json"
+                ))
+                .unwrap();
+                app.module_settings = EntropyApp::module_settings_from_definition(
+                    &json,
+                    &(120..400).collect::<Vec<_>>(),
+                );
                 app.app_settings.language = lang;
                 app.module_settings.set_selected_module_group(side);
                 app.module_settings.set_value(372 + side as u16, module);
@@ -101,12 +155,24 @@ fn phenom_text_copy_painted_labels_and_hover_ru_en_both_sides() {
                 ctx.global_style_mut(|s| s.interaction.tooltip_delay = 0.0);
                 for (label, hint) in expected {
                     let mut painted = Vec::new();
-                    for _ in 0..6 { painted = phenom_page_frame(&mut app, &ctx, vec![egui::Event::PointerGone]); }
+                    for _ in 0..6 {
+                        painted = phenom_page_frame(&mut app, &ctx, vec![egui::Event::PointerGone]);
+                    }
                     let rows: Vec<_> = painted.iter().filter(|(s, _)| s == label).collect();
-                    assert_eq!(rows.len(), 1, "module {module} side {side}: one exact {label}");
+                    assert_eq!(
+                        rows.len(),
+                        1,
+                        "module {module} side {side}: one exact {label}"
+                    );
                     let pos = rows[0].1.center();
-                    for _ in 0..12 { painted = phenom_page_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(pos)]); }
-                    assert!(painted.iter().any(|(s, _)| s == hint), "module {module} side {side}: exact tooltip {hint}");
+                    for _ in 0..12 {
+                        painted =
+                            phenom_page_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(pos)]);
+                    }
+                    assert!(
+                        painted.iter().any(|(s, _)| s == hint),
+                        "module {module} side {side}: exact tooltip {hint}"
+                    );
                 }
                 assert_eq!(app.module_settings.values, before);
                 assert!(app.settings_write_task.is_none());
@@ -118,27 +184,65 @@ fn phenom_text_copy_painted_labels_and_hover_ru_en_both_sides() {
 
 #[test]
 fn phenom_scroll_inversion_copy_painted_labels_and_hover_ru_en_both_sides() {
-    use crate::i18n::Language::{Russian, English};
+    use crate::i18n::Language::{English, Russian};
     for lang in [Russian, English] {
         let scroll = if lang == Russian {
-            [("Инверсия по вертикали", "Изменение направления прокрутки вверх и вниз на противоположное"),
-             ("Инверсия по горизонтали", "Изменение направления прокрутки влево и вправо на противоположное")]
+            [
+                (
+                    "Инверсия по вертикали",
+                    "Изменение направления прокрутки вверх и вниз на противоположное",
+                ),
+                (
+                    "Инверсия по горизонтали",
+                    "Изменение направления прокрутки влево и вправо на противоположное",
+                ),
+            ]
         } else {
-            [("Vertical inversion", "Reverse the direction of scrolling up and down"),
-             ("Horizontal inversion", "Reverse the direction of scrolling left and right")]
+            [
+                (
+                    "Vertical inversion",
+                    "Reverse the direction of scrolling up and down",
+                ),
+                (
+                    "Horizontal inversion",
+                    "Reverse the direction of scrolling left and right",
+                ),
+            ]
         };
         let text_inversions = if lang == Russian {
-            [("Инверсия по вертикали", "Изменение направления перемещения вверх и вниз на противоположное"),
-             ("Инверсия по горизонтали", "Изменение направления перемещения влево и вправо на противоположное")]
+            [
+                (
+                    "Инверсия по вертикали",
+                    "Изменение направления перемещения вверх и вниз на противоположное",
+                ),
+                (
+                    "Инверсия по горизонтали",
+                    "Изменение направления перемещения влево и вправо на противоположное",
+                ),
+            ]
         } else {
-            [("Vertical inversion", "Reverse the direction of movement up and down"),
-             ("Horizontal inversion", "Reverse the direction of movement left and right")]
+            [
+                (
+                    "Vertical inversion",
+                    "Reverse the direction of movement up and down",
+                ),
+                (
+                    "Horizontal inversion",
+                    "Reverse the direction of movement left and right",
+                ),
+            ]
         };
         for side in 0..=1 {
             for module in [1, 2] {
                 let mut app = phenom_speed_app();
-                let json = serde_json::from_str(include_str!("../../tests/fixtures/phenom-qmk-settings-a39f2668.json")).unwrap();
-                app.module_settings = EntropyApp::module_settings_from_definition(&json, &(120..400).collect::<Vec<_>>());
+                let json = serde_json::from_str(include_str!(
+                    "../../tests/fixtures/phenom-qmk-settings-a39f2668.json"
+                ))
+                .unwrap();
+                app.module_settings = EntropyApp::module_settings_from_definition(
+                    &json,
+                    &(120..400).collect::<Vec<_>>(),
+                );
                 app.app_settings.language = lang;
                 app.module_settings.set_selected_module_group(side);
                 app.module_settings.set_value(372 + side as u16, module);
@@ -149,17 +253,39 @@ fn phenom_scroll_inversion_copy_painted_labels_and_hover_ru_en_both_sides() {
                 for mode in [2, 3] {
                     app.module_settings.set_value(134 + side as u16, mode);
                     let before = app.module_settings.values.clone();
-                    let (expected, absent) = if mode == 2 { (scroll, text_inversions) } else { (text_inversions, scroll) };
+                    let (expected, absent) = if mode == 2 {
+                        (scroll, text_inversions)
+                    } else {
+                        (text_inversions, scroll)
+                    };
                     for (label, hint) in expected {
                         let mut painted = Vec::new();
-                        for _ in 0..6 { painted = phenom_page_frame(&mut app, &ctx, vec![egui::Event::PointerGone]); }
+                        for _ in 0..6 {
+                            painted =
+                                phenom_page_frame(&mut app, &ctx, vec![egui::Event::PointerGone]);
+                        }
                         let rows: Vec<_> = painted.iter().filter(|(s, _)| s == label).collect();
-                        assert_eq!(rows.len(), 1, "module {module} side {side} mode {mode}: one exact {label}");
+                        assert_eq!(
+                            rows.len(),
+                            1,
+                            "module {module} side {side} mode {mode}: one exact {label}"
+                        );
                         // Axis labels now intentionally match across modes; tooltips must remain distinct.
                         let pos = rows[0].1.center();
-                        for _ in 0..12 { painted = phenom_page_frame(&mut app, &ctx, vec![egui::Event::PointerMoved(pos)]); }
-                        assert!(painted.iter().any(|(s, _)| s == hint), "module {module} side {side} mode {mode}: exact tooltip {hint}");
-                        assert!(absent.iter().all(|(_, other_hint)| !painted.iter().any(|(s, _)| s == other_hint)));
+                        for _ in 0..12 {
+                            painted = phenom_page_frame(
+                                &mut app,
+                                &ctx,
+                                vec![egui::Event::PointerMoved(pos)],
+                            );
+                        }
+                        assert!(
+                            painted.iter().any(|(s, _)| s == hint),
+                            "module {module} side {side} mode {mode}: exact tooltip {hint}"
+                        );
+                        assert!(absent
+                            .iter()
+                            .all(|(_, other_hint)| !painted.iter().any(|(s, _)| s == other_hint)));
                     }
                     assert_eq!(app.module_settings.values, before);
                     assert!(app.settings_write_task.is_none());
@@ -172,16 +298,34 @@ fn phenom_scroll_inversion_copy_painted_labels_and_hover_ru_en_both_sides() {
 
 #[test]
 fn phenom_encoder_steps_approved_copy_ru_en() {
-    use crate::i18n::Language::{Russian, English};
+    use crate::i18n::Language::{English, Russian};
     let mut app = phenom_speed_app();
-    let json = serde_json::from_str(include_str!("../../tests/fixtures/phenom-qmk-settings-a39f2668.json")).unwrap();
-    app.module_settings = EntropyApp::module_settings_from_definition(&json, &(120..400).collect::<Vec<_>>());
-    for (lang, title, hint) in [(Russian, "Шаг энкодера", "Количество действий за один шаг энкодера"),
-                               (English, "Encoder steps", "Number of actions per encoder step")] {
+    let json = serde_json::from_str(include_str!(
+        "../../tests/fixtures/phenom-qmk-settings-a39f2668.json"
+    ))
+    .unwrap();
+    app.module_settings =
+        EntropyApp::module_settings_from_definition(&json, &(120..400).collect::<Vec<_>>());
+    for (lang, title, hint) in [
+        (
+            Russian,
+            "Шаг энкодера",
+            "Количество действий за один шаг энкодера",
+        ),
+        (
+            English,
+            "Encoder steps",
+            "Number of actions per encoder step",
+        ),
+    ] {
         app.app_settings.language = lang;
         for side in 0..=1 {
             let group = &app.module_settings.groups[side];
-            let field = group.fields.iter().find(|f| f.qsid == 376 + side as u16).unwrap();
+            let field = group
+                .fields
+                .iter()
+                .find(|f| f.qsid == 376 + side as u16)
+                .unwrap();
             assert_eq!(app.module_setting_label(group.kind, &field.title), title);
             assert_eq!(app.module_setting_tooltip(group.kind, field), hint);
         }
@@ -495,7 +639,10 @@ fn phenom_speed_page_renders_one_mode_slider_in_both_languages() {
                             .module_settings
                             .set_value(134 + side as u16, mode);
                         harness.run();
-                        assert_eq!(harness.get_all_by_role(Role::Slider).count(), if mode == 0 { 1 } else { 2 });
+                        assert_eq!(
+                            harness.get_all_by_role(Role::Slider).count(),
+                            if mode == 0 { 1 } else { 2 }
+                        );
                         if mode != 0 {
                             harness.get_by_label(crate::i18n::tr_catalog(
                                 language,

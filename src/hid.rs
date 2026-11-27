@@ -2688,7 +2688,10 @@ mod tests {
             for index in 0..MSG_LEN {
                 let mut unrelated = echo;
                 unrelated[index] ^= 1;
-                assert!(!response_matches_command(&request, &unrelated), "accepted mutated byte {index}");
+                assert!(
+                    !response_matches_command(&request, &unrelated),
+                    "accepted mutated byte {index}"
+                );
             }
             let mut supported = [0; MSG_LEN];
             supported[..3].copy_from_slice(&[0xe6, version, 0x5a]);
@@ -2698,8 +2701,14 @@ mod tests {
         }
         let mut unrelated = [0; MSG_LEN];
         unrelated[..5].copy_from_slice(&[0xe6, 9, 0xa5, 0, 0]);
-        assert!(!response_matches_command(&[CMD_VIA_GET_PROTOCOL_VERSION], &unrelated));
-        assert!(!response_matches_command(&[CMD_VIA_VIAL_PREFIX, CMD_VIAL_GET_SIZE], &unrelated));
+        assert!(!response_matches_command(
+            &[CMD_VIA_GET_PROTOCOL_VERSION],
+            &unrelated
+        ));
+        assert!(!response_matches_command(
+            &[CMD_VIA_VIAL_PREFIX, CMD_VIAL_GET_SIZE],
+            &unrelated
+        ));
     }
 
     #[test]

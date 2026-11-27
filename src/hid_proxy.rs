@@ -1267,8 +1267,11 @@ mod tests {
                     if command.starts_with(&[0xE6]) {
                         let response: [u8; MSG_LEN] = data.clone().try_into().unwrap();
                         if !super::super::response_matches_command(&command, &response) {
-                            let error = ProxyResponse { ok: false, data: None,
-                                error: Some("HID timeout after rejected legacy E6 echo".into()) };
+                            let error = ProxyResponse {
+                                ok: false,
+                                data: None,
+                                error: Some("HID timeout after rejected legacy E6 echo".into()),
+                            };
                             writeln!(output, "{}", serde_json::to_string(&error).unwrap()).unwrap();
                             output.flush().unwrap();
                             return;
@@ -1306,8 +1309,14 @@ mod tests {
         };
         for version in [7, 8, 9] {
             let geometry = hid.probe_application_layout_geometry(version);
-            assert!(geometry.is_ok(), "legacy probe must report absence, not retire transport: {geometry:?}");
-            assert!(geometry.unwrap().is_none(), "echo must not grant application-layout support");
+            assert!(
+                geometry.is_ok(),
+                "legacy probe must report absence, not retire transport: {geometry:?}"
+            );
+            assert!(
+                geometry.unwrap().is_none(),
+                "echo must not grant application-layout support"
+            );
             assert!(proxy.is_available());
             assert_eq!(hid.get_definition_size().unwrap(), 42);
         }

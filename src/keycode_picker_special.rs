@@ -221,7 +221,11 @@ Repeat"
                 }
             }
             let row = self.vial_row(tab, special, value, label, crate::i18n::tr_text(lang, &tip));
-            rows.push(if value == 0x7C03 { row.with_aliases("EE_CLR") } else { row });
+            rows.push(if value == 0x7C03 {
+                row.with_aliases("EE_CLR")
+            } else {
+                row
+            });
         }
 
         if self.supports_mouse_keys {

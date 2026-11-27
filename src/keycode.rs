@@ -2738,7 +2738,9 @@ fn simple_key_tooltip(kc: &Keycode) -> String {
                 gui_mod_name()
             )
         }
-        "QK_CLEAR_EEPROM" => "Reset saved key assignments and settings to factory defaults and restart the keyboard",
+        "QK_CLEAR_EEPROM" => {
+            "Reset saved key assignments and settings to factory defaults and restart the keyboard"
+        }
         "QK_BOOT" => "Bootloader — put device into flash mode",
         "DB_TOGG" => "Debug toggle — enable/disable debug output",
         "QK_LOCK" => "Lock — lock a key in pressed state until pressed again",
