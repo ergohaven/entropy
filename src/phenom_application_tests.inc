@@ -154,6 +154,14 @@ fn matrix_v9_all_official_descriptors_roundtrip_without_presets_or_truncation() 
     let mut sm62 = DeviceApplicationLayouts::default();
     sm62.geometry = Geometry::legacy(8);
     sm62.layouts.get_mut("default").unwrap().layers = vec![vec![4; 62]; 16];
+    let mut expected_sm62 = sm62.clone();
+    expected_sm62.builtin_presets_provisioned = true;
+    assert!(sm62.provision_builtin_presets(None));
+    assert_eq!(
+        sm62, expected_sm62,
+        "SM62 cleanup must only persist its completion marker"
+    );
     assert!(!sm62.provision_builtin_presets(None));
+    assert_eq!(sm62, expected_sm62, "SM62 cleanup must be idempotent");
     assert_eq!(sm62.layouts.len(), 1);
 }
