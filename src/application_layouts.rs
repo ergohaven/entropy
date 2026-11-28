@@ -74,7 +74,7 @@ mod sm62_geometry_tests {
 
     #[test]
     fn resident_three_firefox_all_os_and_existing_data_preserved() {
-        let mut s=DeviceApplicationLayouts::default();s.layouts.get_mut("default").unwrap().layers=vec![vec![42;62];16];s.provision_builtin_presets(Some(&BTreeSet::from(["firefox".into()])));
+        let mut s=DeviceApplicationLayouts::default();s.geometry=ApplicationLayoutGeometry::legacy(8);s.layouts.get_mut("default").unwrap().layers=vec![vec![42;62];16];s.provision_builtin_presets(Some(&BTreeSet::from(["firefox".into()])));
         let preset = builtin_application_layout_presets().into_iter().find(|p| p.id == "firefox").unwrap();
         s.create_from_preset(&preset);
         let firefox=s.layouts.values().find(|p|DeviceApplicationLayouts::is_firefox(p)).unwrap().id.clone();
@@ -82,7 +82,7 @@ mod sm62_geometry_tests {
         for executable in ["firefox.exe","org.mozilla.firefox","Firefox","/usr/bin/firefox"]{assert_eq!(s.resolve(Some(&DetectedApplication{executable:executable.into(),..Default::default()})),firefox);}
         let before=s.layouts.clone();s.resident_mapping_version=0;s.resident_slots.clear();s.sm62_resident_firefox_id=Some(firefox.clone());s.sm62_resident_application_id=Some(user.clone());s.normalize();
         assert_eq!(s.resident_slots[&firefox],1);assert_eq!(s.resident_slots[&user],2);assert_eq!(s.snapshot_for_layout(&s.layouts["default"]).resident_slot,None);assert_eq!(s.layouts,before);
-        let mut macropad=DeviceApplicationLayouts::default();macropad.provision_builtin_presets(None);assert!(macropad.layouts.len()>2);assert!(macropad.resident_slots.is_empty());
+        let mut macropad=DeviceApplicationLayouts::default();macropad.geometry=ApplicationLayoutGeometry::legacy(7);macropad.provision_builtin_presets(None);assert!(macropad.layouts.len()>2);assert!(macropad.resident_slots.is_empty());
     }
 
     #[test]
@@ -95,20 +95,34 @@ mod sm62_geometry_tests {
     }
 
     #[test]
-    fn profiles_reject_unsupported_or_mixed_control_widths_before_runtime() {
-        for width in [0, 1, 14, 16, 61, 63, 256] {
+    fn profiles_accept_bounded_uniform_widths_but_reject_invalid_shape_and_target_mismatch() {
+        for width in 1..=255 {
             let mut value = serde_json::to_value(ApplicationLayout::default_layout()).unwrap();
             value["layers"] = serde_json::json!(vec![vec![4u16; width]; 16]);
-            assert!(serde_json::from_value::<ApplicationLayout>(value).is_err(), "width {width}");
+            let parsed=serde_json::from_value::<ApplicationLayout>(value).unwrap_or_else(|e|panic!("uniform width {width}: {e}"));
+            assert_eq!(parsed.layers,vec![vec![4u16;width];16]);
+            // Parsing a portable profile never grants target compatibility.
+            for version in [7,8] {
+                let geometry=ApplicationLayoutGeometry::legacy(version).unwrap();
+                assert_eq!(geometry.complete(&parsed.layers),width==geometry.controls(),"target v{version}, width {width}");
+            }
         }
-        let mut value = serde_json::to_value(ApplicationLayout::default_layout()).unwrap();
-        value["layers"][15] = serde_json::json!(vec![4u16; 62]);
-        assert!(serde_json::from_value::<ApplicationLayout>(value).is_err());
+        for width in [0,256] {
+            let mut value = serde_json::to_value(ApplicationLayout::default_layout()).unwrap();
+            value["layers"] = serde_json::json!(vec![vec![4u16; width]; 16]);
+            assert!(serde_json::from_value::<ApplicationLayout>(value).is_err(),"width {width}");
+        }
+        for width in [1,14,16,61,62,63,255] {
+            let mut value = serde_json::to_value(ApplicationLayout::default_layout()).unwrap();
+            value["layers"][15] = serde_json::json!(vec![4u16; width]);
+            assert!(serde_json::from_value::<ApplicationLayout>(value).is_err(),"mixed width {width}");
+        }
     }
 
     #[test]
     fn sm62_does_not_provision_macropad_presets() {
         let mut settings = DeviceApplicationLayouts::default();
+        settings.geometry = ApplicationLayoutGeometry::legacy(8);
         let seed = vec![vec![42; 62]; APPLICATION_LAYOUT_LAYER_COUNT];
         settings
             .layouts
@@ -130,6 +144,7 @@ mod sm62_geometry_tests {
         assert!(settings.pending_builtin_auto_bind.is_empty());
         assert!(!settings.provision_builtin_presets(None));
         let mut macropad = DeviceApplicationLayouts::default();
+        macropad.geometry = ApplicationLayoutGeometry::legacy(7);
         macropad.provision_builtin_presets(None);
         assert_eq!(
             macropad.layouts.len(),
@@ -140,6 +155,7 @@ mod sm62_geometry_tests {
     // Legacy host placeholders produced by the retired SM62 provisioning path.
     fn legacy_sm62_catalog() -> DeviceApplicationLayouts {
         let mut settings = DeviceApplicationLayouts::default();
+        settings.geometry = ApplicationLayoutGeometry::legacy(8);
         settings
             .layouts
             .get_mut(DEFAULT_APPLICATION_LAYOUT_ID)
@@ -163,6 +179,11 @@ mod sm62_geometry_tests {
 
     #[test]
     fn sm62_retires_only_untouched_automatic_host_presets() {
+        let mut unverified = legacy_sm62_catalog();
+        unverified.geometry = None;
+        let unverified_before = unverified.clone();
+        assert!(!unverified.provision_builtin_presets(None));
+        assert_eq!(unverified, unverified_before, "unknown geometry must not retire profiles");
         let mut settings = legacy_sm62_catalog();
         let ids: Vec<_> = settings
             .layouts
@@ -1530,8 +1551,8 @@ impl DeviceApplicationLayouts {
         &mut self,
         installed: Option<&std::collections::BTreeSet<String>>,
     ) -> bool {
-        // Explicit device capability, not a profile width, grants this catalog.
-        if !self.geometry.is_some_and(|g| g.valid() && g.presets()) { return false; }
+        // Legacy cleanup requires known geometry, not Macropad preset support.
+        if !self.geometry.is_some_and(|g| g.valid()) { return false; }
         if self.is_sm62() {
             // These built-ins describe Macropad shortcuts, not SM62 profiles.
             let mut changed = !self.builtin_presets_provisioned;
@@ -1560,6 +1581,8 @@ impl DeviceApplicationLayouts {
             }
             return changed;
         }
+        // Only the explicit Macropad capability grants preset provisioning.
+        if !self.geometry.is_some_and(|g| g.presets()) { return false; }
         let mut changed = false;
         const CATALOG_REVISION: u8 = 6;
         if !self.builtin_presets_provisioned
@@ -3834,6 +3857,12 @@ const fn default_true() -> bool {
 mod tests {
     use super::*;
 
+    fn macropad_settings() -> DeviceApplicationLayouts {
+        let mut settings = DeviceApplicationLayouts::default();
+        settings.geometry = ApplicationLayoutGeometry::legacy(7);
+        settings
+    }
+
     fn app(executable: &str, title: &str) -> DetectedApplication {
         DetectedApplication {
             executable: executable.to_owned(),
@@ -4679,7 +4708,7 @@ mod tests {
 
     #[test]
     fn preset_provisioning_is_idempotent_and_preserves_user_edits() {
-        let mut settings = DeviceApplicationLayouts::default();
+        let mut settings = macropad_settings();
         let existing = settings.create_for_application(&app("code", "Work"));
         settings
             .layouts
@@ -4706,7 +4735,11 @@ mod tests {
 
     #[test]
     fn catalog_failure_still_provisions_profiles_and_recovers_autobinding() {
-        let mut settings = DeviceApplicationLayouts::default();
+        let mut unsupported = DeviceApplicationLayouts::default();
+        let unchanged = unsupported.clone();
+        assert!(!unsupported.provision_builtin_presets(None));
+        assert_eq!(unsupported, unchanged, "missing geometry must not grant presets");
+        let mut settings = macropad_settings();
         assert!(settings.provision_builtin_presets(None));
         assert_eq!(settings.layouts.len(), 15);
         assert_eq!(settings.pending_builtin_auto_bind.len(), 14);
@@ -4753,7 +4786,7 @@ mod tests {
             .iter()
             .find(|preset| preset.id == "blender")
             .unwrap();
-        let mut settings = DeviceApplicationLayouts::default();
+        let mut settings = macropad_settings();
         settings
             .layouts
             .get_mut(DEFAULT_APPLICATION_LAYOUT_ID)
@@ -4800,7 +4833,7 @@ mod tests {
             .iter()
             .find(|preset| preset.id == "visual_studio_code")
             .unwrap();
-        let mut settings = DeviceApplicationLayouts::default();
+        let mut settings = macropad_settings();
         let code_id = settings.create_from_preset(code);
         settings.layouts.get_mut(&code_id).unwrap().layers[0][0] = 0x1234;
         settings.builtin_presets_provisioned = true;
@@ -4828,7 +4861,7 @@ mod tests {
             ShortcutPlatform::WindowsLinux
         };
         let presets = all_application_layout_presets_for(platform);
-        let mut settings = DeviceApplicationLayouts::default();
+        let mut settings = macropad_settings();
         let mut retired_ids = Vec::new();
         for preset in presets
             .iter()
@@ -4863,7 +4896,7 @@ mod tests {
             .into_iter()
             .find(|preset| preset.id == "streamlabs_desktop")
             .unwrap();
-        let mut settings = DeviceApplicationLayouts::default();
+        let mut settings = macropad_settings();
         let blank_id = settings.create_from_preset(&streamlabs);
         let mut customized = settings.clone();
         customized
@@ -4899,7 +4932,7 @@ mod tests {
             .iter()
             .find(|preset| preset.id == "visual_studio_code")
             .unwrap();
-        let mut settings = DeviceApplicationLayouts::default();
+        let mut settings = macropad_settings();
         let stock_id = settings.create_from_preset(code);
         settings.layouts.get_mut(&stock_id).unwrap().layers[2] = default_keycodes().to_vec();
         settings.layouts.get_mut(&stock_id).unwrap().layer_names[2] =
@@ -4912,7 +4945,7 @@ mod tests {
             code.layers[2].keycodes
         );
 
-        let mut edited_settings = DeviceApplicationLayouts::default();
+        let mut edited_settings = macropad_settings();
         let edited_id = edited_settings.create_from_preset(code);
         edited_settings.layouts.get_mut(&edited_id).unwrap().layers[2] = default_keycodes().to_vec();
         edited_settings
@@ -5095,7 +5128,7 @@ mod tests {
             .into_iter()
             .find(|preset| preset.id == "google_chrome")
             .unwrap();
-        let mut settings = DeviceApplicationLayouts::default();
+        let mut settings = macropad_settings();
         let id = settings.create_from_preset(&preset);
         let layout = settings.layouts.get(&id).unwrap();
         let snapshot = ApplicationLayoutSnapshot::from_layout(layout);

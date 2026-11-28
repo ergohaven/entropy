@@ -164,6 +164,7 @@ fn import_first_owner_action(equal: bool, successor: u8) {
     let path = storage.path().join("explicit-complete.entlayout");
     write_entlayout_file(&path, &bundle, app.app_settings.language).unwrap();
     let owner = import_intent_attach(&mut app);
+    app.qmk_hid_hosts[&owner].test_set_device_inventory(Vec::new());
     // Import through the production file reader, validation, sidecars, HID and persistence gates.
     let report = app.import_entlayout_from_path(&path).unwrap();
     assert!(report.contains("Application layouts:"), "{report}");
@@ -181,15 +182,23 @@ fn import_first_owner_action(equal: bool, successor: u8) {
         assert_ne!(bridge.application_layout_publication_generation(), Some(previous));
     }
     for _ in 0..2 { app.update_application_layout_runtime(); }
-    let library = app.qmk_hid_hosts[&owner].test_published_library();
+    assert!(app.qmk_hid_hosts[&owner].test_published_library().is_empty(),"import uploaded an obsolete resident library");
     if successor != 0 {
-        assert!(library.is_empty(), "old import intent authorized a successor owner");
+        assert!(!app.qmk_hid_hosts[&owner].test_published_snapshot().active,"old import bypassed successor archive confirmation");
+        assert!(app.application_layout_owner_intents.values().all(|ids|!ids.contains(&application)),"import intent crossed the owner fence");
+        app.qmk_hid_hosts[&owner].test_set_device_inventory(Vec::new());
     } else {
-        let profile = library.iter().find(|p| p.profile_id.as_ref() == Some(&application))
-            .expect("first-owner explicit complete import was swallowed as provenance");
-        assert_eq!(profile.layers[0][0], 37);
-        assert_eq!(library.len(), 1, "import authorized unrelated saved profiles");
+        assert!(app.application_layout_owner_intents.values().any(|ids|ids.contains(&application)),"explicit import was swallowed as provenance");
         assert_ne!(app.app_settings.application_layouts[&key].layouts[&application].user_edit_revision, previous,
             "explicit import must establish local authorship independently of its file counter");
     }
+    // Import authors the host library; execution is only the explicitly selected
+    // profile, never every imported inactive profile.
+    app.activate_application_layout(&application);
+    app.update_application_layout_runtime();
+    let snapshot=app.qmk_hid_hosts[&owner].test_published_snapshot();
+    assert!(snapshot.active);
+    assert_eq!(snapshot.profile_id.as_ref(),Some(&application));
+    assert_eq!(snapshot.layers[0][0],37);
+    assert_eq!(load_app_settings().application_layouts["unrelated-import-device"],unrelated);
 }

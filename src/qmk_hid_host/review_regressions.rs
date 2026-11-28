@@ -23,7 +23,7 @@ fn stale_replay_event_is_acked_without_feedback_and_next_event_drains() {
         let mut profile = crate::application_layouts::DeviceApplicationLayouts::default().layouts["default"].clone();
         profile.layers = vec![vec![4;controls];16];profile.revision = 42;
         let snapshot = crate::application_layouts::ApplicationLayoutSnapshot::from_layout(&profile);
-        let owner = Mutex::new(ApplicationLayoutOwnerState {snapshot:snapshot.clone(),..Default::default()});
+        let owner = Mutex::new(ApplicationLayoutOwnerState {geometry:Some(snapshot.geometry),snapshot:snapshot.clone(),..Default::default()});
         let mut events = std::collections::VecDeque::from([(100u16,41u32),(101,42)]);
         recorder.respond_by(move |request| {
             if request[0] != 0xe6 {return None;}
@@ -63,7 +63,7 @@ fn stale_replay_reply_after_owner_revocation_is_not_acked() {
     let mut profile=crate::application_layouts::DeviceApplicationLayouts::default().layouts["default"].clone();
     profile.layers=vec![vec![4;62];16];profile.revision=42;
     let snapshot=crate::application_layouts::ApplicationLayoutSnapshot::from_layout(&profile);
-    let owner=Arc::new(Mutex::new(ApplicationLayoutOwnerState {snapshot:snapshot.clone(),..Default::default()}));
+    let owner=Arc::new(Mutex::new(ApplicationLayoutOwnerState {geometry:Some(snapshot.geometry),snapshot:snapshot.clone(),..Default::default()}));
     let retired=owner.clone();
     recorder.respond_by(move |request| {
         if request[0]!=0xe6 {return None;}
@@ -85,7 +85,7 @@ fn sm62_poll_rejects_wrong_version_revision_geometry_and_borrowed_owner() {
     let mut profile=crate::application_layouts::DeviceApplicationLayouts::default().layouts["default"].clone();
     profile.layers=vec![vec![4;62];16];profile.revision=42;
     let snapshot=crate::application_layouts::ApplicationLayoutSnapshot::from_layout(&profile);
-    let owner=Mutex::new(ApplicationLayoutOwnerState { snapshot:snapshot.clone(),..Default::default() });
+    let owner=Mutex::new(ApplicationLayoutOwnerState { geometry:Some(snapshot.geometry),snapshot:snapshot.clone(),..Default::default() });
     let output=hid.shared_output().unwrap().for_host_bridge(Default::default(),true);
     let device=HostDataHid::Shared(output);
     let mut poll=ApplicationLayoutEventPoll::default();

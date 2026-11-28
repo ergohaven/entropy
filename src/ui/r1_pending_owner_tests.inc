@@ -1,5 +1,5 @@
 #[test]
-fn r1_pending_edit_before_owner_replacement_does_not_authorize_successor() {
+fn r1_pending_edit_cannot_bypass_successor_archive_confirmation() {
     let _storage=crate::app::app_storage::ScopedTempConfig::new();
     for edit in [false,true] {
         let mut app=name_review_cached_sm62_app();
@@ -19,6 +19,10 @@ fn r1_pending_edit_before_owner_replacement_does_not_authorize_successor() {
         // A genuinely new action on the successor remains usable.
         app.activate_application_layout(&id);
         app.update_application_layout_runtime_with(Default::default());
-        assert_eq!(app.qmk_hid_hosts[&path].test_published_library().len(),1);
+        assert!(!app.qmk_hid_hosts[&path].test_published_snapshot().active,"new action cannot bypass an unconfirmed successor archive");
+        r1_confirm_empty_archive(&mut app,&path);
+        app.update_application_layout_runtime_with(Default::default());
+        let snapshot=r1_assert_active_ram(&app,&path,&id);
+        if edit {assert_eq!(snapshot.layers[0][0],37);}
     }
 }

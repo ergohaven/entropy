@@ -15,69 +15,73 @@ fn sm62_review_same_half_replug_restores_only_confirmed_profile_rules() {
     },Some("My custom rule"),"work-session");
     settings.category_names.insert("custom:77".into(),"My work".into());
     settings.layouts.get_mut(&id).unwrap().custom_category_id=Some("custom:77".into());
-    let (hid,rec)=crate::hid::HidDevice::test_device();
-    rec.respond_by(|p|{if p[0]==0xeb{return Some(Ok(*p));}if p[0]==0xe6{let mut r=[0;32];r[..3].copy_from_slice(&[0xe6,8,0x5a]);return Some(Ok(r));}None});
-    let mut bridge=crate::qmk_hid_host::test_start_bridge(device.clone(),Default::default(),hid.shared_output(),None,crate::qmk_hid_host::HostProtocol::Selected(false),||None);
-    bridge.bind_selected_application_layout_device(old_key.clone());bridge.set_selected_application_layout_support(true);
-    bridge.test_set_device_inventory_for_host_id(&id);
-    first.shared_hid_output=hid.shared_output();first.hid_device=Some(hid.into());first.qmk_hid_hosts.insert(device.path.clone(),bridge);
-    first.update_application_layout_runtime_with(Default::default());
-    assert_eq!(first.application_layout_settings().unwrap().layouts[&id].layers[0][0],9);
-    let original_identities=first.application_layout_settings().unwrap().layouts[&id].application_identities.clone();
-    // These old drafts are deliberately NOT the bytes returned by the new owner.
+    let original_identities=settings.layouts[&id].application_identities.clone();
+    let path=r1_attach_inert_owner(&mut first);
+    first.qmk_hid_hosts[&path].test_set_device_inventory_for_host_id(&id);
+    let record=first.qmk_hid_hosts[&path].completed_legacy_archive().unwrap().remove(0);
+    // Historical persisted rule fixture: only matching metadata was saved by
+    // the former resident reader. Current runtime must not invent this evidence.
+    let rule=crate::application_layouts::Sm62HostRule::capture(first.application_layout_settings().unwrap(),
+        &first.application_layout_settings().unwrap().layouts[&id],record.identity_crc[..20].try_into().unwrap());
+    first.app_settings.sm62_host_rules.insert(device.sm62_host_rule_key().unwrap(),
+        std::collections::BTreeMap::from([(id.clone(),rule)]));
     first.application_layout_settings_mut().unwrap().layouts.get_mut(&id).unwrap().set_keycode(0,0,12);
     first.application_layout_settings_mut().unwrap().layouts.get_mut("default").unwrap().layers[0][0]=42;
     first.update_application_layout_runtime_with(Default::default());
-    let saved=serde_json::to_vec(&first.app_settings).unwrap();
+    assert_eq!(first.application_layout_settings().unwrap().layouts[&id].layers[0][0],12,"archive overwrote a newer host draft");
+    runtime_fixture_assert_archive_backup(&first,&old_key,&record.raw);
+    let saved=crate::app::app_storage::load_app_settings();
+    let old_library=saved.application_layouts[&old_key].clone();
     first.qmk_hid_hosts.clear();
     for (serial,restore) in [(serial_a,true),(serial_b,false)] {
         let mut next=name_review_device_app(true);
-        next.app_settings=serde_json::from_slice(&saved).unwrap();
+        next.app_settings=saved.clone();
         let mut device=next.device_manager.devices()[0].clone();
         device.serial_number=serial.into();device.instance_token=format!("attachment-after-{serial}");
         next.device_manager.replace_devices(vec![device.clone()]);
         let native_default=next.application_layer_seed(next.layout.as_ref().unwrap())[0][0];
-        next.update_application_layout_runtime_with(Default::default());
+        let (hid,rec,_)=runtime_fixture_hid(vec![(7,record.raw.clone())]);
+        runtime_fixture_connect(&mut next,&device,hid);
         let key=next.application_layout_device_key().unwrap();
-        assert_ne!(key,old_key,"durable rules must not turn the old payload namespace into a new owner's library");
-        let (hid,rec)=crate::hid::HidDevice::test_device();
-        rec.respond_by(|p|{if p[0]==0xeb{return Some(Ok(*p));}if p[0]==0xe6{let mut r=[0;32];r[..3].copy_from_slice(&[0xe6,8,0x5a]);return Some(Ok(r));}None});
-        let mut bridge=crate::qmk_hid_host::test_start_bridge(device.clone(),Default::default(),hid.shared_output(),None,crate::qmk_hid_host::HostProtocol::Selected(false),||None);
-        bridge.bind_selected_application_layout_device(key);bridge.set_selected_application_layout_support(true);
-        bridge.test_set_device_inventory_for_host_id(&id);
-        next.shared_hid_output=hid.shared_output();next.hid_device=Some(hid.into());next.qmk_hid_hosts.insert(device.path.clone(),bridge);
-        next.update_application_layout_runtime_with(Default::default());
+        assert_ne!(key,old_key,"replug cannot inherit the previous enumeration's payload namespace");
+        let adopted=runtime_fixture_adopt(&mut next,&device.path,&key,&id,&record.raw,&rec);
         let settings=next.application_layout_settings().unwrap();
         if restore {
-            let profile=settings.layouts.get(&id).expect("same-half reconnect lost a non-builtin host rule after validated device readback");
+            assert_eq!(adopted,id,"same-half legacy rule lost its stable host ID");
+            let profile=&settings.layouts[&id];
             assert_eq!(profile.executable,"rule-repair-helper");
-            assert_eq!(profile.application_identities,original_identities,"replug changed the original normalized matching identities");
+            assert_eq!(profile.application_identities,original_identities);
             assert_eq!(profile.title_contains,"work-session");
             assert!(profile.automatic_switching);
             assert_eq!(profile.custom_category_id.as_deref(),Some("custom:77"));
             assert_eq!(settings.category_names.get("custom:77").map(String::as_str),Some("My work"));
-            assert_eq!(profile.layers[0][0],9,"restoring rules replayed an obsolete host payload instead of the device's readback");
+            assert_eq!(profile.layers[0][0],9,"legacy rule restored obsolete host payload instead of readback");
         } else {
-            assert!(!settings.layouts.contains_key(&id),"another physical half inherited a saved host rule without explicit linking");
-            let profile=settings.layouts.values().find(|p|p.id.starts_with("device-resident-7-")).unwrap();
+            assert_ne!(adopted,id);
+            assert!(!settings.layouts.contains_key(&id),"another physical half inherited saved matching metadata");
+            let profile=&settings.layouts[&adopted];
             assert!(profile.executable.is_empty());assert!(!profile.automatic_switching);
             assert_eq!(profile.layers[0][0],9);
         }
+        assert_eq!(settings.device_raw_profiles[&adopted],record.raw);
         assert_eq!(settings.layouts["default"].layers[0][0],native_default);
         assert!(settings.resident_deleted.is_empty());
-        assert_eq!(next.app_settings.application_layouts[&old_key].layouts["default"].layers[0][0],42,"old host draft backup changed");
-        assert!(!rec.requests().iter().any(|r|r[0]==0x05||r[..3]==[0xef,9,1]||r[..3]==[0xef,9,4]),"rule recovery issued an unwanted device mutation");
+        assert_eq!(next.app_settings.application_layouts[&old_key],old_library,"replug changed the old host draft backup");
+        runtime_fixture_assert_archive_backup(&next,&key,&record.raw);
         let foreground=crate::application_layouts::DetectedApplication {
             executable:"rule-repair-helper".into(),identities:vec!["org.example.RuleRepair".into()],
             window_title:"work-session - project".into(),..Default::default()
         };
+        let cursor=rec.requests().len();
         next.update_application_layout_runtime_with(crate::app_discovery::ApplicationDiscoverySnapshot {
             foreground:Some(foreground.clone()),
             foreground_status:crate::app_discovery::ForegroundStatus {backend:"same-half rule recovery fixture".into(),state:crate::app_discovery::ForegroundState::Focused(foreground)},
             ..Default::default()
         });
-        assert_eq!(next.application_layout_settings().unwrap().active_layout_id,if restore {id.as_str()} else {"default"},
-            "recovered rules did not control ordinary foreground routing on the correct half");
+        assert_eq!(next.application_layout_settings().unwrap().active_layout_id,if restore {id.as_str()} else {"default"});
+        if restore {runtime_fixture_wait_ram(&rec,cursor,&record.raw);}
+        else {assert!(!next.qmk_hid_hosts[&device.path].test_published_snapshot().active);}
+        assert!(!rec.requests().iter().any(|p|p[0]==5||p[..2]==[0xfe,0x0b]||p[..2]==[0xef,9]&&matches!(p[2],1|2|4)),"rule recovery mutated native state or the archive");
         next.qmk_hid_hosts.clear();
     }
 }

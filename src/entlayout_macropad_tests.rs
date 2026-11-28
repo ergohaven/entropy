@@ -32,6 +32,14 @@ impl LegacyResidentFixture for crate::hid::TestHidRecorder {
 }
 
 
+fn assert_legacy_archive_negotiation(requests: &[[u8; 32]]) {
+    assert_eq!(requests.len(), 3, "schema3, schema2, then correlated v1 fallback");
+    for (request, schema) in requests.iter().zip([3, 2, 1]) {
+        assert_eq!(request[..4], [0xeb, 8, 0xa5, schema]);
+        assert!(request[8..].iter().all(|byte| *byte == 0), "capability-only traffic");
+    }
+}
+
 include!("entlayout_review_fixes_tests.rs");
 include!("phenom_application_tests.inc");
 
@@ -1413,8 +1421,7 @@ fn sm62_complete_backup_preserves_empty_custom_groups_only_for_its_device() {
     let bundle: EntLayoutFile = serde_json::from_str(&json).unwrap();
     assert_eq!(bundle.application_categories.iter().find(|(id,_)|id == &category).map(|(_,n)|n.as_str()),Some("Пустая группа"));
     assert!(!bundle.application_categories.iter().any(|(_,n)| n == "Not bundled"));
-    assert_eq!(recorder.requests().len(), 2);
-    assert!(recorder.requests().iter().all(|p| p[..3] == [0xeb, 8, 0xa5]));
+    assert_legacy_archive_negotiation(&recorder.requests());
 }
 
 #[test]
@@ -3360,8 +3367,7 @@ fn exercise_unified_device_menu_lifecycle(export: bool, nondefault: bool, failin
     );
     if export {
         if sm62 {
-            assert_eq!(recorder.requests().len(), 2);
-            assert!(recorder.requests().iter().all(|p| p[..3] == [0xeb, 8, 0xa5]));
+            assert_legacy_archive_negotiation(&recorder.requests());
         } else { assert!(recorder.requests().is_empty()); }
     } else {
         let key = app.application_layout_device_key().unwrap();

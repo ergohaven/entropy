@@ -1,4 +1,4 @@
-use super::sm62_shared_write_tests::{click_shared, drain, frame, frame_events};
+use super::sm62_shared_write_tests::{choose_dropdown, click_shared, drain, frame, frame_events};
 use super::*;
 use std::sync::{
     Arc,
@@ -61,14 +61,20 @@ fn confirmed_toggle(app: &EntropyApp, qsid: u16) -> u8 {
     }
 }
 
-fn toggle_reversal(label: &str, qsids: [u16; 2], original: u8) {
+fn toggle_reversal(label: &str, qsids: &[u16], original: u8) {
     let _storage = crate::app::app_storage::ScopedTempConfig::new();
     let (mut app, ctx, recorder) = setup();
+    let saved = app.display_settings.clone();
+    let power = label == "Default mode";
+    if power && qsids == [249] {
+        choose_dropdown(&mut app, &ctx, "Half", "Right");
+    }
     let fail = fail_get(&recorder);
     let start = recorder.requests().len();
-    click_shared(&mut app, &ctx, label);
+    if power { choose_dropdown(&mut app, &ctx, label, "Off"); }
+    else { click_shared(&mut app, &ctx, label); }
     drain(&mut app, &ctx);
-    for qsid in qsids {
+    for &qsid in qsids {
         assert_eq!(
             confirmed_toggle(&app, qsid),
             original,
@@ -105,7 +111,7 @@ fn toggle_reversal(label: &str, qsids: [u16; 2], original: u8) {
     assert_eq!(app.display_settings, before);
     assert_eq!(app.status_msg, status);
     fail.store(false, Ordering::SeqCst);
-    for qsid in qsids {
+    for &qsid in qsids {
         assert_eq!(
             app.hid_device
                 .as_ref()
@@ -117,9 +123,10 @@ fn toggle_reversal(label: &str, qsids: [u16; 2], original: u8) {
         );
     }
     let correction_start = recorder.requests().len();
-    click_shared(&mut app, &ctx, label);
+    if power { choose_dropdown(&mut app, &ctx, label, "Clock"); }
+    else { click_shared(&mut app, &ctx, label); }
     drain(&mut app, &ctx);
-    for qsid in qsids {
+    for &qsid in qsids {
         assert_eq!(
             app.hid_device
                 .as_ref()
@@ -141,23 +148,32 @@ fn toggle_reversal(label: &str, qsids: [u16; 2], original: u8) {
             Some(super::super::settings_write_queue::SettingsWriteStatus::Saved)
         ));
     }
+    if power {
+        assert_eq!(app.display_settings, saved,
+            "per-half Off/reversal preserves saved scenes and independent fields");
+        assert!(recorder.requests()[start..].iter().all(|r|
+            qsids.contains(&u16::from_le_bytes([r[2], r[3]]))),
+            "power edits must not write the other half or shared settings");
+    }
 }
 
 #[test]
 fn review_screens_off_ui_reversal_corrects_unverified_set() {
-    toggle_reversal("Turn off displays", [248, 249], 0);
+    for qsid in [248, 249] {
+        toggle_reversal("Default mode", &[qsid], 0);
+    }
 }
 #[test]
 fn review_language_ui_reversal_corrects_unverified_set() {
-    toggle_reversal("Show current layout RU/EN", [244, 245], 1);
+    toggle_reversal("Show current layout RU/EN", &[244, 245], 1);
 }
 #[test]
 fn review_date_ui_reversal_corrects_unverified_set() {
-    toggle_reversal("Date on clock", [240, 241], 1);
+    toggle_reversal("Date on clock", &[240, 241], 1);
 }
 #[test]
 fn review_stars_ui_reversal_corrects_unverified_set() {
-    toggle_reversal("Star animation", [246, 247], 1);
+    toggle_reversal("Star animation", &[246, 247], 1);
 }
 
 fn click_at(app: &mut EntropyApp, ctx: &egui::Context, pos: egui::Pos2) {
@@ -407,8 +423,7 @@ fn review_explicit_layout_mode_selection_couples_keypress_setting() {
     frame(&mut app, &ctx);
     frame(&mut app, &ctx);
     let start = recorder.requests().len();
-    click_text(&mut app, &ctx, "Clock");
-    click_text(&mut app, &ctx, "Layout");
+    choose_dropdown(&mut app, &ctx, "Default mode", "Layout");
     drain(&mut app, &ctx);
     assert_eq!(app.display_settings.sm62_values[0], 3);
     assert_eq!(app.display_settings.sm62_values[3], 1);

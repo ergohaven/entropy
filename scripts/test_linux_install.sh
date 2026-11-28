@@ -11,7 +11,7 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 DIST="${1:-$ROOT/dist/linux}"
-VERSION="${VERSION:-$(awk -F '"' '/^version = / { print $2; exit }' "$ROOT/Cargo.toml")}"
+VERSION="${VERSION:-$(sh "$ROOT/scripts/public_version.sh")}"
 BASE="${VERSION%%-*}"
 
 command -v docker >/dev/null 2>&1 || {

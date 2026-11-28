@@ -175,6 +175,52 @@ fn shared_sm62_exhausted_get_failure_is_stable_until_explicit_retry() {
     failed_shared_write_does_not_restart_on_repaint(0x0A);
 }
 
+// Anchor the trigger to its row, and select from the last painted (popup)
+// text. "Layout" is also a permanent shared-row caption, not just a mode.
+pub(super) fn choose_dropdown(
+    app: &mut EntropyApp, ctx: &egui::Context, label: &str, option: &str,
+) {
+    fn click(app: &mut EntropyApp, ctx: &egui::Context, pos: egui::Pos2) {
+        for pressed in [true, false] {
+            frame_events(app, ctx, vec![egui::Event::PointerMoved(pos),
+                egui::Event::PointerButton {
+                    pos, button: egui::PointerButton::Primary, pressed,
+                    modifiers: Default::default(),
+                }]);
+        }
+        frame(app, ctx);
+    }
+    frame(app, ctx);
+    let output = frame_events(app, ctx, vec![]);
+    let y = output.shapes.iter().find_map(|s| match &s.shape {
+        egui::Shape::Text(t) if t.galley.job.text == label => {
+            let pos = t.pos + t.galley.size() / 2.0;
+            s.clip_rect.contains(pos).then_some(pos.y)
+        }
+        _ => None,
+    }).expect("visible dropdown row label");
+    let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ctx);
+    let trigger = output.shapes.iter().find_map(|s| match &s.shape {
+        egui::Shape::Rect(r)
+            if (r.rect.height() - metrics.settings_control_height()).abs() < 0.1
+                && (r.rect.width() - metrics.settings_control_width()).abs() < 0.1
+                && (r.rect.center().y - y).abs() < 8.0
+                && s.clip_rect.contains(r.rect.center()) => Some(r.rect.center()),
+        _ => None,
+    }).expect("dropdown trigger on labelled row");
+    click(app, ctx, trigger);
+    frame(app, ctx);
+    let popup = frame_events(app, ctx, vec![]);
+    let pos = popup.shapes.iter().rev().find_map(|s| match &s.shape {
+        egui::Shape::Text(t) if t.galley.job.text == option => {
+            let pos = t.pos + t.galley.size() / 2.0;
+            s.clip_rect.contains(pos).then_some(pos)
+        }
+        _ => None,
+    }).expect("visible dropdown option");
+    click(app, ctx, pos);
+}
+
 pub(super) fn click_shared(app: &mut EntropyApp, ctx: &egui::Context, label: &str) {
     frame(app, ctx);
     let output = frame_events(app, ctx, vec![]);

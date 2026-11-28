@@ -1481,6 +1481,9 @@ mod tests {
         let mut bridge = crate::qmk_hid_host::QmkHidHostBridge::test_inert(device.clone(), Default::default(), None, crate::qmk_hid_host::HostProtocol::Selected(false));
         bridge.bind_selected_application_layout_device(key.clone());
         bridge.test_set_device_inventory_for_host_id("draft");
+        // The shared inventory fixture now completes a real correlated scan.
+        // This negative deliberately appends an unvalidated partial record.
+        bridge.test_add_resident_recovery();
         app.qmk_hid_hosts.insert(device.path.clone(), bridge);
         let s = app.app_settings.application_layouts.get_mut(&key).unwrap();
         let mut draft = s.layouts["default"].clone(); draft.id = "draft".into(); draft.name = "Unsaved author draft".into();
@@ -1725,10 +1728,35 @@ mod tests {
         }
     }
 
+    fn macropad_application_test_layout() -> KeyboardLayout {
+        let mut layout = indicator_test_layout();
+        // The v7 descriptor includes one encoder, represented by both turns.
+        // Keep the smaller indicator fixture unchanged for its other callers.
+        layout.encoders = (0..2).map(|direction| crate::keyboard::PhysicalEncoder {
+            x: 0.0,
+            y: 0.0,
+            w: 1.0,
+            h: 1.0,
+            label: "Encoder".into(),
+            encoder_idx: 0,
+            direction,
+            rotation: 0.0,
+            rotation_x: 0.0,
+            rotation_y: 0.0,
+            layout_condition: None,
+        }).collect();
+        layout.encoder_layers = vec![vec![0; 2]; crate::application_layouts::APPLICATION_LAYOUT_LAYER_COUNT];
+        assert_eq!(
+            crate::application_layouts::ApplicationLayoutGeometry::for_layout(&layout),
+            crate::application_layouts::ApplicationLayoutGeometry::legacy(7),
+        );
+        layout
+    }
+
     #[cfg(not(target_arch = "wasm32"))]
     #[test]
     fn existing_default_tap_dance_is_selected_for_standalone_keymap_write() {
-        let layout = indicator_test_layout();
+        let layout = macropad_application_test_layout();
         let mut default_keycodes =
             [0xffff; crate::application_layouts::APPLICATION_LAYOUT_CONTROL_COUNT];
         default_keycodes[0] = 0x5700; // Vial TD0
@@ -3024,15 +3052,12 @@ mod tests {
     }
 
     #[test]
-    fn resident_stack_ui_runtime_publishes_complete_profiles_and_retains_delete_intent() {
+    fn host_ram_stack_runtime_executes_selected_profile_and_preserves_host_deletion() {
         let _storage=crate::app::app_storage::ScopedTempConfig::new();
         let mut app=name_review_device_app(true);
         let key=app.application_layout_device_key().unwrap();
-        let device=app.device_manager.devices()[0].clone();
-        let mut bridge=crate::qmk_hid_host::QmkHidHostBridge::test_inert(device.clone(),Default::default(),None,crate::qmk_hid_host::HostProtocol::Selected(false));
-        bridge.bind_selected_application_layout_device(key.clone());
-        bridge.set_selected_application_layout_support(true);
-        app.qmk_hid_hosts.insert(device.path.clone(),bridge);
+        let path=r1_attach_inert_owner(&mut app);
+        r1_confirm_empty_archive(&mut app,&path);
         let s=app.application_layout_settings_mut().unwrap();
         let id=s.create_for_application(&crate::application_layouts::DetectedApplication{executable:"stack-runtime".into(),..Default::default()});
         let p=s.layouts.get_mut(&id).unwrap();
@@ -3045,42 +3070,66 @@ mod tests {
         }
         let stacks=p.encoder_stacks.clone();
         app.update_application_layout_runtime_with(Default::default());
-        assert!(app.qmk_hid_hosts[&device.path].resident_sync_status(&id).is_some(),"complete stack profile silently omitted from ordinary library");
-        app.app_settings.application_layouts.get_mut(&key).unwrap().remove(&id);
+        assert!(!app.qmk_hid_hosts[&path].test_published_snapshot().active,"inactive host profile was executed");
+        assert_eq!(super::super::app_storage::load_app_settings().application_layouts[&key].layouts[&id].encoder_stacks,stacks);
+        assert!(app.activate_application_layout(&id));
         app.update_application_layout_runtime_with(Default::default());
-        assert!(app.qmk_hid_hosts[&device.path].resident_sync_status(&id).is_some(),"stack-bearing persisted deletion rejected");
+        let snapshot=r1_assert_active_ram(&app,&path,&id);
+        assert_eq!(snapshot.encoder_stacks.as_slice(),stacks.as_slice(),"selected RAM snapshot lost a stack action");
+        assert!(app.app_settings.application_layouts.get_mut(&key).unwrap().remove(&id));
+        app.update_application_layout_runtime_with(Default::default());
+        assert!(!app.qmk_hid_hosts[&path].test_published_snapshot().active,"deleted host selection remained active");
         let saved=super::super::app_storage::load_app_settings();
+        assert!(!saved.application_layouts[&key].layouts.contains_key(&id));
         assert_eq!(saved.application_layouts[&key].resident_deleted[&id].1.encoder_stacks,stacks);
+        assert!(app.qmk_hid_hosts[&path].test_published_library().is_empty(),"host deletion was uploaded to the read-only archive");
     }
 
     #[test]
-    fn resident100_ui_runtime_publishes_disabled_inactive_profiles_but_not_unready_inheritance() {
-        let _storage=crate::app::app_storage::ScopedTempConfig::new();let mut app=name_review_device_app(true);
+    fn host_ram_runtime_retains_disabled_library_and_fences_unready_inheritance_and_partial_archive() {
+        let _storage=crate::app::app_storage::ScopedTempConfig::new();
+        let mut app=name_review_device_app(true);
         let key=app.application_layout_device_key().unwrap();
-        let device=app.device_manager.devices()[0].clone();
-        let mut bridge=crate::qmk_hid_host::QmkHidHostBridge::test_inert(device.clone(),Default::default(),None,crate::qmk_hid_host::HostProtocol::Selected(false));
-        bridge.bind_selected_application_layout_device(key.clone());bridge.set_selected_application_layout_support(true);app.qmk_hid_hosts.insert(device.path.clone(),bridge);
+        let path=r1_attach_inert_owner(&mut app);
+        r1_confirm_empty_archive(&mut app,&path);
         let s=app.application_layout_settings_mut().unwrap();
-        for i in 0..100 {let id=s.create_for_application(&crate::application_layouts::DetectedApplication{executable:format!("ui-bg-{i}"),..Default::default()});s.layouts.get_mut(&id).unwrap().automatic_switching=false;}
-        let id=s.layouts.keys().find(|id|id.starts_with("ui_bg")||id.starts_with("ui-bg")).cloned().unwrap_or_else(||s.layouts.keys().find(|id|id.as_str()!="default").unwrap().clone());
+        let mut ids=Vec::new();
+        for i in 0..100 {
+            let id=s.create_for_application(&crate::application_layouts::DetectedApplication{executable:format!("ui-bg-{i}"),..Default::default()});
+            s.layouts.get_mut(&id).unwrap().automatic_switching=false;ids.push(id);
+        }
+        let id=ids[0].clone();
         app.update_application_layout_runtime_with(Default::default());
-        assert!(app.qmk_hid_hosts[&device.path].resident_sync_status(&id).is_some(),"ordinary runtime must publish inactive disabled apps");
+        assert!(!app.qmk_hid_hosts[&path].test_published_snapshot().active,"disabled inactive library was executed");
+        let saved=super::super::app_storage::load_app_settings();
+        assert_eq!(saved.application_layouts[&key].layouts.len(),101,"inactive host profiles were dropped");
+        for id in &ids {assert!(!saved.application_layouts[&key].layouts[id].automatic_switching);}
+        assert!(app.activate_application_layout(&id));
         app.app_settings.application_layouts.get_mut(&key).unwrap().layouts.get_mut(&id).unwrap().layers[15][61]=0xffff;
         app.deferred_device_load.set_layer_status(15,DeferredLoadStatus::NotLoaded);
         app.update_application_layout_runtime_with(Default::default());
-        assert_eq!(app.qmk_hid_hosts[&device.path].resident_sync_status(&id),None,"unconfirmed inherited Default must not freeze FULL");
+        assert!(!app.qmk_hid_hosts[&path].test_published_snapshot().active,"unconfirmed inheritance was frozen into active RAM");
         app.deferred_device_load.set_layer_status(15,DeferredLoadStatus::Loaded);
         app.update_application_layout_runtime_with(Default::default());
-        assert!(app.qmk_hid_hosts[&device.path].resident_sync_status(&id).is_some());
-        app.app_settings.application_layouts.get_mut(&key).unwrap().remove(&id);
+        let ready=r1_assert_active_ram(&app,&path,&id);
+        assert_ne!(ready.layers[15][61],0xffff);
+        let receipts=app.application_layout_settings().unwrap().host_archive_migrations.clone();
+        app.qmk_hid_hosts[&path].test_add_resident_recovery();
         app.update_application_layout_runtime_with(Default::default());
-        assert!(app.qmk_hid_hosts[&device.path].resident_sync_status(&id).is_some(),"UI must publish persisted tombstone intent until device confirmation");
-        app.qmk_hid_hosts[&device.path].test_add_resident_recovery();
+        assert!(!app.qmk_hid_hosts[&path].test_published_snapshot().active,"partial archive bypassed migration admission");
+        assert_eq!(app.application_layout_settings().unwrap().host_archive_migrations,receipts,"partial data was certified as a complete migration");
+        let partial=app.qmk_hid_hosts[&path].resident_recoveries().into_iter().find(|r|r.slot==99).unwrap();
+        assert_eq!(partial.raw,vec![1,2,3]);assert!(partial.validation.is_some());
+        app.qmk_hid_hosts[&path].test_set_valid_device_inventory();
         app.update_application_layout_runtime_with(Default::default());
-        let recovery=super::super::app_storage::app_settings_path().with_file_name("resident100-recovery");
-        assert!(recovery.exists(),"raw recoveries must be persisted atomically by ordinary UI runtime");
-        let paths:Vec<_>=std::fs::read_dir(recovery).unwrap().map(|p|p.unwrap().path()).collect();assert_eq!(paths.len(),1);
-        let saved:serde_json::Value=serde_json::from_slice(&std::fs::read(&paths[0]).unwrap()).unwrap();assert_eq!(saved["record"]["raw"],serde_json::json!([1,2,3]));
+        let raw=include_bytes!("../qmk_hid_host/resident_stack_max_full.bin");
+        runtime_fixture_assert_archive_backup(&app,&key,raw);
+        assert!(app.app_settings.application_layouts.get_mut(&key).unwrap().remove(&id));
+        app.update_application_layout_runtime_with(Default::default());
+        let saved=super::super::app_storage::load_app_settings();
+        assert!(saved.application_layouts[&key].resident_deleted.contains_key(&id),"host deletion intent was lost");
+        assert!(!saved.application_layouts[&key].layouts.contains_key(&id));
+        assert!(app.qmk_hid_hosts[&path].test_published_library().is_empty());
     }
 
     #[test]
@@ -5647,7 +5696,7 @@ mod tests {
         assert_eq!(app.selected_layer, 3);
         assert!(app.application_layout_manual_override.is_none());
 
-        let base = indicator_test_layout();
+        let base = macropad_application_test_layout();
         let main_rendered = app.application_layout_rendered_copy(&base);
         let indicator_rendered = app.application_layout_active_rendered_copy(&base);
 

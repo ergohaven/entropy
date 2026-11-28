@@ -76,6 +76,9 @@ fn gui_pending_import_waits_for_durable_resident_backup_and_refuses_stale_or_rea
         source["version"] = 7.into();
         source.as_object_mut().unwrap().remove("application_layouts");
         source.as_object_mut().unwrap().remove("application_categories");
+        // Native-only v7 input has no application archive. Raw FULLs require
+        // complete v10 host profiles; the target backup still retains both.
+        source.as_object_mut().unwrap().remove("application_raw_profiles");
         // This legacy input isolates native keys; it must not carry a custom
         // icon package whose independent capability admission would fail first.
         source.as_object_mut().unwrap().remove("pictograms");

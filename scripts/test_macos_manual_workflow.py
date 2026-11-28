@@ -94,15 +94,60 @@ class ManualWorkflow(unittest.TestCase):
         self.assertNotIn('secrets.', upload)
         self.assertNotIn('always()', build)
         release = self.jobs['release']
-        download = next(s for s in release.split('\n      - ') if 'actions/download-artifact@' in s)
+        downloads = [s for s in release.split('\n      - ') if 'actions/download-artifact@' in s]
+        self.assertEqual(len(downloads), 1)
+        download = downloads[0]
         self.assertIn('          pattern: release-assets-*\n', download)
         self.assertIn('          path: artifacts/\n', download)
-        self.assertIn('          files: artifacts/**/*\n', release)
+        collectors = [s for s in release.split('\n      - ') if 'run: python3 scripts/prepare_release_assets.py' in s]
+        self.assertEqual(len(collectors), 1)
+        self.assertIn('--source artifacts --destination dist/release --tag "$GITHUB_REF_NAME"', collectors[0])
+        self.assertNotIn('secrets.', collectors[0])
+        self.assertEqual(re.findall(r'^          files: (.+)$', release, re.M), ['dist/release/*'])
+        self.assertLess(release.index('actions/download-artifact@'), release.index('scripts/prepare_release_assets.py'))
+        self.assertLess(release.index('scripts/prepare_release_assets.py'), release.index('uses: softprops/action-gh-release@'))
 
     def test_release_staging_preserves_the_remaining_workflow_payload(self):
+        # Reverse the reviewed publisher delta from 05a0de2d, not the whole
+        # release job. Each exact replacement must occur once; the original
+        # signing/publication baseline digest below remains immutable.
+        workflow = self.workflow
+
+        def reverse_exact(current, previous):
+            nonlocal workflow
+            self.assertEqual(workflow.count(current), 1)
+            workflow = workflow.replace(current, previous, 1)
+
+        reverse_exact('''      - name: Verify release inventory and write checksums
+        run: python3 scripts/prepare_release_assets.py --source artifacts --destination dist/release --tag "$GITHUB_REF_NAME"
+
+''', '')
+        reverse_exact('''      - name: Verify release publisher
+        env:
+          GH_TOKEN: ${{ secrets.ERGOHAVEN_RELEASE_TOKEN }}
+        run: |
+          test -n "$GH_TOKEN"
+          test "$(gh api user --jq .login)" = kissetfall
+''', '''          # Markdown backticks are literal installation text, not shell commands.
+          # shellcheck disable=SC2016
+          {
+            printf '\\n## Downloads\\n\\n'
+            printf '%s\\n' '- Linux: install the `.deb` (Debian/Ubuntu), `.rpm` (Fedora/openSUSE) or `.pkg.tar.zst` (Arch) with your package manager, or make the portable `.AppImage` executable and run it.'
+            printf '%s\\n' '- Windows: download and run the portable `.exe`.'
+            printf '%s\\n' '- macOS: download the `.dmg` for your Mac (`arm64` for Apple Silicon, `x86_64` for Intel). See README for installation and Open Anyway instructions (self-signed, not notarized).'
+          } >> RELEASE_NOTES.md
+''')
+        reverse_exact('''          token: ${{ secrets.ERGOHAVEN_RELEASE_TOKEN }}
+          tag_name: ${{ github.ref_name }}
+          target_commitish: ${{ github.sha }}
+''', '')
+        reverse_exact("          make_latest: 'false'\n",
+                      "          make_latest: ${{ contains(github.ref_name, '-') && 'false' || 'true' }}\n")
+        reverse_exact('''          fail_on_unmatched_files: true
+          files: dist/release/*
+''', '          files: artifacts/**/*\n')
         # Reverse only the new release-only validation wiring before comparing
         # the original signing and publication payload with its immutable hash.
-        workflow = self.workflow
         for name in ('validate', 'nix'):
             workflow = workflow.replace(f'  {name}:\n{self.jobs[name]}', '', 1)
         workflow = workflow.replace('    needs: [build, validate, nix]\n',

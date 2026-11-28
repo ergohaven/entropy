@@ -15,7 +15,7 @@ DIST="$(cd "$DIST" 2>/dev/null && pwd)" || {
   echo "no such directory: ${1:-$ROOT/dist/linux}" >&2
   exit 1
 }
-VERSION="${VERSION:-$(awk -F '"' '/^version = / { print $2; exit }' "$ROOT/Cargo.toml")}"
+VERSION="${VERSION:-$(sh "$ROOT/scripts/public_version.sh")}"
 HOST_ARCH="$(uname -m)"
 
 if ! command -v bsdtar >/dev/null 2>&1; then

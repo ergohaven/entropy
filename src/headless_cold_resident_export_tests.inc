@@ -95,6 +95,8 @@ fn sm62_complete_export_keeps_nonresident_author_profiles_without_publishing() {
     let baseline: serde_json::Value = serde_json::from_str(&json).unwrap();
     let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
     settings.layouts = serde_json::from_value(baseline["application_layouts"].clone()).unwrap();
+    settings.geometry = crate::application_layouts::ApplicationLayoutGeometry::legacy(8);
+    settings.device_raw_profiles = serde_json::from_value(baseline["application_raw_profiles"].clone()).unwrap();
     let mut authored = settings.layouts["default"].clone();
     authored.id = "local-author-only".into();
     authored.name = "Local author only".into();
@@ -106,6 +108,8 @@ fn sm62_complete_export_keeps_nonresident_author_profiles_without_publishing() {
     let json = app.entlayout_export_json().unwrap().expect("complete backup must preserve nonresident author data");
     let value: serde_json::Value = serde_json::from_str(&json).unwrap();
     assert_eq!(value["application_layouts"].as_object().unwrap().len(), 4);
+    assert_eq!(value["application_raw_profiles"], baseline["application_raw_profiles"],
+        "restoring a known library must include its byte-exact archive baselines");
     assert_eq!(value["application_layouts"]["local-author-only"], serde_json::to_value(authored).unwrap());
     assert_eq!(serde_json::to_value(&app.app_settings).unwrap(), before);
     assert!(recorder.requests().iter().all(|p| !is_write(p)));
@@ -117,13 +121,23 @@ fn sm62_resident_visual_full_cannot_be_silently_downgraded() {
     let _storage = crate::app::app_storage::ScopedTempConfig::new();
     let (mut app, session, recorder) = scripted_export_device_app(|_| None, true);
     resident_export_peer(&recorder, "visual");
-    let result = export_entlayout(&mut app, 0, &session, deadline(), &AtomicBool::default());
-    assert!(result.is_err(), "a FULL visual ID absent from the portable schema must not be silently dropped");
+    let json = export_entlayout(&mut app, 0, &session, deadline(), &AtomicBool::default())
+        .expect("complete v10 can preserve visual IDs in its raw FULL baselines");
+    let bundle: serde_json::Value = serde_json::from_str(&json).unwrap();
+    assert_eq!(bundle["version"], 10);
+    let profiles = bundle["application_layouts"].as_object().unwrap();
+    let (id, _) = profiles.iter().find(|(_, profile)| profile["name"] == "device-editor").unwrap();
+    let raw: Vec<u8> = serde_json::from_value(bundle["application_raw_profiles"][id].clone()).unwrap();
+    assert_eq!(raw, cold_resident_full_with_visual("device-editor", 4, true),
+        "unknown portable visuals must survive as exact validated FULL bytes");
+    assert_eq!(raw[64 + 16 * 62 * 2 + 15 * 62 + 61], 7);
     let dir = tempfile::tempdir().unwrap();
     let path = dir.path().join("previous.entlayout");
     std::fs::write(&path, b"previous full backup").unwrap();
     app.write_entlayout_export(&path);
-    assert_eq!(std::fs::read(&path).unwrap(), b"previous full backup");
+    let saved: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+    assert_eq!(saved["application_layouts"], bundle["application_layouts"]);
+    assert_eq!(saved["application_raw_profiles"], bundle["application_raw_profiles"]);
     assert!(recorder.requests().iter().any(|p| p[..3] == [0xef, 9, 6]));
     assert!(recorder.requests().iter().all(|p| !is_write(p)));
 }
@@ -159,15 +173,12 @@ fn sm62_resident_export_refuses_loss_of_authored_profiles_and_default_drafts() {
         let baseline: serde_json::Value = serde_json::from_str(&baseline).unwrap();
         let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
         settings.layouts = serde_json::from_value(baseline["application_layouts"].clone()).unwrap();
-        if case == "resident-draft" {
-            settings.layouts.retain(|_, p| p.name != "device-editor");
-        }
-        let mut profile = settings.layouts["default"].clone();
-        profile.id = match case {
-            "nonresident" => "user-only-profile",
-            "resident-draft" => "device-editor",
-            _ => "default",
-        }.into();
+        settings.geometry = crate::application_layouts::ApplicationLayoutGeometry::legacy(8);
+        settings.device_raw_profiles = serde_json::from_value(baseline["application_raw_profiles"].clone()).unwrap();
+        let draft_id = if case == "resident-draft" {
+            settings.layouts.values().find(|p| p.name == "device-editor").unwrap().id.clone()
+        } else { "default".into() };
+        let mut profile = settings.layouts[&draft_id].clone();
         profile.name = "valuable author draft".into();
         profile.layers = vec![vec![6; 62]; 16];
         if case == "supported-default-name-conflict" {
@@ -175,19 +186,32 @@ fn sm62_resident_export_refuses_loss_of_authored_profiles_and_default_drafts() {
             profile.layer_names[0] = "valuable unsaved native name".into();
             app.supported_qmk_settings.push(200);
         }
-        settings.layouts.insert(profile.id.clone(), profile);
+        settings.layouts.insert(profile.id.clone(), profile.clone());
         let key = app.application_layout_device_key().unwrap();
         app.app_settings.application_layouts.insert(key, settings);
         let before = serde_json::to_value(&app.app_settings.application_layouts).unwrap();
         let dir = tempfile::tempdir().unwrap();
         let path = dir.path().join("valuable.entlayout");
         std::fs::write(&path, b"previous complete backup").unwrap();
-        // Until both physical and author versions can be represented losslessly,
-        // explicit refusal is preferable to a falsely complete success.
-        let error = app.entlayout_export_json().unwrap().expect_err(case);
-        assert!(format!("{error:#}").contains("author"), "{case}: {error:#}");
-        app.write_entlayout_export(&path);
-        assert_eq!(std::fs::read(&path).unwrap(), b"previous complete backup", "{case}");
+        if case == "resident-draft" {
+            // v10 carries both host authoring and byte-exact physical baselines.
+            let json = app.entlayout_export_json().unwrap().expect("lossless resident draft backup");
+            let saved: serde_json::Value = serde_json::from_str(&json).unwrap();
+            assert_eq!(saved["application_layouts"][&draft_id], serde_json::to_value(&profile).unwrap());
+            assert_eq!(saved["application_raw_profiles"], baseline["application_raw_profiles"]);
+            assert_eq!(saved["application_layouts"].as_object().unwrap().len(), 3);
+            app.write_entlayout_export(&path);
+            let written: serde_json::Value = serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+            assert_eq!(written["application_layouts"], saved["application_layouts"]);
+            assert_eq!(written["application_raw_profiles"], saved["application_raw_profiles"]);
+        } else {
+            // Default has no raw baseline: unresolved physical/author conflicts
+            // must still refuse rather than overwrite the previous backup.
+            let error = app.entlayout_export_json().unwrap().expect_err(case);
+            assert!(format!("{error:#}").contains("author"), "{case}: {error:#}");
+            app.write_entlayout_export(&path);
+            assert_eq!(std::fs::read(&path).unwrap(), b"previous complete backup", "{case}");
+        }
         assert_eq!(serde_json::to_value(&app.app_settings.application_layouts).unwrap(), before);
         assert!(recorder.requests().iter().all(|p| !is_write(p)), "{case}");
     }
@@ -201,6 +225,7 @@ fn cold_resident_full(id: &str, code: u16) -> Vec<u8> {
 #[cfg(target_os = "linux")]
 fn cold_resident_full_with_visual(id: &str, code: u16, visual: bool) -> Vec<u8> {
     let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
+    settings.geometry = crate::application_layouts::ApplicationLayoutGeometry::legacy(8);
     let mut profile = settings.layouts["default"].clone();
     profile.id = id.into(); profile.name = id.into();
     profile.layers = vec![vec![code; 62]; 16];

@@ -4838,10 +4838,12 @@ mod tests {
 
     #[test]
     fn v7_sm62_async_render_does_not_requeue_or_reverse_first_star_edit() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
         for initial in [0u8,1] {
             let ctx=egui::Context::default();
             let cc=eframe::CreationContext::_new_kittest(ctx.clone());
             let mut app=EntropyApp::new(&cc);
+            app.app_settings.language = crate::i18n::Language::English;
             let mut fonts=egui::FontDefinitions::default();
             fonts.families.insert(egui::FontFamily::Name("display_preview".into()),fonts.families[&egui::FontFamily::Proportional].clone()); ctx.set_fonts(fonts);
             let (hid,recorder)=crate::hid::HidDevice::test_device(); app.hid_device=Some(hid.into());
@@ -4853,7 +4855,17 @@ mod tests {
             }));
             render(&mut app,vec![]);
             let output=render(&mut app,vec![]);
-            let pos=output.shapes.iter().filter_map(|s|match &s.shape {egui::Shape::Rect(r) if r.rect.width()==46.0 && r.rect.height()==24.0=>Some(r.rect.center()),_=>None}).nth(4).expect("star switch after selected-half/layout/date controls");
+            let star_y = output.shapes.iter().find_map(|s| match &s.shape {
+                egui::Shape::Text(t) if t.galley.job.text == "Star animation" =>
+                    Some(t.pos.y + t.galley.size().y / 2.0),
+                _ => None,
+            }).expect("star row label");
+            let pos = output.shapes.iter().find_map(|s| match &s.shape {
+                egui::Shape::Rect(r) if r.rect.width() == 46.0 && r.rect.height() == 24.0
+                    && (r.rect.center().y - star_y).abs() < 8.0
+                    && s.clip_rect.contains(r.rect.center()) => Some(r.rect.center()),
+                _ => None,
+            }).expect("visible switch on star row");
             render(&mut app,vec![egui::Event::PointerMoved(pos),
                 egui::Event::PointerButton {pos,button:egui::PointerButton::Primary,pressed:true,modifiers:Default::default()},
                 egui::Event::PointerButton {pos,button:egui::PointerButton::Primary,pressed:false,modifiers:Default::default()}]);
@@ -5245,7 +5257,8 @@ mod tests {
                             && (points[1].x - points[0].x) > 300. => Some(points[1].x - points[0].x),
                     _ => None,
                 }).collect();
-                assert_eq!(rows.len(), 11, "all per-half and shared setting rows must render");
+                assert_eq!(rows.len(), 10,
+                    "all rows render; Off belongs to per-half Default mode, not a shared row");
                 assert!(rows.iter().all(|actual| (*actual - expected).abs() < 1.),
                     "Display sections must use standard settings width {expected}, not separate oversized widths: {rows:?}, viewport={width}, language={language:?}");
                 for shape in &result.shapes {

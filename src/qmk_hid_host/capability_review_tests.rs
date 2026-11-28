@@ -3,6 +3,14 @@ use super::*;
 
 fn exercise_unknown_recovery(fault: u8, automatic: bool) {
     let (hid, rec) = crate::hid::HidDevice::test_device();
+    let mut layout =
+        crate::application_layouts::DeviceApplicationLayouts::default().layouts["default"].clone();
+    layout.id = "capability-profile".into();
+    layout.layers = vec![vec![0x22; 62]; 16];
+    let mut snapshot = crate::application_layouts::ApplicationLayoutSnapshot::from_layout(&layout);
+    snapshot.resident_slot = Some(0);
+    let expected = super::resident_regressions::full_raw(&ApplicationLayoutTransmission.packets(&snapshot));
+    let mut peer = super::resident_regressions::Peer::with_record(0, expected.clone());
     let healthy = Arc::new(AtomicBool::new(false));
     let h = healthy.clone();
     rec.respond_by(move |p| {
@@ -20,13 +28,9 @@ fn exercise_unknown_recovery(fault: u8, automatic: bool) {
             }
             return Some(Ok(r));
         }
-        if p[..2] == [0xef, 9] {
-            let mut r = *p;
-            r[2] |= 128;
-            r[3] = if p[2] == 3 { 1 } else { 0 };
-            return Some(Ok(r));
-        }
-        None
+        // Reuse the stateful schema2 peer: a correlated CATALOG BAD_ARGUMENT
+        // selects ENUM, then real READs recover its pre-existing device FULL.
+        peer.reply(p)
     });
     let target = crate::device::Device {
         path: format!("{}/src/main.rs", env!("CARGO_MANIFEST_DIR")),
@@ -54,12 +58,6 @@ fn exercise_unknown_recovery(fault: u8, automatic: bool) {
     bridge.bind_selected_application_layout_device("capability-review".into());
     bridge.set_selected_application_layout_support(true);
     let generation = bridge.application_layout_publication_generation().unwrap();
-    let mut layout =
-        crate::application_layouts::DeviceApplicationLayouts::default().layouts["default"].clone();
-    layout.id = "capability-profile".into();
-    layout.layers = vec![vec![0x22; 62]; 16];
-    let mut snapshot = crate::application_layouts::ApplicationLayoutSnapshot::from_layout(&layout);
-    snapshot.resident_slot = Some(0);
     // Keep foreground native: recovery must not depend on changing its snapshot.
     assert!(bridge.publish_resident_library_for_generation(vec![snapshot], generation));
     tx.send(()).unwrap();
@@ -107,16 +105,27 @@ fn exercise_unknown_recovery(fault: u8, automatic: bool) {
         "recovery must retain connection"
     );
     let deadline = Instant::now() + Duration::from_secs(5);
-    while bridge.resident_sync_status("capability-profile") != Some(resident100::SyncStatus::Synced)
-    {
-        assert!(
-            Instant::now() < deadline,
-            "recovered negotiation must complete synchronization"
-        );
+    // Host-managed firmware no longer STOREs a published library. Successful
+    // negotiation must finish this profile's authoritative READ, not invent a
+    // legacy Synced acknowledgement for a write the production owner forbids.
+    // Do not require unrelated empty slots to finish their catalog pass here.
+    while bridge.resident_recoveries().is_empty() {
+        assert!(Instant::now() < deadline, "recovered negotiation must complete read-only profile recovery");
         thread::sleep(Duration::from_millis(5));
     }
+    let recovered = bridge.resident_recoveries();
+    assert_eq!(recovered.len(), 1);
+    assert_eq!(recovered[0].slot, 0);
+    assert_eq!(recovered[0].raw, expected);
+    assert!(recovered[0].validation.is_none());
+    validate_recovered_full(&recovered[0].raw, &recovered[0].identity_crc).unwrap();
     bridge.stop();
     let after = rec.requests();
+    assert!(after.iter().any(|p| p[..3] == [0xef, 9, 7]));
+    assert!(after.iter().any(|p| p[..3] == [0xef, 9, 6]));
+    assert!(!after.iter().any(|p| p[..2] == [0xef, 9] && !matches!(p[2], 3 | 6 | 7)),
+        "capability recovery mutated or selected resident storage");
+    assert!(!after.iter().any(|p| matches!(p[0], 0xec..=0xee)), "read-only recovery staged a host profile");
     assert!(
         after[before.len()..]
             .iter()

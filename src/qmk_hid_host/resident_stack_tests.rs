@@ -4,6 +4,7 @@ use crate::application_layouts::{ApplicationLayoutSnapshot, EncoderStackAction};
 
 fn stack_snapshot(count: usize) -> ApplicationLayoutSnapshot {
     let mut p = ApplicationLayoutSnapshot::inactive();
+    p.geometry = crate::application_layouts::ApplicationLayoutGeometry::legacy(8).unwrap();
     p.active = true;
     p.profile_id = Some("complete-stack".into());
     p.resident_slot = Some(99);
@@ -79,6 +80,7 @@ fn bridge() -> QmkHidHostBridge {
     target.path = format!("{}/src/main.rs", env!("CARGO_MANIFEST_DIR"));
     let mut b = QmkHidHostBridge::test_inert(target, Default::default(), None, HostProtocol::Selected(false));
     b.bind_selected_application_layout_device("stack-admission".into());
+    b.set_selected_application_layout_support(true);
     b
 }
 

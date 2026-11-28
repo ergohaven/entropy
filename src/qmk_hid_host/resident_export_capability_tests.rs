@@ -23,6 +23,10 @@ fn unattended_inventory_requires_lossless_profile_payload_not_only_raw_membershi
         if case == "author-draft" { decoded.layers[15][61] = 5; }
         settings.resident_slots.insert(decoded.id.clone(), 99);
         settings.device_raw_profiles.insert(decoded.id.clone(), raw);
+        // Retain the former lossless-portable assertion independently. A raw
+        // archive receipt may preserve visual metadata/newer authoring, but it
+        // must never make a lossy portable reconstruction pass its validator.
+        assert_eq!(validate_portable_resident_profile(&record, &decoded).is_ok(), case == "canonical", "{case}");
         settings.layouts.insert(decoded.id.clone(), decoded);
         {
             let mut state = bridge.application_layout_snapshot.lock().unwrap();
@@ -30,7 +34,13 @@ fn unattended_inventory_requires_lossless_profile_payload_not_only_raw_membershi
             state.resident_inventory_complete = true;
             state.resident_recoveries.insert(99, record);
         }
-        assert_eq!(bridge.resident_export_inventory_confirmed(&settings), case == "canonical", "{case}");
+        assert!(!bridge.resident_export_inventory_confirmed(&settings), "raw membership is not a durable archive receipt: {case}");
+        let records = bridge.resident_recoveries();
+        let key = crate::application_layouts::DeviceApplicationLayouts::legacy_archive_key(&bridge.device, &records).unwrap();
+        // Predicate-level receipt only: actual durable backup I/O is exercised
+        // by the archive/runtime owner tests, not claimed by this inert fixture.
+        settings.host_archive_migrations.insert(key, "predicate-only-archive-receipt".into());
+        assert!(bridge.resident_export_inventory_confirmed(&settings), "exact raw archive receipt lost: {case}");
     }
 }
 
@@ -42,8 +52,11 @@ fn export_probe_schema2_support_is_read_only_and_skips_fallback() {
     rec.respond_by(|p| Some(Ok(super::resident100_tests::capability(p))));
     assert!(hid.probe_resident_export_capability().unwrap());
     let ps = rec.requests();
-    assert_eq!(ps.len(), 1);
-    assert_eq!(ps[0][..4], [0xeb, 8, 0xa5, 2]);
+    assert_eq!(ps.len(), 2);
+    assert_eq!(ps[0][..4], [0xeb, 8, 0xa5, 3]);
+    assert_eq!(ps[1][..4], [0xeb, 8, 0xa5, 2]);
+    assert_ne!(ps[0][4..8], ps[1][4..8]);
+    assert!(ps.iter().all(|p| crate::hid::hid_protocol::is_read_request(p)));
 }
 
 #[test]
@@ -64,25 +77,26 @@ fn export_probe_correlated_legacy_rejection_requires_validated_v1() {
             });
             assert!(!hid.probe_resident_export_capability().unwrap());
             let ps = rec.requests();
-            assert_eq!(ps.len(), 2);
-            assert_eq!(ps[0][..4], [0xeb, 8, 0xa5, 2]);
-            assert_eq!(ps[1][..4], [0xeb, 8, 0xa5, 1]);
-            assert_ne!(ps[0][4..8], ps[1][4..8]);
+            assert_eq!(ps.len(), 3);
+            assert_eq!(ps[0][..4], [0xeb, 8, 0xa5, 3]);
+            assert_eq!(ps[1][..4], [0xeb, 8, 0xa5, 2]);
+            assert_eq!(ps[2][..4], [0xeb, 8, 0xa5, 1]);
+            assert!(ps.windows(2).all(|q| q[0][4..8] != q[1][4..8]));
+            assert!(ps.iter().all(|p| crate::hid::hid_protocol::is_read_request(p)));
         }
     }
 }
 
 #[test]
 fn export_probe_zero_wrong_nonce_padding_and_transport_remain_unknown() {
-    for fallback_fault in [false, true] {
+    for fault_schema in [3, 2, 1] {
         for fault in 0..4 {
             let (hid, rec) = crate::hid::HidDevice::test_device();
             rec.respond_by(move |p| {
-                if fallback_fault && p[3] == 2 { return Some(Ok(*p)); }
-                // A healthy v1 must never legitimize an invalid schema2 reply.
-                if !fallback_fault && p[3] == 1 {
-                    return Some(Ok(super::resident100_tests::capability(p)));
-                }
+                // Earlier schemas reject correlatively; a healthy later schema
+                // must never legitimize the malformed response under test.
+                if p[3] > fault_schema { return Some(Ok(*p)); }
+                if p[3] < fault_schema { return Some(Ok(super::resident100_tests::capability(p))); }
                 let mut r = super::resident100_tests::capability(p);
                 match fault {
                     0 => r = [0; 32],
@@ -93,8 +107,11 @@ fn export_probe_zero_wrong_nonce_padding_and_transport_remain_unknown() {
                 }
                 Some(Ok(r))
             });
-            assert!(hid.probe_resident_export_capability().is_err(), "fallback={fallback_fault} fault={fault}");
-            assert!(rec.requests().iter().all(|p| p[0] == 0xeb));
+            assert!(hid.probe_resident_export_capability().is_err(), "schema={fault_schema} fault={fault}");
+            let requests = rec.requests();
+            assert!(requests.iter().all(|p| p[0] == 0xeb));
+            assert_eq!(requests.iter().map(|p| p[3]).collect::<Vec<_>>(),
+                [3, 2, 1][..usize::from(4 - fault_schema)], "invalid reply permitted a fallback");
         }
     }
 }
@@ -161,7 +178,7 @@ fn inert_bound() -> QmkHidHostBridge {
 #[test]
 fn export_inventory_unknown_false_true_and_revoke_are_distinct() {
     let mut bridge = inert_bound();
-    let settings = crate::application_layouts::DeviceApplicationLayouts::default();
+    let mut settings = crate::application_layouts::DeviceApplicationLayouts::default();
     assert!(!bridge.resident_export_inventory_confirmed(&settings));
     {
         let mut s = bridge.application_layout_snapshot.lock().unwrap();
@@ -178,9 +195,12 @@ fn export_inventory_unknown_false_true_and_revoke_are_distinct() {
     bridge.application_layout_snapshot.lock().unwrap().resident_export_capability = Some(resident_catalog::Capability::Resident(resident_catalog::fixture_capabilities()));
     assert!(!bridge.resident_export_inventory_confirmed(&settings));
     bridge.application_layout_snapshot.lock().unwrap().resident_inventory_complete = true;
+    assert!(!bridge.resident_export_inventory_confirmed(&settings), "complete READ without archive receipt must refuse");
+    let key = crate::application_layouts::DeviceApplicationLayouts::legacy_archive_key(&bridge.device, &[]).unwrap();
+    settings.host_archive_migrations.insert(key, "predicate-only-empty-archive-receipt".into());
     assert!(bridge.resident_export_inventory_confirmed(&settings));
     bridge.test_set_valid_device_inventory();
-    assert!(!bridge.resident_export_inventory_confirmed(&settings), "missing physical payload must refuse");
+    assert!(!bridge.resident_export_inventory_confirmed(&settings), "changed physical inventory must require its own archive receipt");
     bridge.clear_application_layout_binding();
     assert_eq!(bridge.application_layout_snapshot.lock().unwrap().resident_export_capability, None);
     bridge.bind_selected_application_layout_device("replacement".into());
@@ -219,8 +239,10 @@ fn bridge_real_query_records_confirmed_unsupported_without_inventory() {
     assert!(!bridge.application_layout_snapshot.lock().unwrap().resident_inventory_complete);
     bridge.stop();
     let queries: Vec<_> = rec.requests().into_iter().filter(|p| p[0] == 0xeb).collect();
-    assert_eq!(queries.len(), 2);
-    assert_eq!(queries[0][3], 2);
-    assert_eq!(queries[1][3], 1);
+    assert_eq!(queries.len(), 3);
+    assert_eq!(queries[0][3], 3);
+    assert_eq!(queries[1][3], 2);
+    assert_eq!(queries[2][3], 1);
+    assert!(queries.windows(2).all(|q| q[0][4..8] != q[1][4..8]));
     assert!(!rec.requests().iter().any(|p| matches!(p[0], 0xec..=0xef)));
 }

@@ -63,13 +63,13 @@ fn sm62_read_first_usb_role_change(manual: bool) {
         }
         app.update_application_layout_runtime_with(discovery);
         assert_eq!(app.app_settings.application_layouts[&key].active_layout_id, id);
-        runtime_fixture_wait_select(&packets, cursor, &raw);
+        runtime_fixture_wait_ram(&packets, cursor, &raw);
         let snapshot = app.app_settings.application_layouts[&key].snapshot_for_layout(&app.app_settings.application_layouts[&key].layouts[&id]);
         assert_eq!(snapshot.device_raw.as_ref(), Some(&raw));
         assert_eq!(app.qmk_hid_hosts[&device.path].test_published_snapshot().device_raw.as_ref(), Some(&raw));
         if !manual && half == "app" {
             // Firmware's overlay lease expires while physical unlock is pending.
-            // A fresh SELECT of the already confirmed record reactivates it.
+            // A fresh complete RAM transfer of the confirmed FULL reactivates it.
             let ctx = egui::Context::default();
             app.unlock_open = true;
             assert_eq!(app.start_vial_unlock(&ctx), super::super::vial_hid_task::VialHidTaskStart::Started);
@@ -90,7 +90,7 @@ fn sm62_read_first_usb_role_change(manual: bool) {
                 std::thread::sleep(std::time::Duration::from_millis(1));
             }
             assert_eq!(app.vial_unlocked, Some(true));
-            runtime_fixture_wait_select(&packets, trace_start, &raw);
+            runtime_fixture_wait_ram(&packets, trace_start, &raw);
             if let Some(path) = std::env::var_os("ENTROPY_SM62_UNLOCK_TRACE") {
                 std::fs::write(path, serde_json::to_vec_pretty(&serde_json::json!({
                     "initial":snapshot.packets(), "resident_full":raw,

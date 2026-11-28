@@ -12,6 +12,9 @@ fn empty_host_library_reads_device_resident_catalog_without_mutating_it() {
         if p[..2]==[0xef,9] {
             let mut r=*p;r[2]|=0x80;
             match p[2] {
+                // This schema2 peer predates CATALOG: only a correlated,
+                // zero-padded BAD_ARGUMENT may select the real ENUM fallback.
+                7=>{r[3]=2;r[8..].fill(0);},
                 3=>{r[8..].fill(0);if p[3]==7 {r[3]=0;r[8..32].copy_from_slice(&key);}else{r[3]=1;}},
                 6=>{let offset=u16::from_le_bytes([p[8],p[9]]) as usize;let n=raw.len().saturating_sub(offset).min(20);r[10]=n as u8;r[11]=0;r[12..].fill(0);r[12..12+n].copy_from_slice(&raw[offset..offset+n]);},
                 _=>panic!("device readback must not STORE/SELECT/DELETE: {}",p[2]),

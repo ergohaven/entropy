@@ -79,10 +79,11 @@ fn two_sm62_verified_distinct_owners_both_follow_browser(){
     assert_eq!(app.qmk_hid_hosts[&b.path].application_layout_device_key(),Some(key_b.as_str()));
     assert_eq!(app.app_settings.application_layouts[&key_a].active_layout_id,id);
     assert_eq!(app.app_settings.application_layouts[&key_b].active_layout_id,id);
-    runtime_fixture_wait_select(&packets_a,cursor_a,&raw_a);
-    runtime_fixture_wait_select(&packets_b,cursor_b,&raw_b);
-    assert!(!packets_a.requests()[cursor_a..].iter().any(|q|q[..3]==[0xef,9,2]&&q[28..32]==runtime_fixture_crc(&raw_b).to_le_bytes()));
-    assert!(!packets_b.requests()[cursor_b..].iter().any(|q|q[..3]==[0xef,9,2]&&q[28..32]==runtime_fixture_crc(&raw_a).to_le_bytes()));
+    runtime_fixture_wait_ram(&packets_a,cursor_a,&raw_a);
+    runtime_fixture_wait_ram(&packets_b,cursor_b,&raw_b);
+    assert_ne!(raw_a,raw_b);
+    assert_eq!(app.qmk_hid_hosts[&a.path].test_published_snapshot().device_raw.as_ref(),Some(&raw_a),"unit A received unit B's library");
+    assert_eq!(app.qmk_hid_hosts[&b.path].test_published_snapshot().device_raw.as_ref(),Some(&raw_b),"unit B received unit A's library");
 }
 #[test]
 fn remaining_sm62_rebinds_after_first_unplug_without_editor_selection(){
@@ -90,7 +91,7 @@ fn remaining_sm62_rebinds_after_first_unplug_without_editor_selection(){
     let TwinSm62ReadFirst {mut app,b,key_a,key_b,id,alternate_id,raw_b,raw_after,packets_b,..}=twin_sm62_fixture();
     let cursor=packets_b.requests().len();
     app.update_application_layout_runtime_with(twin_sm62_browser_snapshot());
-    runtime_fixture_wait_select(&packets_b,cursor,&raw_b);
+    runtime_fixture_wait_ram(&packets_b,cursor,&raw_b);
     let archived_a=serde_json::to_value(&app.app_settings.application_layouts[&key_a].layouts).unwrap();
     let (tx,rx)=std::sync::mpsc::channel();
     let (connect_tx,connect_rx)=std::sync::mpsc::channel();app.test_connect_requests=Some(connect_tx);
@@ -113,7 +114,7 @@ fn remaining_sm62_rebinds_after_first_unplug_without_editor_selection(){
     assert_eq!(app.qmk_hid_hosts[&b.path].application_layout_device_key(),Some(key_b.as_str()));
     assert_eq!(app.app_settings.application_layouts[&key_b].active_layout_id,alternate_id);
     assert_eq!(app.app_settings.application_layouts[&key_b].layouts[&alternate_id].layers[15][61],93);
-    runtime_fixture_wait_select(&packets_b,packet_cursor,&raw_after);
+    runtime_fixture_wait_ram(&packets_b,packet_cursor,&raw_after);
     assert_eq!(serde_json::to_value(&app.app_settings.application_layouts[&key_a].layouts).unwrap(),archived_a,"remaining unit modified unplugged unit's bindings");
 }
 #[test]

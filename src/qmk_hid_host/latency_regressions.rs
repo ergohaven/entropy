@@ -11,6 +11,7 @@ fn inert_sm62() -> QmkHidHostBridge {
         HostProtocol::Selected(true),
     );
     bridge.bind_selected_application_layout_device("latency-model-library".into());
+    bridge.set_selected_application_layout_support(true);
     bridge
 }
 fn profile(revision: u32) -> crate::application_layouts::ApplicationLayoutSnapshot {
@@ -104,7 +105,7 @@ fn assert_profile_preempts_media_title(compact_supported: bool) {
             return Some(Ok(*p));
         }
         if compact_supported && p[0] == 0xeb {
-            if p[3] == 2 { return Some(Ok(*p)); } // v1-only peer: correlated schema2 rejection
+            if matches!(p[3], 2 | 3) { return Some(Ok(*p)); } // v1-only peer: correlated newer-schema rejection
             let mut reply = *p;
             reply[2] = 0x5a;
             reply[8] = 3;
@@ -190,7 +191,10 @@ fn assert_profile_preempts_media_title(compact_supported: bool) {
     );
     let requests = recorder.requests();
     let start = before + requests[before..].iter().position(|p|matches!(p[0],0xe1|0xec)).unwrap();
-    assert_eq!(requests[before..start].iter().filter(|p|p[0]==0xeb).count(),2,"v2 probe and validated v1 fallback each run once");
+    let queries: Vec<_> = requests[before..start].iter().filter(|p| p[0] == 0xeb).collect();
+    assert_eq!(queries.iter().map(|p| p[3]).collect::<Vec<_>>(), [3, 2, 1],
+        "host-managed probe, schema2 rejection and validated v1 fallback each run once");
+    assert!(queries.windows(2).all(|q| q[0][4..8] != q[1][4..8]), "fallback reused a capability nonce");
     assert!(requests[before+1..start].iter().all(|p|p[0]==0xeb),"media resumed between capability negotiation and complete current profile");
     assert_eq!(
         requests[start][0],

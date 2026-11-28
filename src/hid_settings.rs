@@ -596,11 +596,39 @@ mod tests {
             if transport_error {assert!(result.is_err());} else {assert_eq!(result.unwrap(),reply_version==8);}
             assert_eq!(recorder.requests().len(),1);
             assert_eq!(&recorder.requests()[0][..5],&[0xe6,8,0xa5,0,0]);
-            for denied in [[0xe6,8,0xa5,1,0],[0xe6,8,0xa5,0,1],[0xe6,9,0xa5,0,0],[0xe5,8,0,0,0]] {
+            for denied in [[0xe6,8,0xa5,1,0],[0xe6,8,0xa5,0,1],[0xe6,10,0xa5,0,0],[0xe5,8,0,0,0]] {
                 assert!(hid.usb_send(&denied).is_err());
             }
             assert_eq!(recorder.requests().len(),1,"denied write reached transport");
         }
+        // Generic matrix geometry adds valid v9 reads; it does not admit event
+        // acknowledgements, dirty padding, unknown versions or schema guesses.
+        let (hid, recorder) = HidDevice::test_read_only_device(crate::hid::ReadOnlyHidSession::default());
+        recorder.respond_by(|p| Some(Ok(*p)));
+        for version in [7, 8, 9] {
+            let poll = [0xe6, version, 0xa5, 0, 0];
+            assert_eq!(&hid.usb_send(&poll).unwrap()[..5], &poll);
+            for index in [2, 3, 4] {
+                let mut bad = poll;
+                bad[index] ^= 1;
+                assert!(hid.usb_send(&bad).is_err(), "v{version} poll byte {index}");
+            }
+            let mut padded = [0; 32];
+            padded[..5].copy_from_slice(&poll);
+            padded[31] = 1;
+            assert!(hid.usb_send(&padded).is_err(), "v{version} poll padding");
+        }
+        let query = crate::application_layouts::ApplicationLayoutGeometry::request(0x12345678);
+        assert_eq!(hid.usb_send(&query).unwrap(), query);
+        for index in [1, 2, 3, 8, 31] {
+            let mut bad = query;
+            bad[index] ^= 0x40;
+            assert!(hid.usb_send(&bad).is_err(), "v9 geometry byte {index}");
+        }
+        for version in [0, 6, 10, 255] {
+            assert!(hid.usb_send(&[0xe6, version, 0xa5, 0, 0]).is_err());
+        }
+        assert_eq!(recorder.requests().len(), 4, "malformed/unknown probe reached transport");
     }
 
     #[test]

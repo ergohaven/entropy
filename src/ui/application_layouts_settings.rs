@@ -1770,6 +1770,7 @@ mod tests {
     fn sm62_saved_catalog_fixture() -> crate::application_layouts::DeviceApplicationLayouts {
         use crate::application_layouts::*;
         let mut settings = DeviceApplicationLayouts::default();
+        settings.geometry = ApplicationLayoutGeometry::legacy(8);
         settings.layouts.get_mut("default").unwrap().layers = vec![vec![42; 62]; 16];
         let presets = builtin_application_layout_presets();
         for preset in &presets {

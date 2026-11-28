@@ -196,6 +196,26 @@ fn runtime_fixture_adopt(app: &mut EntropyApp, path: &str, key: &str, id: &str, 
     assert!(!requests.iter().any(|p|p[0]==5||p[..2]==[0xfe,0x0b]||p[..2]==[0xef,9]&&matches!(p[2],1|4)),"adoption mutated device data");
     adopted_id
 }
+fn runtime_fixture_assert_archive_backup(app: &EntropyApp, key: &str, raw: &[u8]) -> serde_json::Value {
+    let library=&app.app_settings.application_layouts[key];
+    let expected_raw=serde_json::to_value(raw).unwrap();
+    let mut expected_identity=raw[43..63].to_vec();
+    expected_identity.extend_from_slice(&runtime_fixture_crc(raw).to_le_bytes());
+    let backups:Vec<serde_json::Value>=library.host_archive_migrations.values().map(|path|
+        serde_json::from_slice(&std::fs::read(path).expect("durable migration receipt lost its backup")).unwrap()).collect();
+    let backup=backups.iter().find(|value|value["records"].as_array().is_some_and(|records|
+        records.iter().any(|record|record["raw"]==expected_raw))).expect("complete raw archive absent from durable backup");
+    assert_eq!(backup["kind"],"host-managed-complete-legacy-archive");
+    assert_eq!(backup["device_library"],key);
+    let record=backup["records"].as_array().unwrap().iter().find(|r|r["raw"]==expected_raw).unwrap();
+    assert_eq!(record["identity_crc"],serde_json::to_value(expected_identity).unwrap());
+    assert!(record["validation"].is_null());
+    assert!(backup["previous_host_settings"]["application_layouts"].is_object());
+    assert_eq!(crate::app::app_storage::load_app_settings().application_layouts[key],*library,
+        "RAM publication preceded durable host-library persistence");
+    backup.clone()
+}
+
 // Host-managed firmware never SELECTs archive slots. Require a fresh, complete
 // mode1 RAM transfer of the exact adopted FULL instead, not merely a BEGIN/CRC.
 fn runtime_fixture_wait_ram(rec: &crate::hid::TestHidRecorder, cursor: usize, raw: &[u8]) {
@@ -251,11 +271,5 @@ fn runtime_fixture_wait_ram(rec: &crate::hid::TestHidRecorder, cursor: usize, ra
         }
         assert!(std::time::Instant::now()<deadline,"no fresh mode1 RAM COMMIT for confirmed device FULL");
         std::thread::sleep(std::time::Duration::from_millis(5));
-    }
-}
-fn runtime_fixture_wait_select(rec: &crate::hid::TestHidRecorder, cursor: usize, raw: &[u8]) {
-    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(5);
-    loop {if rec.requests()[cursor..].iter().any(|p|p[..3]==[0xef,9,2]&&p[8..28]==raw[43..63]&&p[28..32]==runtime_fixture_crc(raw).to_le_bytes()){break;}
-        assert!(std::time::Instant::now()<deadline,"no fresh SELECT for confirmed device FULL");std::thread::sleep(std::time::Duration::from_millis(5));
     }
 }

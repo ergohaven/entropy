@@ -50,7 +50,7 @@ fn capability(p: &[u8; 32], mode: u8) -> anyhow::Result<[u8; 32]> {
     }
     // This modeled peer implements compact v1, not resident schema2. Reject
     // the newer query correlatively before advertising its actual v1 fields.
-    if p[3] == 2 { return Ok(*p); }
+    if matches!(p[3], 2 | 3) { return Ok(*p); }
     let mut r = *p;
     r[2] = 0x5a;
     r[8] = 3;
@@ -393,7 +393,7 @@ fn dedicated_owner_negotiates_on_its_verified_handle() {
     let all = recorder.requests();
     assert_eq!(
         all.iter().filter(|p| p[0] == 0xeb).map(|p|p[3]).collect::<Vec<_>>(),
-        [2,1],
+        [3,2,1],
         "connection-local capability was needlessly reprobed"
     );
     let start = all.iter().rposition(|p| p[0] == 0xec).unwrap();
@@ -421,6 +421,7 @@ fn compact_does_not_change_macropad_or_non_usb_sm62_wire() {
         }
         let mut snapshot = profile();
         if macropad {
+            snapshot.geometry = crate::application_layouts::ApplicationLayoutGeometry::legacy(7).unwrap();
             for l in &mut snapshot.layers {
                 l.resize(15, 0x22);
             }

@@ -1708,23 +1708,89 @@ impl QmkHidHostBridge {
 
     #[cfg(test)]
     pub(crate) fn test_set_valid_device_inventory(&self) {
-        let raw=include_bytes!("qmk_hid_host/resident_stack_max_full.bin").to_vec();
-        let mut identity_crc=[0;24];identity_crc[..20].copy_from_slice(&raw[43..63]);
-        identity_crc[20..].copy_from_slice(&compact::crc32(&raw).to_le_bytes());
-        validate_recovered_full(&raw,&identity_crc).unwrap();
-        self.application_layout_snapshot.lock().unwrap().resident_recoveries.insert(7,
-            resident100::RecoveredRecord{slot:7,identity_crc,raw,validation:None});
+        self.test_set_device_inventory(vec![(7, include_bytes!("qmk_hid_host/resident_stack_max_full.bin").to_vec())]);
     }
 
     #[cfg(test)]
     pub(crate) fn test_set_device_inventory_for_host_id(&self,id:&str) {
         let mut raw=include_bytes!("qmk_hid_host/resident_stack_max_full.bin").to_vec();
         raw[43..63].copy_from_slice(&wake_identity::digest(id));
-        let mut identity_crc=[0;24];identity_crc[..20].copy_from_slice(&raw[43..63]);
-        identity_crc[20..].copy_from_slice(&compact::crc32(&raw).to_le_bytes());
-        validate_recovered_full(&raw,&identity_crc).unwrap();
-        self.application_layout_snapshot.lock().unwrap().resident_recoveries.insert(7,
-            resident100::RecoveredRecord{slot:7,identity_crc,raw,validation:None});
+        self.test_set_device_inventory(vec![(7, raw)]);
+    }
+
+    // Test-owned OS boundary, not an admission bypass: the production capability
+    // decoder and Background reader must correlate CATALOG/ENUM/READ and confirm
+    // the entire inventory before completed_legacy_archive can return anything.
+    #[cfg(test)]
+    pub(crate) fn test_set_device_inventory(&self, records: Vec<(u8, Vec<u8>)>) {
+        let mut expected = std::collections::BTreeMap::new();
+        for (slot, raw) in &records {
+            assert!(*slot < 100 && !expected.contains_key(slot));
+            let mut identity_crc = [0;24];
+            identity_crc[..20].copy_from_slice(&raw[43..63]);
+            identity_crc[20..].copy_from_slice(&compact::crc32(raw).to_le_bytes());
+            validate_recovered_full(raw, &identity_crc).unwrap();
+            expected.insert(*slot, resident100::RecoveredRecord { slot:*slot, identity_crc, raw:raw.clone(), validation:None });
+        }
+        let ticks = 220 + records.iter().map(|(_,raw)| raw.len().div_ceil(20) + 6).sum::<usize>();
+        let (hid, rec) = crate::hid::HidDevice::test_device();
+        let source = expected.clone();
+        rec.respond_by(move |p| {
+            let mut r = *p;
+            if p[..4] == [0xeb,8,0xa5,3] {
+                r[2] = 0x5a;
+                r[8..16].copy_from_slice(&[3,0,0xd0,0x11,16,62,22,0]);
+                r[16..20].copy_from_slice(&4194304u32.to_le_bytes());
+                r[20..24].copy_from_slice(&1u32.to_le_bytes());
+                r[24..27].copy_from_slice(&[2,100,1]);
+            } else if p[..2] == [0xef,9] {
+                r[2] |= 128;
+                match p[2] {
+                    7 => {
+                        r[3] = 0; r[8..].fill(0);
+                        r[8..12].copy_from_slice(&1u32.to_le_bytes());
+                        r[12] = 100; r[13] = 13;
+                        for slot in source.keys() { r[14 + usize::from(*slot)/8] |= 1 << (*slot%8); }
+                    },
+                    3 => {
+                        r[8..].fill(0);
+                        if let Some(record) = source.get(&p[3]) { r[3]=0; r[8..].copy_from_slice(&record.identity_crc); }
+                        else { r[3]=1; }
+                    },
+                    6 => {
+                        let record = source.get(&p[3]).expect("READ absent fixture slot");
+                        let offset = usize::from(u16::from_le_bytes([p[8],p[9]]));
+                        let n = record.raw.len().saturating_sub(offset).min(20);
+                        r[10]=n as u8; r[11..].fill(0);
+                        r[12..12+n].copy_from_slice(&record.raw[offset..offset+n]);
+                    },
+                    _ => panic!("archive fixture attempted a non-read opcode {}",p[2]),
+                }
+            } else { panic!("unexpected archive fixture request"); }
+            Some(Ok(r))
+        });
+        let mut query = [0;32]; query[..4].copy_from_slice(&[0xeb,8,0xa5,3]);
+        query[4..8].copy_from_slice(&0x61726368u32.to_le_bytes());
+        let reply = hid.usb_send(&query).unwrap();
+        let caps = resident_catalog::capabilities(&query,&reply).expect("correlated archive capability");
+        let (generation, foreground) = {
+            let mut state = self.application_layout_snapshot.lock().unwrap();
+            state.resident_recoveries.clear();
+            state.resident_inventory_complete = false;
+            state.resident_export_capability = Some(resident_catalog::Capability::Resident(caps));
+            (state.generation,state.snapshot.clone())
+        };
+        let dev = HostDataHid::Dedicated(hid);
+        let mut reader = resident100::Background::default();
+        for _ in 0..ticks {
+            reader.tick_with_capabilities(caps,&dev,&self.application_layout_snapshot,&foreground,
+                generation,&AtomicBool::new(false),&mut 0);
+            if self.application_layout_snapshot.lock().unwrap().resident_inventory_complete { break; }
+        }
+        let state = self.application_layout_snapshot.lock().unwrap();
+        assert!(state.resident_inventory_complete,"fixture archive failed production inventory validation");
+        assert_eq!(serde_json::to_value(&state.resident_recoveries).unwrap(),serde_json::to_value(&expected).unwrap());
+        assert!(rec.requests().iter().all(|p|p[0]==0xeb || p[..2]==[0xef,9] && matches!(p[2],3|6|7)));
     }
 
     pub(crate) fn completed_legacy_archive(&self) -> Option<Vec<RecoveredRecord>> {

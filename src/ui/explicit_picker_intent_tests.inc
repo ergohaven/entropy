@@ -59,16 +59,27 @@ fn picker_first_owner_action(edit: bool) {
         }
         // The new owner has not had a runtime tick or mutable accessor.
         let path = picker_intent_attach(&mut app);
+        app.qmk_hid_hosts[&path].test_set_device_inventory(Vec::new());
         app.open_application_picker(edit);
         app.select_application_picker_choice(detected_application("explicit-picker-app", "Explicit picker app"));
         assert!(app.apply_picker_selection(app.application_picker_selected.clone().unwrap()));
         let id = app.application_layout_settings().unwrap().editor_layout_id.clone();
         for _ in 0..2 { app.update_application_layout_runtime(); }
-        let library = app.qmk_hid_hosts[&path].test_published_library();
-        let profile = library.iter().find(|p| p.profile_id.as_ref() == Some(&id))
-            .expect("first-owner picker intent was swallowed as a baseline");
-        assert_eq!(profile.name, "Explicit picker app");
-        assert_eq!(library.len(), 1, "unrelated saved profiles were authorized");
+        let key=app.application_layout_device_key().unwrap();
+        let profile=&app.app_settings.application_layouts[&key].layouts[&id];
+        assert_eq!(profile.name,"Explicit picker app");
+        assert_eq!(profile.executable,"explicit-picker-app");
+        assert!(profile.user_edit_revision>0);
+        assert!(app.application_layout_owner_intents.values().any(|ids|ids.contains(&id)),"first-owner picker intent was swallowed as a baseline");
+        let saved=app.app_settings.application_layouts[&key].clone();
+        assert_eq!(crate::app::app_storage::load_app_settings().application_layouts[&key],saved);
+        assert!(app.activate_application_layout(&id));
+        app.update_application_layout_runtime();
+        let snapshot=app.qmk_hid_hosts[&path].test_published_snapshot();
+        assert!(snapshot.active);
+        assert_eq!(snapshot.profile_id.as_ref(),Some(&id));
+        assert_eq!(snapshot.name,"Explicit picker app");
+        assert!(app.qmk_hid_hosts[&path].test_published_library().is_empty(),"picker uploaded a resident library");
     }
 }
 
@@ -103,5 +114,21 @@ fn picker_pending_action(generation_change: bool) {
     }
     app.update_application_layout_runtime();
     assert!(app.qmk_hid_hosts[&path].test_published_library().is_empty());
+    assert!(!app.qmk_hid_hosts[&path].test_published_snapshot().active,"pending picker action bypassed successor archive confirmation");
+    assert!(app.application_layout_owner_intents.values().all(|ids|!ids.contains(&id)),"pending picker intent crossed the owner fence");
     assert!(app.application_layout_settings().unwrap().layouts.contains_key(&id));
+    app.qmk_hid_hosts[&path].test_set_device_inventory(Vec::new());
+    // Finish the new owner's durable archive migration before a fresh action;
+    // physical inventory alone is not the application's migration receipt.
+    app.update_application_layout_runtime();
+    let settings = app.application_layout_settings().unwrap();
+    assert!(!settings.host_archive_migrations.is_empty());
+    assert!(settings.host_archive_migrations.values().all(|p|std::path::Path::new(p).is_file()));
+    let key = app.application_layout_device_key().unwrap();
+    assert_eq!(crate::app::app_storage::load_app_settings().application_layouts[&key],*settings);
+    assert!(app.activate_application_layout(&id));
+    app.update_application_layout_runtime();
+    let snapshot=app.qmk_hid_hosts[&path].test_published_snapshot();
+    assert!(snapshot.active,"fresh explicit selection after durable archive recovery did not activate RAM");
+    assert_eq!(snapshot.profile_id.as_ref(),Some(&id));
 }
