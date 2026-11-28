@@ -285,17 +285,29 @@ impl BridgeWake {
     fn wake(&self) {
         *self.pending.lock().unwrap_or_else(|e| e.into_inner()) = true;
         self.signal.notify_one();
+        #[cfg(test)]
+        if native_diagnostics::enabled() { native_diagnostics::event("condvar_notify", serde_json::json!({"wake": self as *const Self as usize})); }
     }
 
     /// Waits up to `timeout`; returns whether a wake ended the wait.
     fn wait(&self, timeout: Duration) -> bool {
         #[cfg(test)]
         self.waits.fetch_add(1, Ordering::Relaxed);
+        #[cfg(test)]
+        let diagnostic_wait_started = native_diagnostics::enabled().then(Instant::now);
+        #[cfg(test)]
+        if diagnostic_wait_started.is_some() { native_diagnostics::event("condvar_wait_begin", serde_json::json!({"wake": self as *const Self as usize, "requested_ns": timeout.as_nanos()})); }
         let pending = self.pending.lock().unwrap_or_else(|e| e.into_inner());
+        #[cfg(test)]
+        let diagnostic_pending_before = *pending;
+        #[cfg(test)]
+        let diagnostic_condvar_started = diagnostic_wait_started.map(|_| Instant::now());
         let (mut pending, _) = self
             .signal
             .wait_timeout_while(pending, timeout, |pending| !*pending)
             .unwrap_or_else(|e| e.into_inner());
+        #[cfg(test)]
+        if let Some(started) = diagnostic_condvar_started { native_diagnostics::event("condvar_wait_end", serde_json::json!({"wake": self as *const Self as usize, "requested_ns": timeout.as_nanos(), "actual_condvar_ns": started.elapsed().as_nanos(), "actual_with_lock_ns": diagnostic_wait_started.unwrap().elapsed().as_nanos(), "pending_before": diagnostic_pending_before, "pending_after": *pending})); }
         std::mem::take(&mut *pending)
     }
 }
@@ -1124,7 +1136,15 @@ impl HostOutputLease {
     }
 
     pub(crate) fn try_request<T>(&self, request: impl FnOnce() -> anyhow::Result<T>) -> anyhow::Result<Option<T>> {
-        let Ok(_active) = self.owner.active.try_lock() else { return Ok(None); };
+        #[cfg(test)]
+        let _diagnostic_lease = native_diagnostics::phase("output_lease_try_request", None);
+        let Ok(_active) = self.owner.active.try_lock() else {
+            #[cfg(test)]
+            if native_diagnostics::enabled() { native_diagnostics::event("lease_admission", serde_json::json!({"lease_owner": Arc::as_ptr(&self.owner) as usize, "lease": self.footprint.generation, "owner_generation": self.owner.generation.load(Ordering::SeqCst), "busy": true, "current": self.is_current()})); }
+            return Ok(None);
+        };
+        #[cfg(test)]
+        if native_diagnostics::enabled() { native_diagnostics::event("lease_admission", serde_json::json!({"lease_owner": Arc::as_ptr(&self.owner) as usize, "lease": self.footprint.generation, "owner_generation": self.owner.generation.load(Ordering::SeqCst), "busy": false, "current": self.is_current(), "paused": self.owner.event_poll_pauses.load(Ordering::Acquire)})); }
         anyhow::ensure!(self.is_current(), "Host bridge output session superseded");
         if self.owner.event_poll_pauses.load(Ordering::Acquire) != 0 { return Ok(None); }
         request().map(Some)
@@ -1227,6 +1247,8 @@ pub(crate) fn sm62_owner_library_key(model_key: &str, instance: &str) -> String 
 mod compact;
 mod resident;
 mod resident100;
+#[cfg(test)]
+pub(crate) mod native_diagnostics;
 mod resident_full;
 mod device_profiles;
 pub(crate) use device_profiles::decoded_layout as decode_device_profile;
@@ -1320,6 +1342,8 @@ fn write_application_layout_payload(
     let order = owner.lock().unwrap_or_else(|e| e.into_inner()).output_order.clone();
     let _output = order.lock().unwrap_or_else(|e| e.into_inner());
     let state = owner.lock().unwrap_or_else(|e| e.into_inner());
+    #[cfg(test)]
+    if native_diagnostics::enabled() && packet.first().is_some_and(|b| matches!(*b, 0xeb | 0xef)) { native_diagnostics::event("publication_admission", serde_json::json!({"owner": owner as *const _ as usize, "requested_generation": generation, "generation": state.generation, "publication_generation": state.snapshot_generation, "library_generation": state.library_generation, "snapshot_matches": &state.snapshot == snapshot})); }
     if state.generation != generation || state.snapshot_generation != generation
         || &state.snapshot != snapshot {
         return Ok(false);
@@ -1485,9 +1509,13 @@ impl QmkHidHostBridge {
         let worker_application_layouts_enabled = application_layouts_enabled.clone();
         let send_shutdown_on_drop = Arc::new(AtomicBool::new(true));
         let worker_shutdown = send_shutdown_on_drop.clone();
+        #[cfg(test)]
+        let diagnostic_context = native_diagnostics::context();
         let thread = thread::Builder::new()
             .name("host-bridge".to_owned())
             .spawn(move || {
+                #[cfg(test)]
+                let _diagnostic_scope = native_diagnostics::enter(diagnostic_context);
                 run_bridge(
                     worker_device,
                     mode,
@@ -1593,6 +1621,11 @@ impl QmkHidHostBridge {
         self.application_layout_device_key = Some(key);
     }
 
+    #[cfg(test)]
+    pub(crate) fn test_native_diagnostic_owner_id(&self) -> usize {
+        Arc::as_ptr(&self.application_layout_snapshot) as usize
+    }
+
     pub(crate) fn application_layout_owner_incarnation(&self) -> u64 {
         self.incarnation
     }
@@ -1627,6 +1660,8 @@ impl QmkHidHostBridge {
         &self, snapshot: crate::application_layouts::ApplicationLayoutSnapshot, generation: u64,
     ) -> bool {
         let mut state = self.application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner());
+        #[cfg(test)]
+        if native_diagnostics::enabled() { native_diagnostics::event("publication_request", serde_json::json!({"owner": Arc::as_ptr(&self.application_layout_snapshot) as usize, "requested_generation": generation, "generation": state.generation, "publication_generation": state.snapshot_generation, "binding_generation": self.application_layout_binding_generation, "library_generation": state.library_generation, "verified": state.verified_key.is_some(), "key_matches": state.verified_key.as_ref()==self.application_layout_device_key.as_ref(), "geometry": state.geometry.is_some()})); }
         if state.generation != generation || state.verified_key.is_none()
             || state.verified_key.as_ref() != self.application_layout_device_key.as_ref()
             || self.application_layout_binding_generation != Some(generation) { return false; }
@@ -1645,6 +1680,8 @@ impl QmkHidHostBridge {
         state.snapshot_generation = generation;
         state.snapshot = snapshot;
         if changed { state.published_at = Instant::now(); }
+        #[cfg(test)]
+        if native_diagnostics::enabled() { native_diagnostics::event("publication_accepted", serde_json::json!({"owner": Arc::as_ptr(&self.application_layout_snapshot) as usize, "generation": state.generation, "publication_generation": state.snapshot_generation, "library_generation": state.library_generation, "changed": changed})); }
         // Publish first, then wake the existing owner. A focus change must not
         // wait for the idle tick, and identical UI repaints must remain quiet.
         drop(state);
@@ -2231,6 +2268,8 @@ fn run_bridge(
             }
             let (application_layout, generation, published_at) = {
                 let state = application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner());
+                #[cfg(test)]
+                if native_diagnostics::enabled() { native_diagnostics::event("bridge_owner", serde_json::json!({"owner": Arc::as_ptr(&application_layout_snapshot) as usize, "generation": state.generation, "publication_generation": state.snapshot_generation, "library_generation": state.library_generation, "selected": state.selected, "verified": state.verified_key.is_some(), "geometry": state.geometry.is_some(), "library_records": state.library.len(), "recovered_records": state.resident_recoveries.len(), "inventory_complete": state.resident_inventory_complete})); }
                 (state.snapshot.clone(), state.snapshot_generation, state.published_at)
             };
             if capability_owner_generation != Some(generation) {
@@ -2270,15 +2309,26 @@ fn run_bridge(
                 let legacy = application_layout_transmission.packets(&wire_layout);
                 if compact_usb && compact_capability.is_none() && capability_probe.admit(library_generation) {
                     let result = device_profiles::negotiate_archive(|request| {
+                        #[cfg(test)]
+                        let mut diagnostic_wire = native_diagnostics::Wire::new(request, "schema_negotiation");
                         let mut answer = None;
                         let admitted = write_application_layout_payload(&application_layout_snapshot,
                             &application_layout, generation, request, |p| {
+                                #[cfg(test)]
+                                diagnostic_wire.stage("transport_call");
                                 answer = match dev { HostDataHid::Shared(o) => o.poll_application_layout_event(p)?,
-                                    HostDataHid::Dedicated(h) => Some(h.usb_send(p)?) }; Ok(())
+                                    HostDataHid::Dedicated(h) => Some(h.usb_send(p)?) };
+                                #[cfg(test)]
+                                diagnostic_wire.reply(answer);
+                                Ok(())
                             })?;
+                        #[cfg(test)]
+                        diagnostic_wire.end(if !admitted {"admission_denied"} else if stop.load(Ordering::Acquire) {"stopped_after_reply"} else if answer.is_none() {"busy_no_reply"} else {"reply_delivered_to_negotiator"});
                         anyhow::ensure!(admitted && !stop.load(Ordering::Acquire), "Archive owner revoked");
                         answer.ok_or_else(|| anyhow::anyhow!("Archive owner busy"))
                     });
+                    #[cfg(test)]
+                    if native_diagnostics::enabled() { native_diagnostics::event("capability_result", serde_json::json!({"generation": generation, "library_generation": library_generation, "ok": result.is_ok(), "resident_slots": result.as_ref().ok().and_then(|(c,_)| c.resident()).map(|c| c.slots), "compact": result.as_ref().ok().map(|(_,c)| *c)})); }
                     match result {
                         Ok((capability, compact)) => {
                             let mut state = application_layout_snapshot.lock().unwrap_or_else(|e| e.into_inner());

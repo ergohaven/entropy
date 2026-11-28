@@ -60,13 +60,17 @@ fn exercise_unknown_recovery(fault: u8, automatic: bool) {
     let generation = bridge.application_layout_publication_generation().unwrap();
     // Keep foreground native: recovery must not depend on changing its snapshot.
     assert!(bridge.publish_resident_library_for_generation(vec![snapshot], generation));
+    if native_diagnostics::enabled() { native_diagnostics::event("fixture_owner", serde_json::json!({"unit": "capability", "owner": bridge.test_native_diagnostic_owner_id(), "incarnation": bridge.application_layout_owner_incarnation(), "generation": generation, "expected_bytes": expected.len(), "slot": 0, "fault": fault, "automatic": automatic})); }
     tx.send(()).unwrap();
+    let diagnostic_initial = native_diagnostics::phase("capability.wait_initial_fault_probes", Some(Duration::from_secs(30)));
     super::resident_regressions::wait_for(&rec, |ps| {
         ps.iter().filter(|p| p[0] == 0xeb).count() >= if automatic { 2 } else { 1 }
     });
+    drop(diagnostic_initial);
     let before;
     if automatic {
         before = rec.requests();
+        native_diagnostics::event("phase_marker", serde_json::json!({"phase": "capability.enable_healthy_peer", "prior_requests": before.len()}));
         healthy.store(true, Ordering::Release);
     } else {
         thread::sleep(Duration::from_millis(2600));
@@ -94,7 +98,9 @@ fn exercise_unknown_recovery(fault: u8, automatic: bool) {
         healthy.store(true, Ordering::Release);
         bridge.retry_resident_sync();
     }
+    let diagnostic_enum = native_diagnostics::phase("capability.wait_first_enum", Some(Duration::from_secs(30)));
     super::resident_regressions::wait_for(&rec, |ps| ps.iter().any(|p| p[..3] == [0xef, 9, 3]));
+    drop(diagnostic_enum);
     assert_eq!(
         bridge.application_layout_publication_generation(),
         Some(generation)
@@ -105,14 +111,19 @@ fn exercise_unknown_recovery(fault: u8, automatic: bool) {
         "recovery must retain connection"
     );
     let deadline = Instant::now() + Duration::from_secs(5);
+    let diagnostic_read = native_diagnostics::phase("capability.wait_record_recovery", Some(Duration::from_secs(5)));
+    native_diagnostics::deadline("capability.wait_record_recovery", deadline);
     // Host-managed firmware no longer STOREs a published library. Successful
     // negotiation must finish this profile's authoritative READ, not invent a
     // legacy Synced acknowledgement for a write the production owner forbids.
     // Do not require unrelated empty slots to finish their catalog pass here.
     while bridge.resident_recoveries().is_empty() {
+        if native_diagnostics::enabled() && Instant::now() >= deadline { native_diagnostics::event("deadline_observation", serde_json::json!({"phase": "capability.wait_record_recovery", "assertion": "recovered negotiation must complete read-only profile recovery", "expired": true})); }
         assert!(Instant::now() < deadline, "recovered negotiation must complete read-only profile recovery");
         thread::sleep(Duration::from_millis(5));
     }
+    drop(diagnostic_read);
+    let _diagnostic_assertions = native_diagnostics::phase("capability.original_recovery_and_readonly_assertions", None);
     let recovered = bridge.resident_recoveries();
     assert_eq!(recovered.len(), 1);
     assert_eq!(recovered[0].slot, 0);
@@ -177,6 +188,7 @@ fn validators_require_exact_query_shape_before_accepting_replies() {
 
 #[test]
 fn transient_fault_recovers_automatically_on_same_owner() {
+    let _diagnostic_test = native_diagnostics::begin(native_diagnostics::CAPABILITY);
     exercise_unknown_recovery(1, true);
 }
 

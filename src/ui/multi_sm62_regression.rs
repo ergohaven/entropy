@@ -30,9 +30,12 @@ fn twin_sm62_fixture()->TwinSm62ReadFirst {
     let (alternate_id,raw_after)=runtime_fixture_builtin_record_at_slot("google_chrome","Unit B alternate",93,8);
     assert_eq!(id,id_b); // Same menu identity is NOT shared device content.
     let (hid_b,packets_b,_)=runtime_fixture_hid(vec![(7,raw_b.clone()),(8,raw_after.clone())]);
+    crate::qmk_hid_host::native_diagnostics::event("phase_marker",serde_json::json!({"phase":"twin.setup_B_connect","slots":[7,8],"expected_bytes":[raw_b.len(),raw_after.len()]}));
     runtime_fixture_connect(&mut app,&b,hid_b);
     let key_b=app.application_layout_device_key().unwrap();
+    crate::qmk_hid_host::native_diagnostics::event("phase_marker",serde_json::json!({"phase":"twin.setup_B_adopt_slot7"}));
     let id = runtime_fixture_adopt(&mut app,&b.path,&key_b,&id,&raw_b,&packets_b);
+    crate::qmk_hid_host::native_diagnostics::event("phase_marker",serde_json::json!({"phase":"twin.setup_B_adopt_slot8"}));
     let alternate_id = runtime_fixture_adopt(&mut app,&b.path,&key_b,&alternate_id,&raw_after,&packets_b);
     // Explicit host matching policy, independent of installed-app discovery.
     // Leave byte-exact confirmed device payloads and their revisions untouched.
@@ -43,10 +46,13 @@ fn twin_sm62_fixture()->TwinSm62ReadFirst {
         settings.layouts.get_mut(profile).unwrap().executable =
             if profile == &id { "firefox" } else { "chrome" }.into();
     }
+    crate::qmk_hid_host::native_diagnostics::event("phase_marker",serde_json::json!({"phase":"twin.handoff_B_to_A"}));
     assert!(app.handoff_selected_qmk_hid_host_bridge(&b,&a));
     let (hid_a,packets_a,_)=runtime_fixture_hid(vec![(7,raw_a.clone())]);
+    crate::qmk_hid_host::native_diagnostics::event("phase_marker",serde_json::json!({"phase":"twin.setup_A_connect","slots":[7],"expected_bytes":[raw_a.len()]}));
     runtime_fixture_connect(&mut app,&a,hid_a);
     let key_a=app.application_layout_device_key().unwrap();
+    crate::qmk_hid_host::native_diagnostics::event("phase_marker",serde_json::json!({"phase":"twin.setup_A_adopt_slot7"}));
     let adopted_a = runtime_fixture_adopt(&mut app,&a.path,&key_a,&id,&raw_a,&packets_a);
     assert_eq!(adopted_a, id, "same device record identity must retain its menu identity");
     let settings=app.app_settings.application_layouts.get_mut(&key_a).unwrap();
@@ -87,8 +93,12 @@ fn two_sm62_verified_distinct_owners_both_follow_browser(){
 }
 #[test]
 fn remaining_sm62_rebinds_after_first_unplug_without_editor_selection(){
+    let _diagnostic_test=crate::qmk_hid_host::native_diagnostics::begin(crate::qmk_hid_host::native_diagnostics::TWIN);
     let _storage=crate::app::app_storage::ScopedTempConfig::new();
+    let diagnostic_setup=crate::qmk_hid_host::native_diagnostics::phase("twin.full_original_setup",None);
     let TwinSm62ReadFirst {mut app,b,key_a,key_b,id,alternate_id,raw_b,raw_after,packets_b,..}=twin_sm62_fixture();
+    drop(diagnostic_setup);
+    let _diagnostic_unplug=crate::qmk_hid_host::native_diagnostics::phase("twin.original_unplug_and_rebind",None);
     let cursor=packets_b.requests().len();
     app.update_application_layout_runtime_with(twin_sm62_browser_snapshot());
     runtime_fixture_wait_ram(&packets_b,cursor,&raw_b);
@@ -97,6 +107,7 @@ fn remaining_sm62_rebinds_after_first_unplug_without_editor_selection(){
     let (connect_tx,connect_rx)=std::sync::mpsc::channel();app.test_connect_requests=Some(connect_tx);
     app.device_scan_state=DeviceScanState::Scanning {rx,started_at:std::time::Instant::now(),generation:app.connection_generation,timeout_logged:false,usb_only:true};
     tx.send(Ok(vec![b.clone()])).unwrap();
+    crate::qmk_hid_host::native_diagnostics::event("phase_marker",serde_json::json!({"phase":"twin.reconcile_unplug_A"}));
     app.poll_device_scan(&egui::Context::default());
     assert!(connect_rx.try_recv().is_err(),"USB metadata reconciliation must not open another HID owner");
     assert!(app.selected_device.is_none());
@@ -114,6 +125,7 @@ fn remaining_sm62_rebinds_after_first_unplug_without_editor_selection(){
     assert_eq!(app.qmk_hid_hosts[&b.path].application_layout_device_key(),Some(key_b.as_str()));
     assert_eq!(app.app_settings.application_layouts[&key_b].active_layout_id,alternate_id);
     assert_eq!(app.app_settings.application_layouts[&key_b].layouts[&alternate_id].layers[15][61],93);
+    crate::qmk_hid_host::native_diagnostics::event("phase_marker",serde_json::json!({"phase":"twin.wait_B_alternate_RAM"}));
     runtime_fixture_wait_ram(&packets_b,packet_cursor,&raw_after);
     assert_eq!(serde_json::to_value(&app.app_settings.application_layouts[&key_a].layouts).unwrap(),archived_a,"remaining unit modified unplugged unit's bindings");
 }

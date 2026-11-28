@@ -174,16 +174,21 @@ fn runtime_fixture_connect(app: &mut EntropyApp, device: &crate::device::Device,
     assert!(matches!(app.connect_state,ConnectState::Idle));
     app.update_application_layout_runtime_with(Default::default());
     assert_eq!(app.qmk_hid_hosts[&device.path].application_layout_device_key(),app.application_layout_device_key().as_deref());
+    if crate::qmk_hid_host::native_diagnostics::enabled() { crate::qmk_hid_host::native_diagnostics::event("fixture_owner",serde_json::json!({"owner":app.qmk_hid_hosts[&device.path].test_native_diagnostic_owner_id(),"incarnation":app.qmk_hid_hosts[&device.path].application_layout_owner_incarnation()})); }
 }
 
 fn runtime_fixture_adopt(app: &mut EntropyApp, path: &str, key: &str, id: &str, raw: &[u8], rec: &crate::hid::TestHidRecorder) -> String {
     let deadline=std::time::Instant::now()+std::time::Duration::from_secs(15);
+    let _diagnostic_adopt=crate::qmk_hid_host::native_diagnostics::phase("runtime.adopt_ENUM_READ",Some(std::time::Duration::from_secs(15)));
+    crate::qmk_hid_host::native_diagnostics::deadline("runtime.adopt_ENUM_READ",deadline);
+    if crate::qmk_hid_host::native_diagnostics::enabled() { crate::qmk_hid_host::native_diagnostics::event("adoption_target",serde_json::json!({"owner":app.qmk_hid_hosts[path].test_native_diagnostic_owner_id(),"expected_bytes":raw.len()})); }
     let adopted_id = loop {
         app.update_application_layout_runtime_with(Default::default());
         if let Some(found) = app.app_settings.application_layouts.get(key)
             .and_then(|s|s.device_raw_profiles.iter().find(|(_, bytes)| bytes.as_slice()==raw)) {
             break found.0.clone();
         }
+        if crate::qmk_hid_host::native_diagnostics::enabled() && std::time::Instant::now()>=deadline { crate::qmk_hid_host::native_diagnostics::event("deadline_observation",serde_json::json!({"phase":"runtime.adopt_ENUM_READ","assertion":"actual ENUM/READ never adopted","expired":true})); }
         assert!(std::time::Instant::now()<deadline,
             "actual ENUM/READ never adopted {id} on {path}; actual IDs={:?}; recent packets={:02x?}",
             app.app_settings.application_layouts.get(key).map(|s|s.device_raw_profiles.keys().cloned().collect::<Vec<_>>()),
@@ -194,6 +199,7 @@ fn runtime_fixture_adopt(app: &mut EntropyApp, path: &str, key: &str, id: &str, 
     assert!(requests.iter().any(|p|p[..3]==[0xef,9,3]));
     assert!(requests.iter().any(|p|p[..3]==[0xef,9,6]));
     assert!(!requests.iter().any(|p|p[0]==5||p[..2]==[0xfe,0x0b]||p[..2]==[0xef,9]&&matches!(p[2],1|4)),"adoption mutated device data");
+    crate::qmk_hid_host::native_diagnostics::event("adoption_success",serde_json::json!({"expected_bytes":raw.len()}));
     adopted_id
 }
 fn runtime_fixture_assert_archive_backup(app: &EntropyApp, key: &str, raw: &[u8]) -> serde_json::Value {
@@ -220,6 +226,8 @@ fn runtime_fixture_assert_archive_backup(app: &EntropyApp, key: &str, raw: &[u8]
 // mode1 RAM transfer of the exact adopted FULL instead, not merely a BEGIN/CRC.
 fn runtime_fixture_wait_ram(rec: &crate::hid::TestHidRecorder, cursor: usize, raw: &[u8]) {
     let deadline=std::time::Instant::now()+std::time::Duration::from_secs(5);
+    let _diagnostic_ram=crate::qmk_hid_host::native_diagnostics::phase("runtime.wait_fresh_mode1_RAM",Some(std::time::Duration::from_secs(5)));
+    crate::qmk_hid_host::native_diagnostics::deadline("runtime.wait_fresh_mode1_RAM",deadline);
     loop {
         let requests=rec.requests();
         let packets=&requests[cursor..];
@@ -269,6 +277,7 @@ fn runtime_fixture_wait_ram(rec: &crate::hid::TestHidRecorder, cursor: usize, ra
             } else {continue;};
             if decoded==raw {return;}
         }
+        if crate::qmk_hid_host::native_diagnostics::enabled() && std::time::Instant::now()>=deadline { crate::qmk_hid_host::native_diagnostics::event("deadline_observation",serde_json::json!({"phase":"runtime.wait_fresh_mode1_RAM","assertion":"no fresh mode1 RAM COMMIT for confirmed device FULL","expired":true})); }
         assert!(std::time::Instant::now()<deadline,"no fresh mode1 RAM COMMIT for confirmed device FULL");
         std::thread::sleep(std::time::Duration::from_millis(5));
     }
