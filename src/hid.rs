@@ -300,6 +300,11 @@ type TestHidResponder =
     Box<dyn FnMut(&[u8; MSG_LEN]) -> Option<Result<[u8; MSG_LEN], String>> + Send>;
 
 #[cfg(test)]
+mod test_read_completion;
+#[cfg(test)]
+pub(crate) use test_read_completion::TestReadCompletionGuard;
+
+#[cfg(test)]
 #[derive(Clone)]
 pub(crate) struct TestHidRecorder {
     host_output: std::sync::Arc<crate::qmk_hid_host::HostOutputOwner>,
@@ -366,6 +371,17 @@ impl TestHidRecorder {
             bail!("HID device disconnected");
         }
         Ok(())
+    }
+
+    /// Latest archive work cursor; unrelated settings polls do not imply progress.
+    pub(crate) fn profile_read_cursor(&self) -> Option<[u8; MSG_LEN]> {
+        self.requests
+            .lock()
+            .unwrap_or_else(|error| error.into_inner())
+            .iter()
+            .rev()
+            .find(|packet| packet[..2] == [0xef, 9] && matches!(packet[2], 3 | 6 | 7))
+            .copied()
     }
 
     pub(crate) fn requests(&self) -> Vec<[u8; MSG_LEN]> {

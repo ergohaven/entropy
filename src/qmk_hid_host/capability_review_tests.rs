@@ -104,13 +104,13 @@ fn exercise_unknown_recovery(fault: u8, automatic: bool) {
         1,
         "recovery must retain connection"
     );
-    let deadline = Instant::now() + Duration::from_secs(5);
+    let mut completion = crate::hid::TestReadCompletionGuard::new(Duration::from_secs(5));
     // Host-managed firmware no longer STOREs a published library. Successful
     // negotiation must finish this profile's authoritative READ, not invent a
     // legacy Synced acknowledgement for a write the production owner forbids.
     // Do not require unrelated empty slots to finish their catalog pass here.
     while bridge.resident_recoveries().is_empty() {
-        assert!(Instant::now() < deadline, "recovered negotiation must complete read-only profile recovery");
+        assert!(completion.is_live(rec.profile_read_cursor()), "recovered negotiation must complete read-only profile recovery");
         thread::sleep(Duration::from_millis(5));
     }
     let recovered = bridge.resident_recoveries();

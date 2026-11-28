@@ -232,7 +232,7 @@ fn profile() -> ApplicationLayoutSnapshot {
 pub(super) fn wait_for(recorder: &crate::hid::TestHidRecorder, predicate: impl Fn(&[[u8; 32]]) -> bool) {
     // A complete read-only archive requires hundreds of correlated chunks.
     // This is a completion/deadlock guard, not a product latency requirement.
-    let deadline = Instant::now() + Duration::from_secs(30);
+    let deadline = Instant::now() + crate::hid::TestReadCompletionGuard::TOTAL_TIMEOUT;
     loop {
         if predicate(&recorder.requests()) {
             return;

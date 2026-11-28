@@ -177,14 +177,14 @@ fn runtime_fixture_connect(app: &mut EntropyApp, device: &crate::device::Device,
 }
 
 fn runtime_fixture_adopt(app: &mut EntropyApp, path: &str, key: &str, id: &str, raw: &[u8], rec: &crate::hid::TestHidRecorder) -> String {
-    let deadline=std::time::Instant::now()+std::time::Duration::from_secs(15);
+    let mut completion=crate::hid::TestReadCompletionGuard::new(std::time::Duration::from_secs(15));
     let adopted_id = loop {
         app.update_application_layout_runtime_with(Default::default());
         if let Some(found) = app.app_settings.application_layouts.get(key)
             .and_then(|s|s.device_raw_profiles.iter().find(|(_, bytes)| bytes.as_slice()==raw)) {
             break found.0.clone();
         }
-        assert!(std::time::Instant::now()<deadline,
+        assert!(completion.is_live(rec.profile_read_cursor()),
             "actual ENUM/READ never adopted {id} on {path}; actual IDs={:?}; recent packets={:02x?}",
             app.app_settings.application_layouts.get(key).map(|s|s.device_raw_profiles.keys().cloned().collect::<Vec<_>>()),
             rec.requests().into_iter().rev().take(4).collect::<Vec<_>>());

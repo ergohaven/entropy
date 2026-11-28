@@ -1,5 +1,95 @@
 use super::*;
 
+#[cfg(all(test, not(target_arch = "wasm32")))]
+mod notification_row_tests {
+    use super::*;
+
+    #[test]
+    fn notification_rows_keep_distinct_labels_and_settings() {
+        let _storage = crate::app::app_storage::ScopedTempConfig::new();
+        for language in [crate::i18n::Language::English, crate::i18n::Language::Russian] {
+            for dark in [false, true] {
+                for app_enabled in [false, true] {
+                    for firmware_enabled in [false, true] {
+                        let mut app = EntropyApp::new_inert_for_test();
+                        app.app_settings.language = language;
+                        app.app_settings.app_update_notifications = app_enabled;
+                        app.app_settings.firmware_update_notifications = firmware_enabled;
+                        let before = serde_json::to_value(&app.app_settings).unwrap();
+                        let ctx = egui::Context::default();
+                        ctx.set_visuals(if dark {
+                            egui::Visuals::dark()
+                        } else {
+                            egui::Visuals::light()
+                        });
+                        let rect = egui::Rect::from_min_size(egui::Pos2::ZERO, egui::vec2(1400.0, 2400.0));
+                        let output = crate::app::discard_texture_deltas(ctx.run_ui(
+                            egui::RawInput {
+                                screen_rect: Some(rect),
+                                ..Default::default()
+                            },
+                            |ui| {
+                                let metrics = crate::ui_style::ResponsiveMetrics::from_ctx(ui.ctx());
+                                // Exercise the real row owner on unsupported hosts too,
+                                // without enabling or calling a native notification backend.
+                                let rows = total_app_settings_rows()
+                                    + if crate::app::update_notifications::SUPPORTED {
+                                        0
+                                    } else {
+                                        2
+                                    };
+                                let list = allocate_adaptive_settings_list_viewport(
+                                    ui,
+                                    "notification_rows_regression",
+                                    metrics,
+                                    rows,
+                                    0.0,
+                                );
+                                assert_eq!(list.first_visible_row, 0);
+                                assert_eq!(list.last_visible_row, rows);
+                                crate::ui_style::allocate_ui_at_rect(ui, list.content_rect, |ui| {
+                                    ui.set_clip_rect(list.viewport);
+                                    ui.spacing_mut().item_spacing.y = 0.0;
+                                    app.draw_app_settings_editor_content(ui, &list, metrics, dark);
+                                });
+                            },
+                        ));
+                        fn collect(shape: &egui::Shape, texts: &mut Vec<String>) {
+                            match shape {
+                                egui::Shape::Text(text) => texts.push(text.galley.text().to_owned()),
+                                egui::Shape::Vec(shapes) => {
+                                    for shape in shapes {
+                                        collect(shape, texts);
+                                    }
+                                }
+                                _ => {}
+                            }
+                        }
+                        let mut texts = Vec::new();
+                        for shape in &output.shapes {
+                            collect(&shape.shape, &mut texts);
+                        }
+                        for key in ["notifications.app_label", "notifications.firmware_label"] {
+                            let label = crate::i18n::tr_catalog(language, key);
+                            assert_eq!(
+                                texts.iter().filter(|text| text.as_str() == label).count(),
+                                1,
+                                "notification row missing or duplicated: {key}; {texts:?}"
+                            );
+                        }
+                        assert_eq!(
+                            serde_json::to_value(&app.app_settings).unwrap(),
+                            before,
+                            "painting notification rows changed saved settings"
+                        );
+                        output.drop_without_applying_deltas();
+                    }
+                }
+            }
+        }
+    }
+}
+
 impl EntropyApp {
     fn draw_startup_device_setting(
         &mut self,
@@ -788,7 +878,7 @@ impl EntropyApp {
                 }
                 #[cfg(not(target_arch = "wasm32"))]
                 15 | 16 => {
-                    let firmware = row_idx == 14;
+                    let firmware = row_idx == 16;
                     let setting = if firmware {
                         &mut self.app_settings.firmware_update_notifications
                     } else {
