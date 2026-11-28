@@ -1,14 +1,21 @@
 """Release publication contracts; all binary and account data are fixtures."""
 import hashlib
 import importlib.util
+
 import os
 from pathlib import Path
-import subprocess
+
+import sys
 import tempfile
-import textwrap
+
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
+sys.path.insert(0, str(ROOT / 'scripts'))
+candidate_spec = importlib.util.spec_from_file_location('release_candidate', ROOT / 'scripts/release_candidate.py')
+assert candidate_spec is not None and candidate_spec.loader is not None
+release_candidate = importlib.util.module_from_spec(candidate_spec)
+candidate_spec.loader.exec_module(release_candidate)
 spec = importlib.util.spec_from_file_location("prepare_release_assets", ROOT / "scripts/prepare_release_assets.py")
 assert spec is not None and spec.loader is not None
 assets = importlib.util.module_from_spec(spec)
@@ -78,25 +85,35 @@ class ReleasePublication(unittest.TestCase):
         before, release = workflow.split("\n  release:\n", 1)
         secret = "${{ secrets.ERGOHAVEN_RELEASE_TOKEN }}"
         self.assertNotIn(secret, before)
-        self.assertEqual(release.count(secret), 2)
-        self.assertIn("needs: [build, validate, nix]", release)
-        self.assertIn("draft: true", release)
-        self.assertIn("make_latest: 'false'", release)
-        self.assertIn("fail_on_unmatched_files: true", release)
-        self.assertIn("files: dist/release/*", release)
-        self.assertIn('prepare_release_assets.py --source artifacts --destination dist/release --tag "$GITHUB_REF_NAME"', release)
-        self.assertLess(release.index("Verify release publisher"), release.index("Create GitHub Release"))
-        guard = release.split("      - name: Verify release publisher\n", 1)[1].split("      - name:", 1)[0]
-        shell = textwrap.dedent(guard.split("        run: |\n", 1)[1])
+        self.assertEqual(release.count(secret), 1)
+        self.assertIn('needs: plan', release)
+        self.assertIn('needs: [plan, build, validate, nix]', before)
+        self.assertIn('release_candidate.py fetch', release)
+        self.assertIn('release_candidate.py stage', release)
+        self.assertIn('release_candidate.py publish', release)
+        self.assertLess(release.index('release_candidate.py stage'), release.index(secret))
+        self.assertNotIn('action-gh-release', release)
+        # The owning Python publisher now constructs the typed draft and checks
+        # the actual authenticated actor at EVERY write, not just a YAML guard.
+        owner = (ROOT / 'scripts/release_candidate.py').read_text()
+        self.assertIn("draft=True, prerelease=False, make_latest='false', generate_release_notes=False", owner)
         with tempfile.TemporaryDirectory() as directory:
             gh = Path(directory) / "gh"
-            gh.write_text('#!/bin/sh\nprintf "%s\\n" "$FIXTURE_ACCOUNT"\n')
+            gh.write_text('#!/usr/bin/env python3\nimport os,sys,json\n'
+                          'if sys.argv[2]=="user": print(json.dumps({"login":os.environ["FIXTURE_ACCOUNT"]}))\n'
+                          'else:\n data=json.load(sys.stdin)\n assert data["draft"] is True and data["make_latest"]=="false"\n print(json.dumps(dict(data,id=71)))\n')
             gh.chmod(0o755)
             for account, token, expected in (("kissetfall", "fixture-only", 0), ("other", "fixture-only", 1), ("kissetfall", "", 1)):
                 env = {**os.environ, "PATH": directory + os.pathsep + os.defpath,
                        "GH_TOKEN": token, "FIXTURE_ACCOUNT": account}
-                result = subprocess.run(["bash", "-e", "-c", shell], env=env, capture_output=True)
-                self.assertEqual(result.returncode, expected, (account, bool(token)))
+                from unittest.mock import patch
+                with patch.dict(os.environ, env, clear=True):
+                    if expected:
+                        with self.assertRaises(ValueError):
+                            release_candidate.GitHub(env).mutate('POST', 'repos/ergohaven/entropy/releases', payload={'draft':True, 'make_latest':'false'})
+                    else:
+                        result = release_candidate.GitHub(env).mutate('POST', 'repos/ergohaven/entropy/releases', payload={'draft':True, 'make_latest':'false'})
+                        self.assertEqual(result['id'], 71)
 
 
 if __name__ == "__main__":

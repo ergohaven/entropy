@@ -9,6 +9,57 @@ import json
 
 ROOT = Path(__file__).resolve().parents[2]
 
+WINDOWS_RELEASE_EXPORT = '''
+      - name: Stage qualified Windows release artifact
+        if: matrix.kind == 'windows'
+        shell: bash
+        run: |
+          tag="v$(sh scripts/public_version.sh)"
+          mkdir -p dist/release
+          cp target/release/entropy.exe "dist/release/entropy-${tag}-windows-x86_64.exe"
+      - name: Upload qualified Windows release artifact
+        if: matrix.kind == 'windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-assets-windows-latest
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 14
+'''
+
+LINUX_RELEASE_EXPORT = '''
+      - name: Stage qualified Linux release artifacts
+        run: |
+          prefix="entropy-v$(sh scripts/public_version.sh)"
+          scripts/glibc_baseline.sh target/release/entropy
+          mkdir -p dist/release
+          cp "dist/linux/$prefix-x86_64.AppImage" dist/release/
+          cp dist/linux/*.deb "dist/release/$prefix-amd64.deb"
+          cp dist/linux/*.rpm "dist/release/$prefix-x86_64.rpm"
+          cp dist/linux/*.pkg.tar.zst "dist/release/$prefix-x86_64.pkg.tar.zst"
+      - name: Upload qualified Linux release artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-assets-ubuntu-latest
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Install isolated AppImage startup check dependencies
+        run: sudo apt-get install -y --no-install-recommends xvfb x11-utils dbus-x11 desktop-file-utils python3-pil libegl1 libgl1 libxcb-render0 libxcb-shape0 libxcb-xfixes0 libxkbcommon-x11-0
+      - name: Verify the exact release AppImage starts
+        timeout-minutes: 3
+        run: xvfb-run -a -s '-screen 0 1280x900x24 -nolisten tcp' dbus-run-session -- /usr/bin/python3 scripts/verify_linux_appimage.py --artifact "dist/linux/entropy-v$(sh scripts/public_version.sh)-x86_64.AppImage" --version "$(sh scripts/public_version.sh)" --output "$RUNNER_TEMP/appimage-startup"
+      - name: Retain isolated AppImage startup evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-release-startup
+          path: |
+            ${{ runner.temp }}/appimage-startup/smoke.json
+            ${{ runner.temp }}/appimage-startup/startup.png
+          if-no-files-found: error
+          retention-days: 14
+'''
+
 
 def workflow(name):
     return (ROOT / '.github/workflows' / name).read_text()
@@ -68,7 +119,7 @@ class EntropyCIContract(unittest.TestCase):
                 self.assertIn('          persist-credentials: false\n', checkout.group(1))
 
     def test_full_validation_and_nix_are_release_only_reusable_workflows(self):
-        gate = "if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.')"
+        gate = "if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.event.inputs.prepare_release == 'true')"
         for filename in ('release-validation.yml', 'nix.yml'):
             text = workflow(filename)
             self.assertIn('on:\n  workflow_call:\n', text)
@@ -83,13 +134,16 @@ class EntropyCIContract(unittest.TestCase):
 
     def test_release_requires_full_validation_and_nix_before_publication(self):
         release = workflow('release.yml')
-        gate = "${{ github.repository == 'ergohaven/entropy' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.') }}"
         for name, filename in [('validate', 'release-validation.yml'), ('nix', 'nix.yml')]:
             owner = job(release, name)
-            self.assertIn('if: ' + gate, owner)
+            self.assertIn("if: needs.plan.outputs.prepare == 'true'", owner)
+            self.assertIn('needs: plan', owner)
             self.assertIn('uses: ./.github/workflows/' + filename, owner)
             self.assertNotIn('secrets:', owner)
-        self.assertIn('needs: [build, validate, nix]', job(release, 'release'))
+        self.assertIn('needs: [plan, build, validate, nix]', job(release, 'candidate'))
+        self.assertIn('release_candidate.py pack', job(release, 'candidate'))
+        self.assertIn('needs: plan', job(release, 'release'))
+        self.assertIn('release_candidate.py fetch', job(release, 'release'))
 
     def test_release_workers_are_preserved_byte_for_byte(self):
         baseline = json.loads((ROOT / '.github/scripts/fixtures/release_validation_workers.json').read_text())
@@ -100,7 +154,14 @@ class EntropyCIContract(unittest.TestCase):
         for filename, jobs in baseline['workers'].items():
             for name, digest in jobs.items():
                 with self.subTest(workflow=filename, job=name):
-                    self.assertEqual(hashlib.sha256(job(workflow(filename), name).encode()).hexdigest(), digest)
+                    actual = job(workflow(filename), name)
+                    # Reverse only the two new copy/upload additions; preserve
+                    # the immutable hashes of every original worker command.
+                    if filename == 'release-validation.yml' and name in ('build', 'container'):
+                        addition = WINDOWS_RELEASE_EXPORT if name == 'build' else LINUX_RELEASE_EXPORT
+                        self.assertEqual(actual.count(addition), 1)
+                        actual = actual.replace(addition, '', 1)
+                    self.assertEqual(hashlib.sha256(actual.encode()).hexdigest(), digest)
 
     def test_build_gates_all_expensive_owners(self):
         text = workflow('release-validation.yml')

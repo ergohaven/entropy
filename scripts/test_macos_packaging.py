@@ -206,6 +206,32 @@ fi
 
 
 class ReleaseSigning(unittest.TestCase):
+    def test_candidate_signing_requires_main_and_exact_workflow_opt_in(self):
+        trusted = dict(GITHUB_REPOSITORY='ergohaven/entropy',
+                       GITHUB_EVENT_NAME='workflow_dispatch',
+                       GITHUB_REF='refs/heads/main',
+                       GITHUB_WORKFLOW_REF='ergohaven/entropy/.github/workflows/release.yml@refs/heads/main',
+                       ENTROPY_RELEASE_CANDIDATE='1')
+        cases = [({}, True)]
+        for key, values in {
+            'GITHUB_REPOSITORY': ['other/entropy'],
+            'GITHUB_EVENT_NAME': ['push', 'pull_request', 'pull_request_target'],
+            'GITHUB_REF': ['refs/heads/other', 'refs/pull/1/merge'],
+            'GITHUB_WORKFLOW_REF': ['', 'other/entropy/.github/workflows/release.yml@refs/heads/main',
+                                    'ergohaven/entropy/.github/workflows/build.yml@refs/heads/main'],
+            'ENTROPY_RELEASE_CANDIDATE': ['', '0', 'true'],
+        }.items():
+            cases.extend(({key: value}, False) for value in values)
+        for overrides, allowed in cases:
+            with self.subTest(overrides=overrides):
+                env = dict(os.environ, **(trusted | overrides))
+                for key in ('MACOS_CERTIFICATE_P12_BASE64', 'MACOS_CERTIFICATE_PASSWORD', 'MACOS_SIGNING_TEST'):
+                    env.pop(key, None)
+                result = subprocess.run(['bash', str(ROOT / 'scripts/sign_macos_release.sh')],
+                                        env=env, capture_output=True, text=True)
+                self.assertNotEqual(result.returncode, 0)
+                self.assertIn('Missing signing credentials' if allowed else 'Signing is restricted', result.stderr)
+
     def test_manual_signing_requires_exact_upstream_branch_and_explicit_opt_in(self):
         trusted = dict(GITHUB_REPOSITORY='ergohaven/entropy',
                        GITHUB_EVENT_NAME='workflow_dispatch',
@@ -243,7 +269,7 @@ class ReleaseSigning(unittest.TestCase):
             self.assertIn('restricted to upstream release tags', result.stderr)
 
     def test_search_list_restored_on_success_and_packaging_failure(self):
-        cases = [(event, status, failure) for event in ['push', 'workflow_dispatch']
+        cases = [(event, status, failure) for event in ['push', 'workflow_dispatch', 'candidate']
                  for status in [0, 17] for failure in [0, 1]]
         for event, packaging_status, cleanup_failure in cases:
             with self.subTest(event=event, packaging_status=packaging_status,
@@ -273,9 +299,13 @@ esac''')
 [[ "$CODESIGN_IDENTITY" == 50B8A2614631D0EE1705213D19D07A52C921D665 ]]
 exit "$PACKAGING_STATUS"''')
                 env = dict(os.environ, PATH=f'{tools}:/usr/bin:/bin', RUNNER_TEMP=tmp,
-                           GITHUB_REPOSITORY='ergohaven/entropy', GITHUB_EVENT_NAME=event,
+                           GITHUB_REPOSITORY='ergohaven/entropy',
+                           GITHUB_EVENT_NAME='workflow_dispatch' if event == 'candidate' else event,
                            GITHUB_REF=('refs/tags/v0.99.0' if event == 'push' else
+                                       'refs/heads/main' if event == 'candidate' else
                                        'refs/heads/ci/macos-signing-validation-pr195'),
+                           GITHUB_WORKFLOW_REF='ergohaven/entropy/.github/workflows/release.yml@refs/heads/main',
+                           ENTROPY_RELEASE_CANDIDATE='1' if event == 'candidate' else '0',
                            MACOS_SIGNING_TEST='1', TARGET='aarch64-apple-darwin',
                            CLEANUP_FAILURE=str(cleanup_failure),
                            MACOS_CERTIFICATE_P12_BASE64='not-a-certificate-fixture',

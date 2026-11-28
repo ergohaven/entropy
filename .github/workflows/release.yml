@@ -1,10 +1,13 @@
 name: Release
 
 on:
-  # Registered on main; a maintainer copies the reviewed SHA to the exact test
-  # branch before dispatch. No input can select arbitrary source with secrets.
   workflow_dispatch:
     inputs:
+      prepare_release:
+        description: 'Qualify one frozen release candidate on main (no publication)'
+        required: true
+        type: boolean
+        default: false
       macos_signing_test:
         description: 'Validate pinned signing on the dedicated upstream branch (artifacts only)'
         required: true
@@ -16,32 +19,57 @@ on:
 
 permissions:
   contents: read
+  actions: read
+
+concurrency:
+  group: entropy-release-${{ github.event_name }}-${{ github.ref }}
+  cancel-in-progress: false
 
 jobs:
+  plan:
+    name: Resolve frozen release candidate
+    if: ${{ github.repository == 'ergohaven/entropy' && ((github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && inputs.prepare_release == true)) }}
+    runs-on: ubuntu-latest
+    outputs:
+      prepare: ${{ steps.plan.outputs.prepare }}
+      tag: ${{ steps.plan.outputs.tag }}
+      candidate_run_id: ${{ steps.plan.outputs.candidate_run_id }}
+      candidate_artifact_id: ${{ steps.plan.outputs.candidate_artifact_id }}
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+      - name: Require exact source and an eligible candidate
+        id: plan
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release_candidate.py plan
+
   validate:
     name: Full release validation
-    if: ${{ github.repository == 'ergohaven/entropy' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.') }}
+    needs: plan
+    if: needs.plan.outputs.prepare == 'true'
     uses: ./.github/workflows/release-validation.yml
 
   nix:
     name: Release Nix validation
-    if: ${{ github.repository == 'ergohaven/entropy' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.') }}
+    needs: plan
+    if: needs.plan.outputs.prepare == 'true'
     uses: ./.github/workflows/nix.yml
 
   build:
-    name: Build (${{ matrix.os }})
-    # Stable tags such as v0.1.2 publish as latest releases.
-    # Suffix tags such as v0.1.2-rc.1 publish as prereleases.
-    if: ${{ github.repository == 'ergohaven/entropy' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.') }}
+    name: Sign qualified macOS (${{ matrix.arch }})
+    needs: [plan, validate]
+    if: needs.plan.outputs.prepare == 'true'
     runs-on: ${{ matrix.os }}
+    env:
+      RELEASE_TAG: ${{ needs.plan.outputs.tag }}
+      ENTROPY_RELEASE_CANDIDATE: '1'
     strategy:
       fail-fast: false
       matrix:
         include:
-          - os: ubuntu-latest
-            kind: linux
-          - os: windows-latest
-            kind: windows
           - os: macos-26
             kind: macos
             arch: arm64
@@ -50,63 +78,19 @@ jobs:
             kind: macos
             arch: x86_64
             target: x86_64-apple-darwin
-
     steps:
       - uses: actions/checkout@v7
-
-      - name: Install Rust
-        if: matrix.kind != 'linux'
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Cache Rust
-        if: matrix.kind != 'linux'
-        uses: Swatinem/rust-cache@v2
-
-      - name: Install macOS Rust target
-        if: matrix.kind == 'macos'
-        run: rustup target add ${{ matrix.target }}
-
-      - name: Install go-task
-        if: matrix.kind == 'linux'
-        uses: arduino/setup-task@v2
         with:
-          version: 3.44.0
-
-      - name: Build
-        if: matrix.kind == 'windows'
-        run: cargo build --release
-
-      - name: Package Linux artifacts
-        if: matrix.kind == 'linux'
-        shell: bash
-        run: |
-          prefix="entropy-${GITHUB_REF_NAME}"
-          VERSION="${GITHUB_REF_NAME#v}" task docker:linux
-          mkdir -p dist/release
-          cp "dist/linux/$prefix-x86_64.AppImage" dist/release/
-          cp dist/linux/*.deb "dist/release/$prefix-amd64.deb"
-          cp dist/linux/*.rpm "dist/release/$prefix-x86_64.rpm"
-          cp dist/linux/*.pkg.tar.zst "dist/release/$prefix-x86_64.pkg.tar.zst"
-          printf 'Release Linux artifacts glibc requirement: '
-          scripts/glibc_baseline.sh target/release/entropy
-
-      - name: Package Windows artifact
-        if: matrix.kind == 'windows'
-        shell: bash
-        run: |
-          mkdir -p dist/release
-          asset="entropy-${GITHUB_REF_NAME}-windows-x86_64.exe"
-          cp target/release/entropy.exe "dist/release/$asset"
-
-      # Neither Cargo nor swiftc runs with signing credentials in its environment.
-      - name: Build macOS binary and certificate importer
-        if: matrix.kind == 'macos'
-        env:
-          MACOSX_DEPLOYMENT_TARGET: '10.15'
-        run: |
-          cargo build --locked --release --target "${{ matrix.target }}"
-          swiftc scripts/import_macos_certificate.swift -o "$RUNNER_TEMP/entropy-certificate-import"
-
+          persist-credentials: false
+      - name: Download the already qualified native app
+        uses: actions/download-artifact@v8
+        with:
+          name: entropy-macos-${{ matrix.arch }}
+          path: dist/qualified
+      - name: Stage the exact qualified executable without recompilation
+        run: python3 scripts/stage_macos_release_binary.py --source dist/qualified --target "${{ matrix.target }}"
+      - name: Compile the certificate importer without signing credentials
+        run: swiftc scripts/import_macos_certificate.swift -o "$RUNNER_TEMP/entropy-certificate-import"
       - name: Sign macOS app and build DMG
         if: matrix.kind == 'macos'
         shell: bash
@@ -128,7 +112,7 @@ jobs:
         with:
           name: release-signing-evidence-${{ matrix.arch }}
           if-no-files-found: error
-          retention-days: 7
+          retention-days: 14
           path: |
             dist/signing-test/signing-evidence.txt
             dist/signing-test/SHA256SUMS
@@ -138,13 +122,15 @@ jobs:
         shell: bash
         run: |
           mkdir -p dist/release
-          asset="entropy-${GITHUB_REF_NAME}-macos-${{ matrix.arch }}.dmg"
+          asset="entropy-${RELEASE_TAG}-macos-${{ matrix.arch }}.dmg"
           cp dist/macos/*.dmg "dist/release/$asset"
 
       - name: Upload artifact
         uses: actions/upload-artifact@v7
         with:
           name: release-assets-${{ matrix.os }}
+          if-no-files-found: error
+          retention-days: 14
           path: dist/release/*
 
   macos-signing-test:
@@ -213,54 +199,64 @@ jobs:
             dist/signing-test/SHA256SUMS
             dist/signing-test/signing-evidence.txt
 
-  release:
-    name: Create Release
-    needs: [build, validate, nix]
-    if: ${{ github.repository == 'ergohaven/entropy' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.') }}
-    permissions:
-      contents: write
+  candidate:
+    name: Freeze qualified release candidate
+    needs: [plan, build, validate, nix]
+    if: needs.plan.outputs.prepare == 'true'
     runs-on: ubuntu-latest
+    env:
+      RELEASE_TAG: ${{ needs.plan.outputs.tag }}
     steps:
       - uses: actions/checkout@v7
-
-      - name: Download all artifacts
+        with:
+          persist-credentials: false
+      - name: Download qualified public binaries
         uses: actions/download-artifact@v8
         with:
           pattern: release-assets-*
-          path: artifacts/
+          path: artifacts
+      - name: Download full qualification proofs
+        uses: actions/download-artifact@v8
+        with:
+          pattern: ci-proof-*
+          path: proofs
+      - name: Download public native signing proofs
+        uses: actions/download-artifact@v8
+        with:
+          pattern: release-signing-evidence-*
+          path: signing
+      - name: Validate and freeze exact bytes with their source identity
+        run: python3 scripts/release_candidate.py pack --assets artifacts --proofs proofs --signing signing --output dist/candidate --tag "$RELEASE_TAG"
+      - name: Retain the verified candidate for promotion
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-candidate
+          path: dist/candidate/
+          if-no-files-found: error
+          retention-days: 14
 
-      - name: Verify release inventory and write checksums
-        run: python3 scripts/prepare_release_assets.py --source artifacts --destination dist/release --tag "$GITHUB_REF_NAME"
-
-      - name: Write release notes
-        shell: bash
-        run: |
-          awk -v version="${GITHUB_REF_NAME}" '
-            /^## / {
-              if (capturing) exit
-              if ($2 == version) capturing = 1
-            }
-            capturing { print }
-            END { if (!capturing) exit 1 }
-          ' CHANGELOG.md > RELEASE_NOTES.md
-
-      - name: Verify release publisher
+  release:
+    name: Publish verified candidate without rebuilding
+    needs: plan
+    if: ${{ github.repository == 'ergohaven/entropy' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.') }}
+    permissions:
+      contents: read
+      actions: read
+    concurrency:
+      group: entropy-publish
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Fetch the exact successful candidate by run and artifact identity
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/release_candidate.py fetch --run-id "${{ needs.plan.outputs.candidate_run_id }}" --artifact-id "${{ needs.plan.outputs.candidate_artifact_id }}" --output "$RUNNER_TEMP/candidate"
+      - name: Verify and stage the unchanged public file inventory
+        run: python3 scripts/release_candidate.py stage --candidate "$RUNNER_TEMP/candidate" --output dist/release
+      - name: Verify stored draft bytes, publish and read back public downloads
         env:
           GH_TOKEN: ${{ secrets.ERGOHAVEN_RELEASE_TOKEN }}
-        run: |
-          test -n "$GH_TOKEN"
-          test "$(gh api user --jq .login)" = kissetfall
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          token: ${{ secrets.ERGOHAVEN_RELEASE_TOKEN }}
-          tag_name: ${{ github.ref_name }}
-          target_commitish: ${{ github.sha }}
-          name: Entropy ${{ github.ref_name }}
-          draft: true
-          prerelease: ${{ contains(github.ref_name, '-') }}
-          make_latest: 'false'
-          body_path: RELEASE_NOTES.md
-          fail_on_unmatched_files: true
-          files: dist/release/*
+        run: python3 scripts/release_candidate.py publish --candidate "$RUNNER_TEMP/candidate"

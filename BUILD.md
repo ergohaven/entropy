@@ -20,12 +20,42 @@ distributions.
 Pushes to `main` and pull requests to `main` or `rynk` run only the inexpensive
 workflow-contract checks. Artifact compilation remains a manual action.
 
-The full validation is reserved for `v0.*` release tags. The Release workflow
-calls `release-validation.yml` for the existing native tests, reproducible Linux
-container builds and clean-distribution installation checks, and calls `nix.yml`
-for both supported Nix systems. Release assets can be staged only after those
-checks and the release builds succeed. The existing signing and manual signing
-validation controls are unchanged.
+### Prepare once, promote the same files
+
+Prepare the intended public version and changelog on `main`, then run
+**Actions → Release → Run workflow** on `main` with **prepare_release** enabled
+and **macos_signing_test** disabled. An already tagged or published version is
+rejected before expensive work starts.
+
+Preparation calls `release-validation.yml` for the full native suites,
+reproducible Linux container builds and clean-distribution installation checks,
+and `nix.yml` for both supported systems. The exact Linux AppImage is also started
+under an isolated virtual display, with its startup receipt and screenshot retained.
+Linux and Windows release files come
+from those successful owners, without a second production build. macOS signing
+reuses the qualified app executable; its importer is compiled before credentials
+are provided, and signatures, readonly-mounted DMGs and keychain cleanup retain
+their existing checks. The separate opted-in signing-test branch is unchanged.
+
+The successful run retains a **release-candidate** artifact for 14 days. Repeating
+preparation for the same commit reuses an available qualified candidate instead
+of rerunning the matrix; the new run summary links to the original artifact. It binds
+the exact commit, tree, version, qualification proofs, signing evidence and seven
+public binaries plus their checksum file. Nothing is published during preparation.
+
+To publish, create and push the intended annotated `v0.*` tag at that candidate's
+exact commit, using the authorized maintainer identity. The tag workflow finds
+the successful candidate and verifies its source and frozen bytes. It performs
+no Rust builds or native test reruns: the same files are staged in a draft,
+downloaded and checked before publication as Latest, then downloaded again
+through their anonymous public URLs.
+
+A missing, expired, failed or different-source candidate blocks promotion; it
+never silently starts another full build. If source, version or packaging changes,
+prepare the corrected commit explicitly. A publication retry reuses matching
+stored files and never overwrites a conflicting asset or moves an existing tag.
+Publications are serialized across tags, and an older delayed candidate cannot
+replace an already newer Latest release.
 
 ## Two ways to build
 

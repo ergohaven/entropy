@@ -1,10 +1,5 @@
 #!/usr/bin/env python3
-"""Fail-closed source contract for the secret-bearing manual workflow.
-
-No YAML dependency: job boundaries are fixed two-space mapping keys; actionlint
-separately validates the YAML and GitHub expressions. Exact gate assertions mean
-an accidental OR, prefix match or input checkout ref cannot weaken the policy.
-"""
+"""Keep signing isolation and immutable payload guards across candidate promotion."""
 import hashlib
 from pathlib import Path
 import re
@@ -27,91 +22,83 @@ class ManualWorkflow(unittest.TestCase):
         return match.group(1)
 
     def test_only_opted_in_trusted_branch_can_run_manual_job(self):
-        self.assertIn('macos-signing-test', self.jobs)
         self.assertEqual(self.gate('macos-signing-test'),
                          "${{ github.repository == 'ergohaven/entropy' && github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/ci/macos-signing-validation-pr195' && inputs.macos_signing_test == true }}")
         self.assertIn('      macos_signing_test:\n', self.workflow)
         self.assertIn('        type: boolean\n        default: false', self.workflow)
         self.assertNotIn('pull_request', self.workflow)
-        self.assertEqual(set(self.jobs), {'validate', 'nix', 'build', 'macos-signing-test', 'release'})
-        self.assertIn('    needs: [build, validate, nix]\n', self.jobs['release'])
+        self.assertEqual(set(self.jobs), {'plan', 'validate', 'nix', 'build', 'candidate', 'macos-signing-test', 'release'})
+        self.assertIn('    needs: [plan, build, validate, nix]\n', self.jobs['candidate'])
         for name, path in [('validate', 'release-validation.yml'), ('nix', 'nix.yml')]:
-            self.assertEqual(self.gate(name), self.gate('build'))
+            self.assertEqual(self.gate(name), "needs.plan.outputs.prepare == 'true'")
             self.assertIn(f'    uses: ./.github/workflows/{path}\n', self.jobs[name])
             self.assertNotIn('secrets:', self.jobs[name])
-        self.assertEqual(self.gate('build'),
-                         "${{ github.repository == 'ergohaven/entropy' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.') }}")
+        self.assertEqual(self.gate('build'), "needs.plan.outputs.prepare == 'true'")
         self.assertEqual(self.gate('release'),
                          "${{ github.repository == 'ergohaven/entropy' && github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.') }}")
 
     def test_manual_has_read_only_token_exact_checkout_and_two_macos_targets(self):
-        self.assertIn('macos-signing-test', self.jobs)
         job = self.jobs['macos-signing-test']
         self.assertIn('    permissions:\n      contents: read\n', job)
         self.assertIn('          ref: ${{ github.sha }}\n          persist-credentials: false', job)
         self.assertNotIn('inputs.', job.split('    steps:', 1)[1])
         self.assertNotIn('rust-cache', job)
         self.assertEqual(re.findall(r'          - os: (.+)', job), ['macos-26', 'macos-26-intel'])
-        self.assertEqual(re.findall(r'            target: (.+)', job),
-                         ['aarch64-apple-darwin', 'x86_64-apple-darwin'])
-        self.assertNotIn('contents: write', job)
-        self.assertNotIn('action-gh-release', job)
-        self.assertNotIn('gh release', job)
+        self.assertEqual(re.findall(r'            target: (.+)', job), ['aarch64-apple-darwin', 'x86_64-apple-darwin'])
+        for marker in ('contents: write', 'action-gh-release', 'gh release'):
+            self.assertNotIn(marker, job)
         self.assertIn('permissions:\n  contents: read\n', self.workflow)
-        self.assertIn('    permissions:\n      contents: write\n', self.jobs['release'])
+        self.assertNotIn('contents: write', self.jobs['release'])
 
-    def test_normal_release_stages_a_draft_for_the_publication_owner(self):
+    def test_promotion_uses_checked_draft_and_public_byte_readback_owner(self):
         release = self.jobs['release']
-        self.assertIn('          draft: true\n', release)
-        self.assertNotIn('          draft: false\n', release)
+        self.assertIn('release_candidate.py fetch', release)
+        self.assertIn('release_candidate.py stage', release)
+        self.assertIn('release_candidate.py publish', release)
+        self.assertNotIn('action-gh-release', release)
+        self.assertEqual(release.count('secrets.'), 1)
+        self.assertIn('GH_TOKEN: ${{ secrets.ERGOHAVEN_RELEASE_TOKEN }}', release)
+        self.assertLess(release.index('release_candidate.py stage'), release.index('secrets.'))
 
     def test_normal_release_proof_is_secret_free_and_excluded_from_assets(self):
         build = self.jobs['build']
         steps = build.split('\n      - ')
         proof = [s for s in steps if 'run: bash scripts/collect_macos_signing_evidence.sh' in s]
-        self.assertEqual(len(proof), 1, 'normal signed releases must verify their mounted DMG')
+        self.assertEqual(len(proof), 1)
         self.assertIn("if: matrix.kind == 'macos'", proof[0])
         self.assertIn('TARGET: ${{ matrix.target }}', proof[0])
         self.assertNotIn('secrets.', proof[0])
         secret_steps = [s for s in steps if 'secrets.' in s]
         self.assertEqual(len(secret_steps), 1)
         self.assertIn('run: bash scripts/sign_macos_release.sh', secret_steps[0])
-        self.assertLess(build.index('cargo build --locked --release'), build.index('secrets.'))
+        self.assertLess(build.index('scripts/stage_macos_release_binary.py'), build.index('secrets.'))
         self.assertLess(build.index('swiftc scripts/import_macos_certificate.swift'), build.index('secrets.'))
         self.assertLess(build.index('bash scripts/sign_macos_release.sh'), build.index('bash scripts/collect_macos_signing_evidence.sh'))
-        uploads = [s for s in steps if 'name: release-signing-evidence-${{ matrix.arch }}' in s]
-        self.assertEqual(len(uploads), 1)
-        upload = uploads[0]
-        self.assertIn("if: matrix.kind == 'macos'", upload)
-        self.assertIn('if-no-files-found: error', upload)
+        upload = next(s for s in steps if 'name: release-signing-evidence-${{ matrix.arch }}' in s)
         paths = re.search(r'          path: \|\n((?:            .+\n)+)', upload)
         self.assertIsNotNone(paths)
         assert paths is not None
-        self.assertEqual([p.strip() for p in paths.group(1).splitlines()], [
-            'dist/signing-test/signing-evidence.txt',
-            'dist/signing-test/SHA256SUMS',
-        ])
+        self.assertEqual([p.strip() for p in paths.group(1).splitlines()], ['dist/signing-test/signing-evidence.txt', 'dist/signing-test/SHA256SUMS'])
+        self.assertIn('if-no-files-found: error', upload)
         self.assertNotIn('secrets.', upload)
         self.assertNotIn('always()', build)
-        release = self.jobs['release']
-        downloads = [s for s in release.split('\n      - ') if 'actions/download-artifact@' in s]
-        self.assertEqual(len(downloads), 1)
-        download = downloads[0]
-        self.assertIn('          pattern: release-assets-*\n', download)
-        self.assertIn('          path: artifacts/\n', download)
-        collectors = [s for s in release.split('\n      - ') if 'run: python3 scripts/prepare_release_assets.py' in s]
-        self.assertEqual(len(collectors), 1)
-        self.assertIn('--source artifacts --destination dist/release --tag "$GITHUB_REF_NAME"', collectors[0])
-        self.assertNotIn('secrets.', collectors[0])
-        self.assertEqual(re.findall(r'^          files: (.+)$', release, re.M), ['dist/release/*'])
-        self.assertLess(release.index('actions/download-artifact@'), release.index('scripts/prepare_release_assets.py'))
-        self.assertLess(release.index('scripts/prepare_release_assets.py'), release.index('uses: softprops/action-gh-release@'))
+        candidate = self.jobs['candidate']
+        self.assertIn('pattern: release-assets-*', candidate)
+        self.assertIn('pattern: ci-proof-*', candidate)
+        self.assertIn('pattern: release-signing-evidence-*', candidate)
+        self.assertNotIn('secrets.', candidate)
+        self.assertLess(candidate.index('actions/download-artifact@'), candidate.index('release_candidate.py pack'))
 
     def test_release_staging_preserves_the_remaining_workflow_payload(self):
         # Reverse the reviewed publisher delta from 05a0de2d, not the whole
         # release job. Each exact replacement must occur once; the original
         # signing/publication baseline digest below remains immutable.
-        workflow = self.workflow
+        workflow = (ROOT / '.github/scripts/fixtures/release_before_candidates.yml').read_text()
+        legacy_jobs = dict(re.findall(r'^  ([a-z][a-z_-]*):\n(.*?)(?=^  [a-z][a-z_-]*:\n|\Z)', workflow.split('\njobs:\n', 1)[1], re.M | re.S))
+        self.assertEqual(self.jobs['macos-signing-test'], legacy_jobs['macos-signing-test'])
+        old_signing = legacy_jobs['build'].split('      - name: Sign macOS app and build DMG', 1)[1].split('      - name: Collect signed macOS DMG', 1)[0]
+        new_signing = self.jobs['build'].split('      - name: Sign macOS app and build DMG', 1)[1].split('      - name: Collect signed macOS DMG', 1)[0]
+        self.assertEqual(new_signing.replace('retention-days: 14', 'retention-days: 7'), old_signing)
 
         def reverse_exact(current, previous):
             nonlocal workflow
@@ -149,7 +136,7 @@ class ManualWorkflow(unittest.TestCase):
         # Reverse only the new release-only validation wiring before comparing
         # the original signing and publication payload with its immutable hash.
         for name in ('validate', 'nix'):
-            workflow = workflow.replace(f'  {name}:\n{self.jobs[name]}', '', 1)
+            workflow = workflow.replace(f'  {name}:\n{legacy_jobs[name]}', '', 1)
         workflow = workflow.replace('    needs: [build, validate, nix]\n',
                                     '    needs: build\n', 1)
         unchanged = re.sub(

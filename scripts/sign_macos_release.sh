@@ -8,9 +8,13 @@ source "$ROOT/scripts/macos_stable_signing.sh"
    ( "${GITHUB_EVENT_NAME:-}" == push && "${GITHUB_REF:-}" == refs/tags/v0.* ) ||
    ( "${GITHUB_EVENT_NAME:-}" == workflow_dispatch &&
      "${GITHUB_REF:-}" == refs/heads/ci/macos-signing-validation-pr195 &&
-     "${MACOS_SIGNING_TEST:-}" == 1 )
+     "${MACOS_SIGNING_TEST:-}" == 1 ) ||
+   ( "${GITHUB_EVENT_NAME:-}" == workflow_dispatch &&
+     "${GITHUB_REF:-}" == refs/heads/main &&
+     "${GITHUB_WORKFLOW_REF:-}" == ergohaven/entropy/.github/workflows/release.yml@refs/heads/main &&
+     "${ENTROPY_RELEASE_CANDIDATE:-}" == 1 )
 ) ]] || {
-    echo 'Signing is restricted to upstream release tags or the opted-in manual test branch' >&2
+    echo 'Signing is restricted to upstream release tags, the exact opted-in main candidate or manual test branch' >&2
     exit 1
 }
 [[ -n "${MACOS_CERTIFICATE_P12_BASE64:-}" && -n "${MACOS_CERTIFICATE_PASSWORD:-}" ]] || {

@@ -25,11 +25,14 @@ def block(text, heading):
 
 class LinuxReleaseContainer(unittest.TestCase):
     def setUp(self):
-        self.build = block((ROOT / '.github/workflows/release.yml').read_text().split('\njobs:\n', 1)[1], 'build')
+        self.release = (ROOT / '.github/workflows/release.yml').read_text()
+        self.build = block((ROOT / '.github/workflows/release-validation.yml').read_text().split('\njobs:\n', 1)[1], 'container')
         self.tasks = (ROOT / 'Taskfile.yml').read_text()
         self.package = next(s for s in self.build.split('\n      - ')
-                            if 'name: Package Linux artifacts\n' in s)
-        self.shell = textwrap.dedent(self.package.split('run: |\n', 1)[1])
+                            if 'name: Stage qualified Linux release artifacts\n' in s)
+        self.compile = next(s for s in self.build.split('\n      - ')
+                            if 'name: Build Linux artifacts twice in the container\n' in s)
+        self.shell = self.compile.split('run: ', 1)[1].strip() + '\n' + textwrap.dedent(self.package.split('run: |\n', 1)[1])
 
     def test_appimage_container_target_reuses_the_existing_task_owners(self):
         target = block(self.tasks, 'docker:appimage')
@@ -55,14 +58,16 @@ class LinuxReleaseContainer(unittest.TestCase):
         steps = self.build.split('\n      - ')
         installers = [s for s in steps if 'uses: arduino/setup-task@v2' in s]
         self.assertEqual(len(installers), 1)
-        self.assertIn("if: matrix.kind == 'linux'", installers[0])
         self.assertIn('version: 3.44.0', installers[0])
-        self.assertNotIn('secrets.', installers[0])
-        packages = [s for s in steps if 'name: Package Linux artifacts\n' in s]
+        self.assertNotIn('ERGOHAVEN_RELEASE_TOKEN', installers[0])
+        self.assertNotIn('MACOS_CERTIFICATE', installers[0])
+        packages = [s for s in steps if 'name: Stage qualified Linux release artifacts\n' in s]
         self.assertEqual(len(packages), 1)
-        self.assertIn("if: matrix.kind == 'linux'", self.package)
-        self.assertIn('VERSION="${GITHUB_REF_NAME#v}" task docker:linux', self.package)
-        self.assertIn('prefix="entropy-${GITHUB_REF_NAME}"', self.package)
+        self.assertIn('run: task docker:repro', self.compile)
+        self.assertIn('cp target/repro/a/linux/* dist/linux/', self.build)
+        self.assertLess(self.build.index('task docker:repro'), self.build.index('Stage qualified Linux release artifacts'))
+        self.assertNotIn('if: always()', self.package)
+        self.assertIn('prefix="entropy-v$(sh scripts/public_version.sh)"', self.package)
         for copy in [
             'cp "dist/linux/$prefix-x86_64.AppImage" dist/release/',
             'cp dist/linux/*.deb "dist/release/$prefix-amd64.deb"',
@@ -74,9 +79,9 @@ class LinuxReleaseContainer(unittest.TestCase):
         self.assertNotIn('scripts/build_linux_appimage.sh', self.package)
         self.assertNotIn('Install Linux dependencies', self.build)
         self.assertNotIn('secrets.', self.package)
-        for name in ['Install Rust', 'Cache Rust']:
-            owner = next(s for s in steps if 'name: ' + name + '\n' in s)
-            self.assertIn("if: matrix.kind != 'linux'", owner)
+        self.assertNotIn('cargo build', self.build)
+        self.assertNotIn('rust-toolchain', self.build)
+        self.assertNotIn('task docker:linux', self.release)
 
     def run_collection_fixture(self, tag, *, missing=False, duplicate=False, task_exit=0):
         with tempfile.TemporaryDirectory(prefix='release-linux-', dir=os.environ.get('TMPDIR')) as tmp:
@@ -84,16 +89,20 @@ class LinuxReleaseContainer(unittest.TestCase):
             for directory in ['dist/linux', 'bin', 'scripts', 'target/release']:
                 (root / directory).mkdir(parents=True)
             shutil.copy2(ROOT / 'scripts/glibc_baseline.sh', root / 'scripts/glibc_baseline.sh')
+            # Collection-only fixture: keep historical RC filename cases without
+            # claiming that the stable candidate planner accepts RC versions.
+            (root / 'scripts/public_version.sh').write_text('printf "%s\\n" "$FIXTURE_PUBLIC_VERSION"\n')
             fixture_binary = shutil.which('true')
             self.assertIsNotNone(fixture_binary)
             assert fixture_binary is not None
             shutil.copy2(fixture_binary, root / 'target/release/entropy')
             task = root / 'bin/task'
-            task.write_text('#!/bin/sh\nset -eu\n[ "$#" -eq 1 ]\n[ "$1" = docker:linux ]\n'
-                            '[ "$VERSION" = "${GITHUB_REF_NAME#v}" ]\n'
-                            'printf "%s" "$VERSION" > task-version\nexit "${FIXTURE_TASK_EXIT:-0}"\n')
+            task.write_text('#!/bin/sh\nset -eu\n[ "$#" -eq 1 ]\n[ "$1" = docker:repro ]\n'
+                            'version="$(sh scripts/public_version.sh)"\n'
+                            'printf "%s" "$version" > task-version\nexit "${FIXTURE_TASK_EXIT:-0}"\n')
             task.chmod(0o755)
             version = tag[1:]
+
             expected = {}
             for fmt, suffix in [('deb', 'amd64.deb'), ('rpm', 'x86_64.rpm'),
                                 ('archlinux', 'x86_64.pkg.tar.zst')]:
@@ -110,7 +119,7 @@ class LinuxReleaseContainer(unittest.TestCase):
             expected[appimage] = b'AppImage collection fixture only'
             (root / 'dist/linux' / appimage).write_bytes(expected[appimage])
             env = dict(os.environ, PATH=str(root / 'bin') + os.pathsep + os.environ['PATH'],
-                       GITHUB_REF_NAME=tag, FIXTURE_TASK_EXIT=str(task_exit))
+                       GITHUB_REF_NAME=tag, FIXTURE_PUBLIC_VERSION=version, FIXTURE_TASK_EXIT=str(task_exit))
             result = subprocess.run(['bash', '-e', '-o', 'pipefail', '-c', self.shell], cwd=root,
                                     env=env, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
             if missing or duplicate or task_exit:

@@ -13,7 +13,7 @@ permissions:
 jobs:
   plan:
     name: Validate release contracts
-    if: github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.')
+    if: (github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v0.')) || (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main' && github.event.inputs.prepare_release == 'true')
     runs-on: ubuntu-latest
     outputs:
       run: 'true'
@@ -209,6 +209,22 @@ jobs:
           path: ${{ matrix.binary }}
           if-no-files-found: error
 
+      - name: Stage qualified Windows release artifact
+        if: matrix.kind == 'windows'
+        shell: bash
+        run: |
+          tag="v$(sh scripts/public_version.sh)"
+          mkdir -p dist/release
+          cp target/release/entropy.exe "dist/release/entropy-${tag}-windows-x86_64.exe"
+      - name: Upload qualified Windows release artifact
+        if: matrix.kind == 'windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-assets-windows-latest
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 14
+
   # Канонические Linux-артефакты: только контейнер с пиннутыми базовым образом,
   # слепком архива Debian и версиями nfpm/appimagetool. У хост-джобы Rust
   # плавающий (stable), и её пакеты поэтому никуда не публикуются.
@@ -251,6 +267,37 @@ jobs:
           name: entropy-linux-packages
           path: dist/linux/*
           if-no-files-found: error
+
+      - name: Stage qualified Linux release artifacts
+        run: |
+          prefix="entropy-v$(sh scripts/public_version.sh)"
+          scripts/glibc_baseline.sh target/release/entropy
+          mkdir -p dist/release
+          cp "dist/linux/$prefix-x86_64.AppImage" dist/release/
+          cp dist/linux/*.deb "dist/release/$prefix-amd64.deb"
+          cp dist/linux/*.rpm "dist/release/$prefix-x86_64.rpm"
+          cp dist/linux/*.pkg.tar.zst "dist/release/$prefix-x86_64.pkg.tar.zst"
+      - name: Upload qualified Linux release artifacts
+        uses: actions/upload-artifact@v7
+        with:
+          name: release-assets-ubuntu-latest
+          path: dist/release/*
+          if-no-files-found: error
+          retention-days: 14
+      - name: Install isolated AppImage startup check dependencies
+        run: sudo apt-get install -y --no-install-recommends xvfb x11-utils dbus-x11 desktop-file-utils python3-pil libegl1 libgl1 libxcb-render0 libxcb-shape0 libxcb-xfixes0 libxkbcommon-x11-0
+      - name: Verify the exact release AppImage starts
+        timeout-minutes: 3
+        run: xvfb-run -a -s '-screen 0 1280x900x24 -nolisten tcp' dbus-run-session -- /usr/bin/python3 scripts/verify_linux_appimage.py --artifact "dist/linux/entropy-v$(sh scripts/public_version.sh)-x86_64.AppImage" --version "$(sh scripts/public_version.sh)" --output "$RUNNER_TEMP/appimage-startup"
+      - name: Retain isolated AppImage startup evidence
+        uses: actions/upload-artifact@v7
+        with:
+          name: linux-release-startup
+          path: |
+            ${{ runner.temp }}/appimage-startup/smoke.json
+            ${{ runner.temp }}/appimage-startup/startup.png
+          if-no-files-found: error
+          retention-days: 14
 
   # Установка, а не распаковка: только она проверяет, что выписанные руками
   # зависимости существуют в репозиториях, разрешаются и что приложение с ними
