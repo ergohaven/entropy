@@ -222,6 +222,71 @@ Exit status: `0` exported, `1` export failed, `2` no or ambiguous keyboard,
 `3` another Entropy instance is running and did not answer, `4` incomplete (the missing sections
 are logged), `64` usage error.
 
+## Updating keyboard firmware
+
+Entropy 0.6.0 or later can guide a USB update to a newer stable release for a
+supported model and hardware revision. It updates **QMK/Vial to QMK/Vial** or
+**native RMK/Rynk 0.3.0 or later to newer native RMK/Rynk**. RMK with Vial is not
+eligible. Use the [manual firmware instructions](#manual-firmware-updates) for
+switching families, reinstalling the same version, or updating unsupported
+firmware. The guide does not flash over Bluetooth or install bootloaders.
+
+1. Connect and select the keyboard's main USB component in Entropy. Open
+   **About device**, check for updates, and choose **Update firmware…** if
+   offered. Select **Back up and prepare**. Keep the saved `.entlayout` backup.
+   Entropy verifies the release checksum and the firmware images before writing.
+2. Follow the component order in the same guide. Connect only the requested
+   component by USB and keep using the original port on the computer. Move the
+   cable only when prompted. Let the OS mount the bootloader drive and keep
+   the target connected while Entropy writes and checks it.
+   - **QMK** updates the USB-connected half first on a split keyboard. It then
+     asks you to connect and select the other half in Entropy. A one-piece
+     keyboard has one step. For each target, unlock the active Vial connection
+     with the keys shown by Entropy and choose **Flash this target**. The guide
+     cannot start a QMK update from BOOTSEL.
+   - **RMK standalone** updates the other half first, then asks you to reconnect
+     and select the original USB primary. K:04 (including Mini and Micro),
+     K:03, Imperial44, and OP36 go right then left. Velvet goes left then right.
+     On Phenom, Phenom Mini, and Phenom Micro, keep the inter-half link connected
+     and move only the computer's USB cable. For these three models, Rynk
+     revision 2 requires starting with the fixed primary. Revision 3 lets you
+     start with either half. The half you start with goes last.
+   - **RMK with Qube** starts with Qube selected for preparation. The guide
+     updates the left half, the right half, then asks you to reconnect and
+     select Qube for its update.
+
+   See the [native RMK profiles](docs/firmware-update-profiles.md) for the
+   complete list.
+3. For an RMK peripheral, choose **Start transfer** and wait for the cable-swap
+   prompt. If the half supports USB maintenance, connect it normally and unlock
+   using the keys shown. For older firmware, follow the guide's physical
+   fallback for the exact part. On RP2040 hold **BOOT** while reconnecting. On
+   nRF52840 double-press **Reset**. Check the physical side first, since the
+   bootloader cannot confirm left versus right for you. On the primary or
+   Qube, unlock and choose **Flash this target**, or use the physical fallback
+   offered by the guide.
+
+When a component shows **version verified**, it restarted and reported the
+expected version over USB. Entropy requires this for every QMK part, the final
+RMK primary or Qube, and RMK peripherals that enter update mode through the app.
+A peripheral that entered through physical BOOT or Reset can also be verified
+if its new firmware supports USB readback. If no version can be read, a
+successful write and exit from update mode can show
+**transfer complete, version unverified**.
+The primary's version does not verify a peripheral.
+
+If a transfer fails, follow the guide's retry or recovery instructions for the
+same part. If offered, **Check firmware version** checks the target without
+writing it again. Reconnect only that part normally to the original USB port,
+wait for discovery, and leave it unselected in Entropy. For an RMK retry, follow
+the guide's BOOT or Reset prompt if needed. If a QMK part stays in BOOTSEL, use
+the manual instructions and matching image for its exact model and revision,
+then check its version.
+
+Update all parts from the same release, restore your normal connection, and
+test the keyboard. Import the backup if needed. If a Bluetooth model no longer
+connects, forget it in the system settings and pair it again.
+
 ## Linux Device Access
 
 Vial devices use hidraw access on Linux. If your device appears but cannot be opened,

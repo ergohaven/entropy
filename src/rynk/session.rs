@@ -399,6 +399,18 @@ impl RynkSession {
         Ok(self.link.request::<command::Lock>(())?)
     }
 
+    /// A bootloader reset usually removes USB before a reply can be sent.
+    /// A lost reply only starts waiting; the updater validates the bootloader
+    /// on the original physical port before authorizing a transfer.
+    pub(crate) fn enter_bootloader(&self) -> Result<()> {
+        anyhow::ensure!(!super::transport::is_bluetooth(self.link.id()),
+            "Bootloader entry requires USB");
+        let (unlocked, unlocking, _) = self.unlock_status()?;
+        anyhow::ensure!(unlocked && !unlocking,
+            "Unlock the keyboard before entering update mode");
+        Ok(self.link.run(|client| client.enter_bootloader())?)
+    }
+
     /// Pressed keys, row by row, from the board's bitmap: each row takes
     /// whole bytes, column 0 in bit 0.
     pub(crate) fn switch_matrix(&self, rows: usize, cols: usize) -> Result<Vec<bool>> {

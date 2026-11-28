@@ -877,7 +877,6 @@ impl EntropyApp {
         );
         let rows = device_about_rows(lang, &info, &self.firmware_update_check);
         let firmware_update_supported = info.firmware_update_target.is_some();
-
         crate::ui_style::allocate_ui_at_rect(ui, content_rect, |ui| {
             ui.vertical_centered(|ui| {
                 ui.add_space(metrics.value(18.0));
@@ -889,6 +888,38 @@ impl EntropyApp {
                         .color(app_muted_text(dark)),
                 );
 
+                #[cfg(not(target_arch = "wasm32"))]
+                if self.selected_device.and_then(|i| self.device_manager.devices().get(i))
+                    .is_some_and(|d| d.vendor_id == 0xe126 && crate::firmware_flash::runtime_product(d.product_id))
+                {
+                    ui.label(match lang {
+                        crate::i18n::Language::English => "Entropy can flash compatible QMK or RMK updates over USB. To switch firmware families, export your layout and follow the manual guide.",
+                        crate::i18n::Language::Russian => "Entropy может устанавливать совместимые обновления QMK и RMK по USB. Для перехода между QMK и RMK экспортируйте раскладку и следуйте инструкции по ручной прошивке.",
+                    });
+                    ui.hyperlink_to(match lang {
+                        crate::i18n::Language::English => "Manual firmware guide",
+                        crate::i18n::Language::Russian => "Инструкция по ручной прошивке",
+                    }, "https://docs.eh.works/firmware/");
+                }
+                #[cfg(not(target_arch = "wasm32"))]
+                if let FirmwareUpdateCheckState::Ready { target, result } = &self.firmware_update_check {
+                    if info.firmware_update_target.as_ref() == Some(target)
+                        && self.selected_device.and_then(|i| self.device_manager.devices().get(i))
+                            .is_some_and(|device| super::firmware_flash_ui::update_profile(device, target, result).is_some()) {
+                        let result = result.clone();
+                        let label = match lang {
+                            crate::i18n::Language::English => "Update firmware…",
+                            crate::i18n::Language::Russian => "Обновить прошивку…",
+                        };
+                        ui.add_space(metrics.value(12.0));
+                        let response = crate::ui_style::modern_button(ui, label,
+                            egui::vec2(metrics.value(220.0), metrics.value(32.0)), true);
+                        response.widget_info(|| egui::WidgetInfo::labeled(egui::Role::Button, true, label));
+                        if response.clicked() {
+                            self.open_firmware_flash(result);
+                        }
+                    }
+                }
                 ui.add_space(metrics.value(24.0));
                 let bottom_reserve = if firmware_update_supported {
                     metrics.value(54.0)

@@ -215,12 +215,14 @@ unsafe fn read(entry: u32) -> Result<Option<Device>, String> {
     if transport != "USB" {
         return Err(error("USB matching transport"));
     }
-    if !usb_ancestry(entry)? {
-        return Err(error("USB ancestry mismatch"));
-    }
     let usages = usages(p.0)?;
     if !usages.contains(&(0xff60, 0x61)) {
+        // Some non-Vial services advertise USB without a USB interface ancestor.
+        // They must not prevent discovery of a genuine Vial endpoint.
         return Ok(None);
+    }
+    if !usb_ancestry(entry)? {
+        return Err(error("USB ancestry mismatch"));
     }
     let mut entry_id = 0;
     if IORegistryEntryGetRegistryEntryID(entry, &mut entry_id) != 0 {

@@ -53,6 +53,11 @@ pub(crate) use app_storage::test_config_root;
 mod app_update;
 use app_update::*;
 pub(crate) use app_update::format_firmware_version;
+#[cfg(not(target_arch = "wasm32"))]
+pub(crate) use app_update::{
+    firmware_release_target_for_usb, parse_firmware_version, FirmwareReleaseFamily,
+    QMK_RELEASE_PROFILES,
+};
 #[path = "app_repaint.rs"]
 mod app_repaint;
 #[cfg(not(target_arch = "wasm32"))]
@@ -88,6 +93,9 @@ pub(crate) use settings_viewport::*;
 #[path = "ui/onboarding_tour_state.rs"]
 mod onboarding_tour_state;
 use onboarding_tour_state::*;
+#[cfg(not(target_arch = "wasm32"))]
+#[path = "ui/firmware_flash.rs"]
+mod firmware_flash_ui;
 #[path = "ui/about_device.rs"]
 mod about_device_ui;
 #[path = "ui/alt_repeat_settings.rs"]

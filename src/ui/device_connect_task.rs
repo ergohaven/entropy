@@ -1610,13 +1610,14 @@ impl EntropyApp {
                     || supports_rmk_native_tap_dance_actions
                     || supports_rmk_combo_layers;
                 let legacy_qube = layout.live_features.time && layout.live_features.media;
-                let firmware_update_target = crate::app::firmware_release_target(
+                let firmware_update_target = crate::app::firmware_release_target_for_usb(
                     dev.vendor_id,
                     dev.product_id,
                     firmware_version.as_deref(),
                     &json,
                     legacy_qube,
                     native_rmk_marker,
+                    Some(&dev.name),
                 );
 
                 let about_info = DeviceAboutInfo {

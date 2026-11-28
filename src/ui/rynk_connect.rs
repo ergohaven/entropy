@@ -42,6 +42,12 @@ impl EntropyApp {
             );
             rynk_failed("Open", error)
         })?;
+        if link.board().maintenance_only() {
+            return Err(match language {
+                crate::i18n::Language::English => "This half provides firmware maintenance only. Connect the primary half or Qube and open the firmware update guide.",
+                crate::i18n::Language::Russian => "Эта половинка доступна только для обслуживания прошивки. Подключите основную половинку или Qube и откройте инструкцию по обновлению.",
+            }.to_owned());
+        }
         let session = RynkSession::new(link);
         let info = session.info().clone();
         let capabilities = *session.capabilities();

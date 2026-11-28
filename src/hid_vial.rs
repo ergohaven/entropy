@@ -171,6 +171,20 @@ impl HidDevice {
         Ok((unlocked, in_progress, counter))
     }
 
+    pub(crate) fn enter_qmk_bootloader(&self) -> Result<()> {
+        anyhow::ensure!(!self.is_bluetooth_transport(), "Bootloader entry requires USB");
+        let (unlocked, unlocking, keys) = self.get_unlock_status_with_progress()?;
+        anyhow::ensure!(
+            unlocked && !unlocking && !keys.is_empty(),
+            "Complete the physical Vial unlock before entering update mode"
+        );
+        self.with_host_output_paused_for_settings(|| {
+            let response = self.usb_send(&[0x0b])?;
+            anyhow::ensure!(response[0] == 0x0b, "Keyboard did not acknowledge bootloader entry");
+            Ok(())
+        })
+    }
+
     /// Lock the keyboard
     pub fn lock(&self) -> Result<()> {
         self.usb_send(&[CMD_VIA_VIAL_PREFIX, CMD_VIAL_LOCK])
